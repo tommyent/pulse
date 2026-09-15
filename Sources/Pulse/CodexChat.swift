@@ -177,6 +177,35 @@ struct ActivityPill: Identifiable {
     var done = false
 }
 
+/// Seeded into ~/Documents/codex-pet once; the user owns it after that.
+private let petAgentsMD = """
+# codex-pet
+
+This folder is a personal inbox: todos, reminders, bills, ideas, research, and any other junk the
+owner wants off their head. You are the assistant that keeps it tidy. You can only read and write
+inside this folder.
+
+## Layout
+
+- `inbox/` raw dumps that have not been sorted yet (one file per item, `YYYY-MM-DD-slug.md`)
+- `todos.md` open tasks, one `- [ ]` line each, newest at the bottom; tick instead of deleting
+- `reminders.md` dated items, one line each: `YYYY-MM-DD HH:MM  what`
+- `bills.md` what is due, when, how much, and whether it is paid; never pay anything
+- `ideas.md` one heading per idea, notes under it
+- `research/` longer write-ups as `.md` or `.html`, one file per topic
+- `archive/` anything done or stale; move, do not delete
+
+## Rules
+
+- Capture first, ask later. When something comes in by chat or voice, write it down immediately in
+  the right file, or in `inbox/` if unsure. Keep it short and date-stamp it.
+- When asked to organize, sweep `inbox/` into the files above and report what moved.
+- Tracking only: note bills, deadlines, and follow-ups. Do not send email, pay, book, or contact
+  anyone. If an item needs action outside this folder, add it to `todos.md` tagged `#needs-agent`.
+- Never delete the owner's words; rewrite for brevity only when asked.
+- On every open, if `reminders.md` has anything due today or overdue, say so first.
+"""
+
 @MainActor
 final class CodexPetSession: ObservableObject {
     static let shared = CodexPetSession()
@@ -286,13 +315,23 @@ final class CodexPetSession: ObservableObject {
 
     // MARK: plumbing
 
+    /// `~/Documents/codex-pet`: the pet's only writable folder. Created on first use, seeded with AGENTS.md.
+    static func petHome() -> URL {
+        let fm = FileManager.default
+        let dir = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("codex-pet")
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let agents = dir.appendingPathComponent("AGENTS.md")
+        if !fm.fileExists(atPath: agents.path) { try? petAgentsMD.write(to: agents, atomically: true, encoding: .utf8) }
+        return dir
+    }
+
     private func ensureThread() async throws -> String {
         try await server.start()
         if let threadId { return threadId }
         let r = try await server.request("thread/start", [
-            "cwd": FileManager.default.homeDirectoryForCurrentUser.path,
+            "cwd": Self.petHome().path,
             "approvalPolicy": "never",
-            "sandbox": "read-only",
+            "sandbox": "workspace-write",   // writes land inside petHome only; the pet declines approvals, so nothing outside it
         ])
         guard let id = (r["thread"] as? [String: Any])?["id"] as? String else { throw CodexAppServer.Failure.remote("thread/start returned no id") }
         threadId = id

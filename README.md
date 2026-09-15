@@ -37,7 +37,7 @@ Click the pet to chat. **⌘⌥V** opens the pet and starts a voice call; press 
 - Pulse reads the current user's own CLI credentials: Claude Code's Keychain item (through Apple's `security` tool, so it never prompts) or `~/.claude/.credentials.json`, `~/.codex/auth.json`, and `~/.grok/auth.json`. Grok's file is refreshed in place with an atomic, owner-only write.
 - Web sign-ins made through **Connect** live in macOS WebKit storage; Grok's saved cookie header uses the Keychain service `app.pulse.auth`. Preferences and usage snapshots live in `~/Library/Application Support/Pulse`.
 - Usage requests go straight to each provider over HTTPS. Authenticated responses are not cached to disk and redirects are refused, so a token is never forwarded off-host.
-- Pet chat and audio go through Codex and OpenAI under your Codex account, which may retain threads. The pet thread runs in your home directory with read-only sandboxing and declines every approval request. Read-only still allows file reads, and your own Codex configuration and tools apply.
+- Pet chat and audio go through Codex and OpenAI under your Codex account, which may retain threads. The pet thread runs in `~/Documents/codex-pet` with workspace-write sandboxing, so Codex can read and write files in that folder without asking. Pulse creates the folder and seeds an `AGENTS.md` there on first open; edit it to change the pet's rules. The pet declines every approval request, so anything outside that folder is refused. Your own Codex configuration and tools apply.
 
 ## Checks
 
