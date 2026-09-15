@@ -30,6 +30,7 @@ struct PulseApp: App {
         }
         let state = AppState()
         _state = StateObject(wrappedValue: state)
+        _ = CodexPetSession.petHome()   // ~/Documents/codex-pet exists from first launch, not first chat
         overlay = OverlayController(state: state)
         NSApplication.shared.setActivationPolicy(.accessory)   // no Dock icon
     }
