@@ -114,6 +114,7 @@ struct RingView: View {
     let account: AccountID
     let percent: Double?
     var secondary: Double? = nil
+    var tertiary: Double? = nil    // third window (Claude: the per-model weekly cap), innermost arc
     var size: CGFloat = 52
     var showPercent = true
 
@@ -132,7 +133,11 @@ struct RingView: View {
                     arc(secondary, lineWidth: size * 0.07, dimmed: true)
                         .padding(size * 0.16)
                 }
-                BrandIcon(account: account, size: size * 0.4)
+                if let tertiary {
+                    arc(tertiary, lineWidth: size * 0.06, dimmed: true)
+                        .padding(size * 0.27)
+                }
+                BrandIcon(account: account, size: size * (tertiary == nil ? 0.4 : 0.32))
                     .colorScheme(.dark) // Ring wells stay dark in both appearances.
             }
             .frame(width: size, height: size)
@@ -468,6 +473,7 @@ struct OverlayView: View {
                     RingView(account: id,
                              percent: windows.first?.percentUsed,
                              secondary: windows.dropFirst().first?.percentUsed,
+                             tertiary: windows.dropFirst(2).first?.percentUsed,
                              size: expanded ? 52 : 28,
                              showPercent: expanded)
                         .contentShape(Rectangle())
