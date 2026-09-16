@@ -128,16 +128,18 @@ struct RingView: View {
                 if let percent {
                     arc(percent, lineWidth: size * 0.12)
                 }
-                if let secondary {
-                    // inner arc, lighter shade: the second window (e.g. weekly)
-                    arc(secondary, lineWidth: size * 0.07, dimmed: true)
+                // inner track carries two windows stacked: the third (Claude's per-model cap, always the
+                // larger) in the lighter shade behind, the second (all models) in full accent in front,
+                // so the lighter tail reads as the overshoot beyond all-models
+                if let tertiary {
+                    arc(tertiary, lineWidth: size * 0.07, dimmed: true)
                         .padding(size * 0.16)
                 }
-                if let tertiary {
-                    arc(tertiary, lineWidth: size * 0.06, dimmed: true)
-                        .padding(size * 0.27)
+                if let secondary {
+                    arc(secondary, lineWidth: size * 0.07)
+                        .padding(size * 0.16)
                 }
-                BrandIcon(account: account, size: size * (tertiary == nil ? 0.4 : 0.32))
+                BrandIcon(account: account, size: size * 0.4)
                     .colorScheme(.dark) // Ring wells stay dark in both appearances.
             }
             .frame(width: size, height: size)
