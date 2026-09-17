@@ -51,11 +51,11 @@ final class AppState: ObservableObject {
         snapshots = cached
         if let first = enabledAccounts.first { selected = first }
 
-        // ponytail: one flat 10-min poll for everything; per-adapter budgets (plan §6.4) when Codex traffic matters
+        // ponytail: one flat 2-min poll for everything (three small GETs); per-adapter budgets if a provider ever throttles
         Task {
             while true {
                 await refreshAll()
-                try? await Task.sleep(for: .seconds(600))
+                try? await Task.sleep(for: .seconds(120))
             }
         }
     }
