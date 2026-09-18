@@ -30,7 +30,7 @@ struct PulseApp: App {
         }
         let state = AppState()
         _state = StateObject(wrappedValue: state)
-        _ = CodexPetSession.petHome()   // ~/Documents/codex-pet exists from first launch, not first chat
+        _ = try? CodexPetSession.petHome()   // prepare on launch; chat retries and reports any failure
         overlay = OverlayController(state: state)
         NSApplication.shared.setActivationPolicy(.accessory)   // no Dock icon
     }
@@ -178,8 +178,6 @@ final class OverlayController {
             onRailFrame: { [weak self] in self?.railFrame = $0 },
             onCardFrame: { [weak self] in self?.cardFrame = $0 }))
         panel.contentView = hosting
-        // the pet's voice call lives in a 2×2 pt WebKit view; WebKit only captures and plays while in a window
-        hosting.addSubview(VoiceBridge.shared.webView)
         if panel.setFrameUsingName("PulseOverlay"), panel.frame.width > 50 {
             pinned = state.dock.anchor(of: panel.frame)
             dockScreen = panel.screen

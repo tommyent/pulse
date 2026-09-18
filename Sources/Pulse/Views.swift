@@ -79,6 +79,7 @@ struct BrandIcon: View {
 }
 
 private struct CodexPet: View {
+    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var session = CodexPetSession.shared
     let size: CGFloat
@@ -93,19 +94,30 @@ private struct CodexPet: View {
         return session.thinking ? .waiting : .idle
     }
 
+    private var ringColor: Color {
+        if session.voiceState == .connecting { return .yellow }
+        return session.isRecording ? AccountID.codex.accent : Color(white: scheme == .dark ? 0.19 : 0.85)
+    }
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: 0.1, paused: reduceMotion)) { context in
-            if let frames = Self.frames[state], frames.count == CodexPetSprite.track(state).durations.count {
-                let index = reduceMotion ? 0 : CodexPetSprite.frame(state, at: context.date.timeIntervalSinceReferenceDate)
-                Image(decorative: frames[index], scale: 1)
-                    .resizable()
-                    .interpolation(.none)
-                    .scaledToFit()
-            } else {
-                BrandIcon(account: .codex, size: size)
+        ZStack {
+            Circle().fill(scheme == .dark ? Color.black : Color.white)
+                .padding(-size * 0.08)
+            Circle().stroke(ringColor, lineWidth: size * 0.12)
+            TimelineView(.animation(minimumInterval: 0.1, paused: reduceMotion)) { context in
+                if let frames = Self.frames[state], frames.count == CodexPetSprite.track(state).durations.count {
+                    let index = reduceMotion ? 0 : CodexPetSprite.frame(state, at: context.date.timeIntervalSinceReferenceDate)
+                    Image(decorative: frames[index], scale: 1)
+                        .resizable()
+                        .interpolation(.none)
+                        .scaledToFit()
+                } else {
+                    BrandIcon(account: .codex, size: size * 0.4)
+                }
             }
+            .frame(width: size * 0.72, height: size * 0.78)
         }
-        .frame(width: size, height: size * 208 / 192)
+        .frame(width: size, height: size)
     }
 }
 
@@ -121,10 +133,9 @@ struct RingView: View {
     var body: some View {
         VStack(spacing: 6) {
             ZStack {
-                Circle().fill(Color.black)
-                    .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                Circle().fill(scheme == .dark ? Color.black : Color.white)
                     .padding(-size * 0.08)
-                Circle().stroke(Color(white: 0.19), lineWidth: size * 0.12)   // #303030: a defined grey on black
+                Circle().stroke(Color(white: scheme == .dark ? 0.19 : 0.85), lineWidth: size * 0.12)
                 if let percent {
                     arc(percent, lineWidth: size * 0.12)
                 }
@@ -140,7 +151,6 @@ struct RingView: View {
                         .padding(size * 0.16)
                 }
                 BrandIcon(account: account, size: size * 0.4)
-                    .colorScheme(.dark) // Ring wells stay dark in both appearances.
             }
             .frame(width: size, height: size)
             if showPercent {
@@ -387,9 +397,7 @@ struct PetCard: View {
             }
             Button { session.toggleVoice() } label: {
                 Image(systemName: session.voiceState == .off ? "waveform.circle" : "waveform.circle.fill")
-                    .foregroundStyle(session.voiceState == .off ? Ink.primary(scheme)
-                                     : session.voiceState == .connecting ? Color.yellow : AccountID.codex.accent)
-                    .symbolEffect(.variableColor.iterative, isActive: session.voiceState == .speaking)
+                    .foregroundStyle(Ink.primary(scheme))
             }
             .buttonStyle(.plain)
             .help(session.voiceState == .off ? "Start live voice" : "End live voice")
@@ -404,6 +412,7 @@ struct PetCard: View {
 }
 
 struct OverlayView: View {
+    @ObservedObject private var session = CodexPetSession.shared
     @ObservedObject var state: AppState
     var onSize: ((CGSize) -> Void)? = nil
     var onDrag: ((CGPoint) -> Void)? = nil
@@ -457,15 +466,32 @@ struct OverlayView: View {
     private var rail: some View {
         let layout = state.dock.isVertical
             ? AnyLayout(VStackLayout(spacing: expanded ? 18 : 10))
-            : AnyLayout(HStackLayout(spacing: expanded ? 18 : 10))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: expanded ? 18 : 10))
         return layout {
             if state.persisted.enabled.contains(.codex) {
-                Button { togglePet() } label: {
-                    CodexPet(size: expanded ? 52 : 28)
-                        .contentShape(Rectangle())
+                VStack(spacing: 6) {
+                    Button { togglePet(voice: NSApp.currentEvent?.modifierFlags.contains(.command) == true) } label: {
+                        CodexPet(size: expanded ? 52 : 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Codex pet — chat and voice")
+                    .accessibilityValue(session.isRecording ? "Recording" : session.voiceState == .off ? "Voice off" : session.muted ? "Microphone paused" : "Connecting")
+                    .accessibilityAction(named: "Start or end voice session") { togglePet(voice: true) }
+                    .help("Click to chat. Command-click to start or end voice.")
+                    if expanded {
+                        Button { togglePet(voice: true) } label: {
+                            Image(systemName: session.voiceState == .off ? "waveform.circle" : "waveform.circle.fill")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(state.isLight ? Color.black : Color.white)
+                                .frame(width: 52)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(session.voiceState == .off ? "Start live voice" : "End live voice")
+                        .help(session.voiceState == .off ? "Start live voice" : "End live voice")
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Codex pet — chat and voice")
             }
             ForEach(state.enabledAccounts) { id in
                 let windows = state.snapshots[id]?.windows ?? []
@@ -495,10 +521,14 @@ struct OverlayView: View {
         .help("Drag to any screen edge")
     }
 
-    private func togglePet() {
+    private func togglePet(voice: Bool = false) {
         guard !state.dragging else { return }
-        state.cardVisible = false
-        state.petVisible.toggle()
+        if voice {
+            session.toggleVoice()
+        } else {
+            state.cardVisible = false
+            state.petVisible.toggle()
+        }
     }
 
     private func toggleCard(_ id: AccountID) {
@@ -671,6 +701,8 @@ struct SettingsView: View {
                 LabeledContent("Shortcut") { HotKeyRecorder(combo: state.voiceHotKeyBinding) }
                 Text("Press once to open the pet and start talking; press again to end the call. Hold it to talk only while it is down. Escape ends the call and closes the card.")
                     .font(.caption).foregroundStyle(.secondary)
+                Button("Reset remembered approvals") { PetApprovals.shared.resetRemembered() }
+                    .help("Ask again for future command and folder-access requests. Current task grants expire when that task ends.")
             }
             Section {
                 Text("Subscription accounts only. API keys are not supported.")

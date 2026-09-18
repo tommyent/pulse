@@ -1,5 +1,6 @@
 import Foundation
-import WebKit
+import AppKit
+import Combine
 
 // MARK: - Codex app-server over stdio (JSON-RPC, one JSON object per line)
 //
@@ -101,11 +102,17 @@ final class CodexAppServer: @unchecked Sendable {
         try? write(["jsonrpc": "2.0", "method": method, "params": params], to: stdin)
     }
 
-    /// Answer a server-initiated request (approvals, user input). The pet never grants; it declines.
+    /// Reject unsupported server requests; supported approvals use a structured result.
     func respond(id: Any, error message: String) {
         lock.lock(); let stdin = stdin; lock.unlock()
         guard let stdin else { return }
         try? write(["jsonrpc": "2.0", "id": id, "error": ["code": -32000, "message": message]], to: stdin)
+    }
+
+    func respond(id: Any, result: [String: Any]) {
+        lock.lock(); let stdin = stdin; lock.unlock()
+        guard let stdin else { return }
+        try? write(["jsonrpc": "2.0", "id": id, "result": result], to: stdin)
     }
 
     private func write(_ obj: [String: Any], to handle: FileHandle) throws {
@@ -141,14 +148,17 @@ final class CodexAppServer: @unchecked Sendable {
             return
         }
         guard let method else { return }
+        let params = (msg["params"] as? [String: Any]) ?? [:]
         if let id = msg["id"] {
-            // server → client request: the pet has no approval UI, so decline and let the turn continue
-            respond(id: id, error: "not supported by Pulse")
-            DispatchQueue.main.async { self.onNotification?("serverRequest/declined", ["method": method]) }
+            DispatchQueue.main.async {
+                PetApprovals.shared.receive(id: id, method: method, params: params)
+            }
             return
         }
-        let params = (msg["params"] as? [String: Any]) ?? [:]
-        DispatchQueue.main.async { self.onNotification?(method, params) }
+        DispatchQueue.main.async {
+            PetApprovals.shared.observe(method, params)
+            self.onNotification?(method, params)
+        }
     }
 
     private func closed() {
@@ -157,7 +167,10 @@ final class CodexAppServer: @unchecked Sendable {
         process = nil; stdin = nil; ready = false
         lock.unlock()
         for (_, c) in waiting { c.resume(throwing: Failure.transport) }
-        DispatchQueue.main.async { self.onNotification?("pulse/closed", [:]) }
+        DispatchQueue.main.async {
+            PetApprovals.shared.cancelAll(reply: false)
+            self.onNotification?("pulse/closed", [:])
+        }
     }
 }
 
@@ -169,6 +182,7 @@ struct ChatMessage: Identifiable {
     var role: Role
     var text: String
     var live = false   // still streaming
+    var sourceID: String?
 }
 
 struct ActivityPill: Identifiable {
@@ -182,8 +196,10 @@ private let petAgentsMD = """
 # codex-pet
 
 This folder is a personal inbox: todos, reminders, bills, ideas, research, and any other junk the
-owner wants off their head. You are the assistant that keeps it tidy. You can only read and write
-inside this folder.
+owner wants off their head. You are the assistant that keeps it tidy. This is your default working
+folder. When asked to work elsewhere (commonly ~/Projects or ~/Downloads), request permission
+for the needed paths before accessing them. Use the permission request tool when available;
+otherwise request command approval. Work only within the approved action or task scope.
 
 ## Layout
 
@@ -201,10 +217,19 @@ inside this folder.
   the right file, or in `inbox/` if unsure. Keep it short and date-stamp it.
 - When asked to organize, sweep `inbox/` into the files above and report what moved.
 - Tracking only: note bills, deadlines, and follow-ups. Do not send email, pay, book, or contact
-  anyone. If an item needs action outside this folder, add it to `todos.md` tagged `#needs-agent`.
+  anyone. For work in other folders, request permission
+  and carry out the requested task after approval, including through available agents and tools.
 - Never delete the owner's words; rewrite for brevity only when asked.
 - On every open, if `reminders.md` has anything due today or overdue, say so first.
 """
+
+/// Replace only the original restrictions; preserve the owner's other instructions and notes.
+func updatedPetInstructions(_ text: String) -> String {
+    text.replacingOccurrences(of: "You can only read and write\ninside this folder.", with:
+        "This is your default working\nfolder. When asked to work elsewhere (commonly ~/Projects or ~/Downloads), request permission\nfor the needed paths before accessing them. Use the permission request tool when available;\notherwise request command approval. Work only within the approved action or task scope.")
+        .replacingOccurrences(of: "anyone. If an item needs action outside this folder, add it to `todos.md` tagged `#needs-agent`.", with:
+        "anyone. For work in other folders, request permission\n  and carry out the requested task after approval, including through available agents and tools.")
+}
 
 @MainActor
 final class CodexPetSession: ObservableObject {
@@ -222,10 +247,15 @@ final class CodexPetSession: ObservableObject {
     private let server = CodexAppServer.shared
     private var threadId: String?
     private var turnId: String?
-    private var streamingItem: String?
+    private var realtimeActive = false
+    private var voiceTurns: Set<String> = []
+    private var promotedAgentItems: Set<String> = []
+    private var agentText: [String: String] = [:]
     private var voiceStartTask: Task<Void, Never>?
+    private let workspace: URL?
 
-    init() {
+    init(workspace: URL? = nil) {
+        self.workspace = workspace
         server.onNotification = { [weak self] method, params in self?.handle(method, params) }
     }
 
@@ -252,6 +282,7 @@ final class CodexPetSession: ObservableObject {
     }
 
     func interrupt() {
+        PetApprovals.shared.cancelAll()
         guard let tid = threadId, let turnId, thinking else { return }
         Task {
             do { _ = try await server.request("turn/interrupt", ["threadId": tid, "turnId": turnId]) }
@@ -263,12 +294,15 @@ final class CodexPetSession: ObservableObject {
         interrupt()
         stopVoice()
         messages = []; activity = []; status = nil
+        realtimeActive = false; voiceTurns = []; promotedAgentItems = []; agentText = [:]
         threadId = nil   // next message starts a fresh thread
         turnId = nil
         thinking = false
     }
 
     // MARK: voice (client-owned WebRTC call negotiated through the app-server)
+
+    var isRecording: Bool { (voiceState == .live || voiceState == .speaking) && !muted }
 
     func toggleVoice() {
         if voiceState == .off { startVoice() } else { stopVoice() }
@@ -290,7 +324,7 @@ final class CodexPetSession: ObservableObject {
                     "version": "v3",              // the subscription-backed session; v1/v2 need an API key
                     "voice": "cove",
                     "outputModality": "audio",
-                    "includeStartupContext": false,
+                    "includeStartupContext": true,
                     "flushTranscriptTailOnSessionEnd": true,
                 ])
                 // the answer arrives as thread/realtime/sdp
@@ -315,13 +349,18 @@ final class CodexPetSession: ObservableObject {
 
     // MARK: plumbing
 
-    /// `~/Documents/codex-pet`: the pet's only writable folder. Created on first use, seeded with AGENTS.md.
-    static func petHome() -> URL {
+    /// Default workspace. Extra access requires an approval; existing custom instructions survive migration.
+    static func petHome(at workspace: URL? = nil) throws -> URL {
         let fm = FileManager.default
-        let dir = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("codex-pet")
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = workspace ?? fm.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("codex-pet")
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let agents = dir.appendingPathComponent("AGENTS.md")
-        if !fm.fileExists(atPath: agents.path) { try? petAgentsMD.write(to: agents, atomically: true, encoding: .utf8) }
+        if !fm.fileExists(atPath: agents.path) { try petAgentsMD.write(to: agents, atomically: true, encoding: .utf8) }
+        else {
+            let previous = try String(contentsOf: agents, encoding: .utf8)
+            let updated = updatedPetInstructions(previous)
+            if updated != previous { try updated.write(to: agents, atomically: true, encoding: .utf8) }
+        }
         return dir
     }
 
@@ -329,9 +368,10 @@ final class CodexPetSession: ObservableObject {
         try await server.start()
         if let threadId { return threadId }
         let r = try await server.request("thread/start", [
-            "cwd": Self.petHome().path,
-            "approvalPolicy": "never",
-            "sandbox": "workspace-write",   // writes land inside petHome only; the pet declines approvals, so nothing outside it
+            "cwd": Self.petHome(at: workspace).path,
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "user",
+            "sandbox": "workspace-write",
         ])
         guard let id = (r["thread"] as? [String: Any])?["id"] as? String else { throw CodexAppServer.Failure.remote("thread/start returned no id") }
         threadId = id
@@ -343,9 +383,10 @@ final class CodexPetSession: ObservableObject {
         switch method {
         case "turn/started":
             turnId = (p["turn"] as? [String: Any])?["id"] as? String
+            if realtimeActive, let turnId { voiceTurns.insert(turnId) }
         case "item/agentMessage/delta":
             guard let delta = p["delta"] as? String, let item = p["itemId"] as? String else { return }
-            append(delta, role: .assistant, key: item)
+            updateAgent(delta, item: item, params: p, completed: false)
         case "item/started":
             guard let item = p["item"] as? [String: Any], let type = item["type"] as? String, let id = item["id"] as? String else { return }
             if let label = activityLabel(type, item) { activity.append(ActivityPill(id: id, label: label)) }
@@ -353,17 +394,14 @@ final class CodexPetSession: ObservableObject {
             guard let item = p["item"] as? [String: Any], let id = item["id"] as? String else { return }
             if let i = activity.firstIndex(where: { $0.id == id }) { activity[i].done = true }
             if item["type"] as? String == "agentMessage", let text = item["text"] as? String {
-                if let i = messages.lastIndex(where: { $0.live && $0.role == .assistant }) {
-                    messages[i].text = text; messages[i].live = false
-                } else if !text.isEmpty {
-                    messages.append(ChatMessage(role: .assistant, text: text))
-                }
-                streamingItem = nil
+                updateAgent(text, item: id, params: p, completed: true)
             }
         case "turn/completed":
             turnId = nil
             thinking = false
-            finishLive()
+            if let completed = (p["turn"] as? [String: Any])?["id"] as? String {
+                for i in messages.indices where messages[i].sourceID?.hasPrefix("agent:\(completed):") == true { messages[i].live = false }
+            }
             activity = activity.filter { !$0.done }.suffix(6).map { $0 }
         case "error":
             thinking = false
@@ -371,25 +409,50 @@ final class CodexPetSession: ObservableObject {
         case "thread/realtime/sdp":
             if let sdp = p["sdp"] as? String { VoiceBridge.shared.accept(answer: sdp) }
         case "thread/realtime/started":
-            if voiceState == .connecting { voiceState = .live }
-        case "thread/realtime/transcript/delta":
-            guard let delta = p["delta"] as? String, let role = p["role"] as? String else { return }
-            append(delta, role: role == "user" ? .user : .assistant, key: "rt-" + role)
-        case "thread/realtime/transcript/done":
-            finishLive()
+            realtimeActive = true
+            if let turnId { voiceTurns.insert(turnId) }
+        case "thread/realtime/item/started", "thread/realtime/item/completed":
+            guard let item = p["item"] as? [String: Any], let id = item["id"] as? String else { return }
+            let completed = method == "thread/realtime/item/completed"
+            if item["type"] as? String == "transcriptSegment",
+               let role = item["role"] as? String, ["user", "assistant"].contains(role),
+               let text = item["text"] as? String {
+                let key = "voice:" + id
+                // A repeated start must not erase text that has already streamed.
+                if completed || !messages.contains(where: { $0.sourceID == key }) {
+                    setMessage(text, role: role == "user" ? .user : .assistant, key: key, live: !completed)
+                }
+            } else if item["type"] as? String == "bemItemPromoted",
+                      let turn = item["turnId"] as? String, let agent = item["itemId"] as? String {
+                let key = "agent:\(turn):\(agent)"
+                voiceTurns.insert(turn)
+                promotedAgentItems.insert(key)
+                if let text = agentText[key] { setMessage(text, role: .assistant, key: key, live: false) }
+            }
+        case "thread/realtime/item/transcript/delta":
+            guard let id = p["itemId"] as? String, let delta = p["delta"] as? String,
+                  let i = messages.firstIndex(where: { $0.sourceID == "voice:" + id }), messages[i].live else { return }
+            messages[i].text += delta
+        // The legacy role-only transcript notifications mirror this canonical stream: ignore them.
         case "thread/realtime/error":
+            realtimeActive = false
+            stopVoice()
             status = p["message"] as? String
-            voiceState = .off
-            VoiceBridge.shared.close()
         case "thread/realtime/closed":
+            realtimeActive = false
+            finishLive()
             if voiceState != .off { voiceState = .off; VoiceBridge.shared.close() }
+        case "pulse/voiceReady":
+            if voiceState == .connecting { voiceState = .live }
         case "pulse/voice":
-            // events off the WebRTC data channel: speaking state drives the pet
+            // Native speaker activity drives the pet.
             if let type = p["type"] as? String, voiceState != .off {
                 if type == "output_audio_buffer.started" { voiceState = .speaking }
                 else if type == "output_audio_buffer.stopped" || type == "output_audio_buffer.cleared" { voiceState = .live }
             }
         case "pulse/closed":
+            realtimeActive = false
+            finishLive()
             turnId = nil
             thinking = false
             if voiceState != .off { voiceState = .off; VoiceBridge.shared.close() }
@@ -399,21 +462,26 @@ final class CodexPetSession: ObservableObject {
         }
     }
 
-    /// Streams into the last live message of the same key, or opens a new one.
-    private func append(_ delta: String, role: ChatMessage.Role, key: String) {
-        if streamingItem == key, let i = messages.indices.last, messages[i].live {
-            messages[i].text += delta
+    private func updateAgent(_ text: String, item: String, params: [String: Any], completed: Bool) {
+        let turn = (params["turnId"] as? String) ?? turnId ?? ""
+        let key = "agent:\(turn):\(item)"
+        if completed { agentText[key] = text } else { agentText[key, default: ""] += text }
+        // Voice speaks the delegated result. Only explicitly promoted artifacts also belong in chat.
+        guard (!realtimeActive && !voiceTurns.contains(turn)) || promotedAgentItems.contains(key) else { return }
+        setMessage(agentText[key] ?? "", role: .assistant, key: key, live: !completed)
+    }
+
+    private func setMessage(_ text: String, role: ChatMessage.Role, key: String, live: Bool) {
+        if let i = messages.firstIndex(where: { $0.sourceID == key }) {
+            messages[i].text = text
+            messages[i].live = live
         } else {
-            finishLive()
-            streamingItem = key
-            messages.append(ChatMessage(role: role, text: delta, live: true))
+            messages.append(ChatMessage(role: role, text: text, live: live, sourceID: key))
         }
     }
 
     private func finishLive() {
-        for i in messages.indices where messages[i].live { messages[i].live = false }
-        messages.removeAll { $0.text.trimmingCharacters(in: .whitespaces).isEmpty }
-        streamingItem = nil
+        for i in messages.indices { messages[i].live = false }
     }
 
     private func activityLabel(_ type: String, _ item: [String: Any]) -> String? {
@@ -426,122 +494,4 @@ final class CodexPetSession: ObservableObject {
         default: return nil
         }
     }
-}
-
-// MARK: - WebRTC peer inside a hidden WKWebView
-//
-// macOS has no public WebRTC API; WebKit's is complete (mic capture, Opus, data channel), so a
-// one-page WKWebView owns the call. Swift only shuttles SDP strings and data-channel events.
-
-@MainActor
-final class VoiceBridge: NSObject, WKScriptMessageHandler, WKUIDelegate {
-    static let shared = VoiceBridge()
-    let webView: WKWebView
-    private var offerWaiter: CheckedContinuation<String, Error>?
-
-    override init() {
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = .nonPersistent()
-        config.mediaTypesRequiringUserActionForPlayback = []
-        config.userContentController.add(ScriptProxy(), name: "pulse")
-        webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 2, height: 2), configuration: config)
-        super.init()
-        ScriptProxy.target = self
-        webView.uiDelegate = self
-        webView.alphaValue = 0.02   // in the window (media needs it), invisible
-        webView.loadHTMLString(Self.page, baseURL: URL(string: "https://pulse.local/voice"))
-    }
-
-    func createOffer(muted: Bool) async throws -> String {
-        offerWaiter?.resume(throwing: CodexAppServer.Failure.remote("voice start superseded"))
-        return try await withCheckedThrowingContinuation { cont in
-            offerWaiter = cont
-            // async functions return a Promise, which evaluateJavaScript reports as an error: void it
-            webView.evaluateJavaScript("void pulseStart(\(muted))") { [weak self] _, err in
-                if let err, let w = self?.offerWaiter { self?.offerWaiter = nil; w.resume(throwing: err) }
-            }
-        }
-    }
-
-    func accept(answer sdp: String) {
-        let json = String(data: (try? JSONSerialization.data(withJSONObject: [sdp])) ?? Data(), encoding: .utf8) ?? "[\"\"]"
-        webView.evaluateJavaScript("void pulseAccept(\(json)[0])")
-    }
-
-    func setMuted(_ muted: Bool) { webView.evaluateJavaScript("pulseMute(\(muted))") }
-    func close() {
-        webView.evaluateJavaScript("pulseStop()")
-        offerWaiter?.resume(throwing: CodexAppServer.Failure.remote("voice stopped"))
-        offerWaiter = nil
-    }
-
-    func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.frameInfo.isMainFrame,
-              message.frameInfo.securityOrigin.protocol == "https",
-              message.frameInfo.securityOrigin.host == "pulse.local" else { return }
-        guard let body = message.body as? [String: Any], let kind = body["kind"] as? String else { return }
-        switch kind {
-        case "offer":
-            if let sdp = body["sdp"] as? String { offerWaiter?.resume(returning: sdp) }
-            else { offerWaiter?.resume(throwing: CodexAppServer.Failure.remote((body["error"] as? String) ?? "no microphone")) }
-            offerWaiter = nil
-        case "event":
-            if let type = body["type"] as? String { CodexAppServer.shared.onNotification?("pulse/voice", ["type": type]) }
-        case "closed":
-            CodexAppServer.shared.onNotification?("thread/realtime/closed", ["reason": "peer closed"])
-        default: break
-        }
-    }
-
-    func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
-                 initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
-                 decisionHandler: @escaping (WKPermissionDecision) -> Void) {
-        decisionHandler(type == .microphone && frame.isMainFrame
-                        && origin.protocol == "https" && origin.host == "pulse.local" ? .grant : .deny)
-    }
-
-    /// WKUserContentController retains its handler; a tiny proxy keeps the bridge out of that cycle.
-    private final class ScriptProxy: NSObject, WKScriptMessageHandler {
-        static weak var target: VoiceBridge?
-        func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
-            Self.target?.userContentController(c, didReceive: m)
-        }
-    }
-
-    static let page = """
-    <!doctype html><meta charset=utf-8><audio id=out autoplay></audio><script>
-    let pc = null, dc = null, mic = null, generation = 0, muted = false;
-    const post = (m) => webkit.messageHandlers.pulse.postMessage(m);
-    async function pulseStart(initialMuted = false) {
-      pulseStop();
-      const run = generation;
-      muted = initialMuted;
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-        if (run !== generation) { for (const t of stream.getTracks()) t.stop(); return; }
-        mic = stream;
-        pulseMute(muted);
-        const peer = pc = new RTCPeerConnection();
-        dc = peer.createDataChannel('oai-events');
-        dc.onmessage = (e) => { try { post({ kind: 'event', type: JSON.parse(e.data).type || '' }); } catch {} };
-        peer.ontrack = (e) => { document.getElementById('out').srcObject = e.streams[0]; };
-        peer.onconnectionstatechange = () => { if (run === generation && ['failed','closed','disconnected'].includes(peer.connectionState)) { pulseStop(); post({ kind: 'closed' }); } };
-        for (const t of mic.getTracks()) peer.addTrack(t, mic);
-        const offer = await peer.createOffer();
-        if (run !== generation) return;
-        await peer.setLocalDescription(offer);
-        await new Promise((r) => { if (peer.iceGatheringState === 'complete') r(); else { const f = () => { if (peer.iceGatheringState === 'complete') { peer.removeEventListener('icegatheringstatechange', f); r(); } }; peer.addEventListener('icegatheringstatechange', f); setTimeout(r, 1500); } });
-        if (run === generation) post({ kind: 'offer', sdp: peer.localDescription.sdp });
-      } catch (e) { if (run === generation) { post({ kind: 'offer', error: String(e && e.message || e) }); pulseStop(); } }
-    }
-    async function pulseAccept(sdp) { if (pc) await pc.setRemoteDescription({ type: 'answer', sdp }); }
-    function pulseMute(m) { muted = m; if (mic) for (const t of mic.getAudioTracks()) t.enabled = !m; }
-    function pulseStop() {
-      generation++;
-      if (mic) { for (const t of mic.getTracks()) t.stop(); mic = null; }
-      if (dc) { dc.onmessage = null; dc = null; }
-      if (pc) { pc.onconnectionstatechange = null; pc.close(); pc = null; }
-    }
-    </script>
-    """
 }

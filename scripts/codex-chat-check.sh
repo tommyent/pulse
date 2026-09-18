@@ -4,6 +4,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 OUT="$(mktemp -d)/codex-chat-check"
-swiftc -O -o "$OUT" Sources/Pulse/CodexChat.swift scripts/codex-chat/main.swift
+swiftc -O -o "$OUT" Sources/Pulse/CodexChat.swift Sources/Pulse/VoiceBridge.swift Sources/Pulse/PetApprovals.swift scripts/codex-chat/main.swift
 codesign -s - "$OUT" 2>/dev/null || true
 exec "$OUT"

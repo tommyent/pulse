@@ -39,10 +39,10 @@ cp Sources/Pulse/Resources/AppIcon.icns "$APP/Contents/Resources/"
 codesign -f -s "${CODE_SIGN_IDENTITY:--}" --identifier app.pulse "$APP"
 codesign --verify --strict "$APP"
 
-# keep one previous build; the stage folder is gone once the bundle is in place
+# Preserve previous builds for rollback; the stage folder is gone once the bundle is in place.
 if [[ -e .build/Pulse.app ]]; then
-    rm -rf .build/Pulse.app.previous
-    mv .build/Pulse.app .build/Pulse.app.previous
+    PREVIOUS="$(mktemp -d .build/previous.XXXXXX)"
+    mv .build/Pulse.app "$PREVIOUS/Pulse.app"
 fi
 mv "$APP" .build/Pulse.app
 rmdir "$STAGE"

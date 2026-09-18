@@ -11,6 +11,5 @@ swiftc Sources/Pulse/CodexPetSprite.swift Checks/CodexPetChecks.swift -o "$OUT/p
 swiftc Sources/Pulse/Models.swift Sources/Pulse/Adapters.swift Sources/Pulse/GrokLogin.swift Sources/Pulse/HotKey.swift Checks/SecurityChecks.swift -o "$OUT/security"
 "$OUT/security"
 ./scripts/grok-check.sh --offline
-node Checks/VoiceChecks.js
-swiftc Sources/Pulse/CodexChat.swift Checks/CodexSessionChecks.swift -o "$OUT/codex-session"
+swiftc Sources/Pulse/CodexChat.swift Sources/Pulse/VoiceBridge.swift Sources/Pulse/PetApprovals.swift Checks/CodexSessionChecks.swift -o "$OUT/codex-session"
 "$OUT/codex-session"
