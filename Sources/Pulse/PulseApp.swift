@@ -22,6 +22,9 @@ struct PulseApp: App {
     }()
 
     init() {
+        // A write to a Codex child that just exited raises SIGPIPE, which would kill Pulse silently.
+        // Ignored, the write throws EPIPE instead and the existing error paths report it.
+        signal(SIGPIPE, SIG_IGN)
         // single instance: a new launch replaces any running one
         for app in NSWorkspace.shared.runningApplications
         where app.bundleIdentifier == (Bundle.main.bundleIdentifier ?? "app.pulse")

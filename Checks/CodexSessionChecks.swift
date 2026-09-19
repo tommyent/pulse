@@ -10,6 +10,7 @@ func locateBinary(_ name: String) -> URL? {
 enum CodexSessionChecks {
     @MainActor
     static func main() async throws {
+        signal(SIGPIPE, SIG_IGN)   // as PulseApp.init does; checkStartup writes to servers that just exited
         if CommandLine.arguments.contains("--approval-ui") || Bundle.main.bundleIdentifier == "app.pulse.approval-check" {
             _ = NSApplication.shared
             NSApp.setActivationPolicy(.accessory)
@@ -33,6 +34,8 @@ enum CodexSessionChecks {
         #!/usr/bin/env node
         const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
         const assert = require('node:assert/strict');
+        const log = word => process.env.PULSE_CHECK_LOG && require('node:fs').appendFileSync(process.env.PULSE_CHECK_LOG, word + '\\n');
+        log('spawn');
         require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
           const m = JSON.parse(line);
           if (m.method === 'initialize') send({ id: m.id, result: {} });
@@ -41,8 +44,10 @@ enum CodexSessionChecks {
             assert.equal(m.params.approvalsReviewer, 'user');
             assert.equal(m.params.sandbox, 'workspace-write');
             assert(!m.params.runtimeWorkspaceRoots, 'no extra folders are permanently granted');
+            log('thread');
             send({ id: m.id, result: { thread: { id: 'fixture-thread' } } });
           }
+          if (m.method === 'fixture/exit') process.exit(0);   // fixture/silent is never answered
           if (m.method === 'fixture/approvals') {
             const p = {threadId:'fixture-thread',turnId:'fixture-turn',itemId:'edit'};
             send({id:900, method:'item/commandExecution/requestApproval',params:{...p,command:'touch ~/Projects/example.txt',cwd:'/tmp',reason:'Requested project edit'}});
@@ -96,11 +101,14 @@ enum CodexSessionChecks {
         checkRecording(session)
         checkTranscripts(session)
         try await checkApprovals()
+        try await checkStartup(in: dir)
         try await checkNativeVoice(in: dir)
     }
 
     @MainActor
     static func checkRecording(_ session: CodexPetSession) {
+        var cues: [String] = []
+        session.playCue = { cues.append($0) }
         session.muted = false
         session.toggleVoice()
         assert(session.voiceState == .connecting && !session.isRecording)
@@ -117,7 +125,8 @@ enum CodexSessionChecks {
         assert(session.voiceState == .speaking && session.isRecording)
         session.toggleVoice()
         assert(session.voiceState == .off && !session.isRecording, "second activation ends the call")
-        print("Recording checks passed: start, cancel connection, restart, mute indicator, speaking and end")
+        assert(cues == ["Purr", "Morse"], "one cue when the mic goes live, one when a live call ends; none for a cancelled start")
+        print("Recording checks passed: start, cancel connection, restart, mute indicator, speaking, end and start/stop cues")
     }
 
     @MainActor
@@ -227,6 +236,79 @@ enum CodexSessionChecks {
         assert(updated.hasPrefix("Custom note\n") && updated.contains("request permission") && !updated.contains("#needs-agent"))
         assert(updatedPetInstructions(updated) == updated, "migration must be idempotent")
         print("Approval checks passed: once/turn/always scope, persistence and reset, deny, child requests, stale resolution, unsupported requests and instruction migration")
+    }
+
+    @MainActor
+    static func checkStartup(in dir: URL) async throws {
+        let log = dir.appendingPathComponent("startup.log")
+        setenv("PULSE_CHECK_LOG", log.path, 1)
+        func count(_ word: String) -> Int {
+            ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(separator: "\n").filter { $0 == word }.count
+        }
+        let server = CodexAppServer.shared
+        server.stop()
+        // Text and voice starting together share one app-server and one thread. Voice then fails
+        // at the missing native helper; only its thread start matters here.
+        let session = CodexPetSession(workspace: dir.appendingPathComponent("pet-startup"))
+        session.send("first")
+        session.startVoice()
+        var deadline = Date().addingTimeInterval(5)
+        while session.voiceState != .off && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        try await Task.sleep(for: .milliseconds(200))
+        assert(count("spawn") == 1 && count("thread") == 1, "concurrent text and voice must share one app-server and one thread")
+        session.clear()
+
+        do {
+            _ = try await server.request("fixture/silent", [:], timeout: .milliseconds(200))
+            assertionFailure("a silent server must time out")
+        } catch {
+            guard let failure = error as? CodexAppServer.Failure, case .timeout = failure else { fatalError("expected a timeout, got \(error)") }
+        }
+
+        // A server that stopped reading: the write fails with EPIPE (SIGPIPE is ignored) and the
+        // request fails once, instead of the signal killing the process.
+        let deaf = dir.appendingPathComponent("deaf-codex")
+        try """
+        #!/usr/bin/env node
+        // Answers initialize, then closes its stdin while staying alive for 2 s.
+        process.on('uncaughtException', () => {});
+        process.stdin.once('data', d => {
+          const m = JSON.parse(String(d).split('\\n')[0]);
+          process.stdout.write(JSON.stringify({ id: m.id, result: {} }) + '\\n');
+          process.stdin.pause();
+          setTimeout(() => require('node:fs').closeSync(0), 50);
+        });
+        setTimeout(() => process.exit(0), 2000);
+        """.write(to: deaf, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: deaf.path)
+        let fake = ProcessInfo.processInfo.environment["PULSE_CHECK_CODEX"]!
+        setenv("PULSE_CHECK_CODEX", deaf.path, 1)
+        server.stop()
+        try await server.start()
+        setenv("PULSE_CHECK_CODEX", fake, 1)
+        try await Task.sleep(for: .milliseconds(300))
+        let written = Date()
+        do {
+            _ = try await server.request("fixture/silent", [:], timeout: .seconds(5))
+            assertionFailure("a write to a closed pipe must fail")
+        } catch {
+            guard let failure = error as? CodexAppServer.Failure, case .transport = failure else { fatalError("expected transport, got \(error)") }
+            assert(Date().timeIntervalSince(written) < 0.5, "the write itself must fail, before the server exits")
+        }
+
+        // Requests racing a server exit must fail once: no hang, no double resume.
+        server.stop()
+        let before = count("spawn")
+        for _ in 0..<20 {
+            try await server.start()
+            server.notify("fixture/exit", [:])
+            _ = try? await server.request("fixture/silent", [:], timeout: .seconds(5))
+        }
+        deadline = Date().addingTimeInterval(5)
+        while count("spawn") < before + 20 && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        assert(count("spawn") == before + 20, "each start after an exit spawns exactly one new server (got \(count("spawn") - before))")
+        server.stop()
+        print("Startup checks passed: shared app-server and thread start, request timeout, broken pipe, and requests racing a server exit")
     }
 
     @MainActor

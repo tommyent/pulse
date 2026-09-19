@@ -12,13 +12,14 @@ final class CodexAppServer: @unchecked Sendable {
     static let shared = CodexAppServer()
 
     enum Failure: LocalizedError {
-        case notInstalled, notRunning, remote(String), transport
+        case notInstalled, notRunning, remote(String), transport, timeout(String)
         var errorDescription: String? {
             switch self {
             case .notInstalled: "Codex CLI not found (install codex, then sign in)"
             case .notRunning: "Codex app-server is not running"
             case .remote(let m): m
             case .transport: "Codex app-server connection closed"
+            case .timeout(let method): "Codex did not answer \(method) in time"
             }
         }
     }
@@ -32,6 +33,8 @@ final class CodexAppServer: @unchecked Sendable {
     private var buffer = Data()
     private var nextID = 1
     private var pending: [Int: CheckedContinuation<[String: Any], Error>] = [:]
+    private var generation = 0   // one per spawned process: callbacks from an older process are ignored
+    private var starting: Task<Void, Error>?
     private(set) var ready = false
 
     private init() {
@@ -41,10 +44,22 @@ final class CodexAppServer: @unchecked Sendable {
         }
     }
 
-    /// Spawns and initializes once; later calls return immediately.
+    /// Spawns and initializes once; concurrent callers share the same start, later calls return immediately.
     func start() async throws {
-        if lock.withLock({ process?.isRunning == true && ready }) { return }
+        let task: Task<Void, Error>? = lock.withLock {
+            if process?.isRunning == true && ready { return nil }
+            if starting == nil { starting = Task { try await self.spawn() } }
+            return starting
+        }
+        guard let task else { return }
+        defer { lock.withLock { if starting == task { starting = nil } } }
+        try await task.value
+    }
+
+    private func spawn() async throws {
+        stop()   // a process left over from a failed start must not linger
         guard let bin = locateBinary("codex") else { throw Failure.notInstalled }
+        let gen = lock.withLock { generation += 1; return generation }
         let p = Process()
         p.executableURL = bin
         p.arguments = ["app-server", "--listen", "stdio://"]
@@ -55,46 +70,63 @@ final class CodexAppServer: @unchecked Sendable {
         p.standardError = FileHandle.nullDevice
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] h in
             let data = h.availableData
-            if data.isEmpty { h.readabilityHandler = nil; self?.closed(); return }
-            self?.consume(data)
+            if data.isEmpty { h.readabilityHandler = nil; self?.closed(gen); return }
+            self?.consume(data, gen)
         }
-        p.terminationHandler = { [weak self] _ in self?.closed() }
+        p.terminationHandler = { [weak self] _ in self?.closed(gen) }
         try p.run()
         lock.withLock {
             process = p
             stdin = inPipe.fileHandleForWriting
             buffer = Data()
         }
-        _ = try await request("initialize", ["clientInfo": ["name": "pulse", "title": "Pulse", "version": "0.1"],
-                                             "capabilities": ["experimentalApi": true]])
+        do {
+            _ = try await request("initialize", ["clientInfo": ["name": "pulse", "title": "Pulse", "version": "0.1"],
+                                                 "capabilities": ["experimentalApi": true]])
+        } catch { stop(); throw error }
         notify("initialized", [:])
         lock.withLock { ready = true }
     }
 
+    /// Ends the current process. Its waiting requests fail now; its late callbacks are ignored.
     func stop() {
-        lock.lock()
-        let p = process
-        process = nil; stdin = nil; ready = false
-        lock.unlock()
+        let (p, waiting, wasReady) = lock.withLock {
+            defer { process = nil; stdin = nil; ready = false; pending = [:]; generation += 1 }
+            return (process, pending, ready)
+        }
+        ended(waiting, announce: wasReady)   // a replaced working server invalidates the session's thread
         p?.terminate()
     }
 
-    func request(_ method: String, _ params: [String: Any]) async throws -> [String: Any] {
+    /// `timeout` bounds the acknowledgement only; a turn's streamed work arrives later as notifications.
+    /// Every continuation leaves `pending` under the lock before it resumes, so reply, timeout,
+    /// write failure and disconnect can each resume it at most once.
+    func request(_ method: String, _ params: [String: Any], timeout: Duration = .seconds(30)) async throws -> [String: Any] {
         let (stdin, id): (FileHandle, Int) = try lock.withLock {
             guard let stdin, process?.isRunning == true else { throw Failure.notRunning }
             defer { nextID += 1 }
             return (stdin, nextID)
         }
+        let timer = Task { [weak self] in
+            guard (try? await Task.sleep(for: timeout)) != nil else { return }
+            self?.take(id)?.resume(throwing: Failure.timeout(method))
+        }
+        defer { timer.cancel() }
         return try await withCheckedThrowingContinuation { cont in
             lock.withLock { pending[id] = cont }
             do {
                 try write(["jsonrpc": "2.0", "id": id, "method": method, "params": params], to: stdin)
             } catch {
-                lock.withLock { pending[id] = nil }
-                cont.resume(throwing: Failure.transport)
+                take(id)?.resume(throwing: Failure.transport)
             }
         }
     }
+
+    private func take(_ id: Int) -> CheckedContinuation<[String: Any], Error>? {
+        lock.withLock { pending.removeValue(forKey: id) }
+    }
+
+    private func isCurrent(_ gen: Int) -> Bool { lock.withLock { gen == generation } }
 
     func notify(_ method: String, _ params: [String: Any]) {
         lock.lock(); let stdin = stdin; lock.unlock()
@@ -121,8 +153,9 @@ final class CodexAppServer: @unchecked Sendable {
         try handle.write(contentsOf: data)
     }
 
-    private func consume(_ data: Data) {
+    private func consume(_ data: Data, _ gen: Int) {
         lock.lock()
+        guard gen == generation else { lock.unlock(); return }
         buffer.append(data)
         var lines: [Data] = []
         while let nl = buffer.firstIndex(of: 0x0A) {
@@ -132,14 +165,14 @@ final class CodexAppServer: @unchecked Sendable {
         lock.unlock()
         for line in lines {
             guard let msg = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
-            dispatch(msg)
+            dispatch(msg, gen)
         }
     }
 
-    private func dispatch(_ msg: [String: Any]) {
+    private func dispatch(_ msg: [String: Any], _ gen: Int) {
         let method = msg["method"] as? String
         if let id = msg["id"] as? Int, method == nil {
-            lock.lock(); let cont = pending.removeValue(forKey: id); lock.unlock()
+            let cont = take(id)
             if let err = msg["error"] as? [String: Any] {
                 cont?.resume(throwing: Failure.remote((err["message"] as? String) ?? "Codex error"))
             } else {
@@ -151,22 +184,31 @@ final class CodexAppServer: @unchecked Sendable {
         let params = (msg["params"] as? [String: Any]) ?? [:]
         if let id = msg["id"] {
             DispatchQueue.main.async {
+                guard self.isCurrent(gen) else { return }
                 PetApprovals.shared.receive(id: id, method: method, params: params)
             }
             return
         }
         DispatchQueue.main.async {
+            guard self.isCurrent(gen) else { return }
             PetApprovals.shared.observe(method, params)
             self.onNotification?(method, params)
         }
     }
 
-    private func closed() {
-        lock.lock()
-        let waiting = pending; pending = [:]
-        process = nil; stdin = nil; ready = false
-        lock.unlock()
-        for (_, c) in waiting { c.resume(throwing: Failure.transport) }
+    /// The process ended on its own (pipe closed or exit). Stale processes are ignored.
+    private func closed(_ gen: Int) {
+        let waiting: [Int: CheckedContinuation<[String: Any], Error>]? = lock.withLock {
+            guard gen == generation else { return nil }
+            defer { pending = [:]; process = nil; stdin = nil; ready = false; generation += 1 }
+            return pending
+        }
+        if let waiting { ended(waiting, announce: true) }
+    }
+
+    private func ended(_ waiting: [Int: CheckedContinuation<[String: Any], Error>], announce: Bool) {
+        for c in waiting.values { c.resume(throwing: Failure.transport) }
+        guard announce else { return }
         DispatchQueue.main.async {
             PetApprovals.shared.cancelAll(reply: false)
             self.onNotification?("pulse/closed", [:])
@@ -238,7 +280,16 @@ final class CodexPetSession: ObservableObject {
     @Published private(set) var messages: [ChatMessage] = []
     @Published private(set) var activity: [ActivityPill] = []
     @Published private(set) var thinking = false
-    @Published private(set) var voiceState: VoiceState = .off
+    @Published private(set) var voiceState: VoiceState = .off {
+        didSet {
+            // Audible start and end of a live call, like dictation apps: macOS "Pluck" (Purr.aiff) when
+            // the microphone goes live, "Pong" (Morse.aiff) when a call that went live ends.
+            let wasLive = oldValue == .live || oldValue == .speaking
+            if oldValue == .connecting && voiceState == .live { playCue("Purr") }
+            else if wasLive && voiceState == .off { playCue("Morse") }
+        }
+    }
+    var playCue: (String) -> Void = { NSSound(named: $0)?.play() }   // checks record instead of playing
     @Published var muted = false { didSet { VoiceBridge.shared.setMuted(muted) } }
     @Published private(set) var status: String?   // connection / error line under the composer
 
@@ -246,6 +297,7 @@ final class CodexPetSession: ObservableObject {
 
     private let server = CodexAppServer.shared
     private var threadId: String?
+    private var threadTask: Task<String, Error>?   // the in-flight thread/start, shared by text and voice
     private var turnId: String?
     private var realtimeActive = false
     private var voiceTurns: Set<String> = []
@@ -274,6 +326,7 @@ final class CodexPetSession: ObservableObject {
                     "threadId": tid,
                     "input": [["type": "text", "text": text, "text_elements": []]],
                 ])
+            } catch is CancellationError {   // New conversation dropped the thread this was waiting for
             } catch {
                 thinking = false
                 status = error.localizedDescription
@@ -295,7 +348,7 @@ final class CodexPetSession: ObservableObject {
         stopVoice()
         messages = []; activity = []; status = nil
         realtimeActive = false; voiceTurns = []; promotedAgentItems = []; agentText = [:]
-        threadId = nil   // next message starts a fresh thread
+        threadId = nil; threadTask = nil   // next message starts a fresh thread, even if one was being created
         turnId = nil
         thinking = false
     }
@@ -312,9 +365,11 @@ final class CodexPetSession: ObservableObject {
         guard voiceState == .off else { return }
         voiceState = .connecting
         status = nil
+        VoiceBridge.shared.warmupStart = .now
         voiceStartTask = Task {
             do {
                 let tid = try await ensureThread()
+                VoiceBridge.shared.mark("thread ready")
                 try Task.checkCancellation()
                 let offer = try await VoiceBridge.shared.createOffer(muted: muted)
                 try Task.checkCancellation()
@@ -327,7 +382,7 @@ final class CodexPetSession: ObservableObject {
                     "includeStartupContext": true,
                     "flushTranscriptTailOnSessionEnd": true,
                 ])
-                // the answer arrives as thread/realtime/sdp
+                VoiceBridge.shared.mark("realtime/start acknowledged")   // the answer arrives as thread/realtime/sdp
             } catch {
                 guard !Task.isCancelled else { return }
                 voiceState = .off
@@ -364,18 +419,31 @@ final class CodexPetSession: ObservableObject {
         return dir
     }
 
+    /// Text and voice starting together share one thread/start. `clear()` drops an in-flight start,
+    /// so its thread never becomes the new conversation.
     private func ensureThread() async throws -> String {
         try await server.start()
         if let threadId { return threadId }
-        let r = try await server.request("thread/start", [
-            "cwd": Self.petHome(at: workspace).path,
-            "approvalPolicy": "on-request",
-            "approvalsReviewer": "user",
-            "sandbox": "workspace-write",
-        ])
-        guard let id = (r["thread"] as? [String: Any])?["id"] as? String else { throw CodexAppServer.Failure.remote("thread/start returned no id") }
-        threadId = id
-        return id
+        let task = threadTask ?? Task {
+            let r = try await server.request("thread/start", [
+                "cwd": Self.petHome(at: workspace).path,
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "user",
+                "sandbox": "workspace-write",
+            ])
+            guard let id = (r["thread"] as? [String: Any])?["id"] as? String else { throw CodexAppServer.Failure.remote("thread/start returned no id") }
+            return id
+        }
+        threadTask = task
+        do {
+            let id = try await task.value
+            guard threadTask == task || threadId == id else { throw CancellationError() }
+            threadId = id; threadTask = nil
+            return id
+        } catch {
+            if threadTask == task { threadTask = nil }   // let the next call retry
+            throw error
+        }
     }
 
     private func handle(_ method: String, _ p: [String: Any]) {
@@ -407,7 +475,7 @@ final class CodexPetSession: ObservableObject {
             thinking = false
             status = ((p["error"] as? [String: Any])?["message"] as? String) ?? "Codex error"
         case "thread/realtime/sdp":
-            if let sdp = p["sdp"] as? String { VoiceBridge.shared.accept(answer: sdp) }
+            if let sdp = p["sdp"] as? String { VoiceBridge.shared.mark("server answer"); VoiceBridge.shared.accept(answer: sdp) }
         case "thread/realtime/started":
             realtimeActive = true
             if let turnId { voiceTurns.insert(turnId) }
@@ -445,11 +513,14 @@ final class CodexPetSession: ObservableObject {
         case "pulse/voiceReady":
             if voiceState == .connecting { voiceState = .live }
         case "pulse/voice":
-            // Native speaker activity drives the pet.
-            if let type = p["type"] as? String, voiceState != .off {
-                if type == "output_audio_buffer.started" { voiceState = .speaking }
-                else if type == "output_audio_buffer.stopped" || type == "output_audio_buffer.cleared" { voiceState = .live }
-            }
+            // Native speaker activity drives the pet. It arrives every 100 ms; assign only on change,
+            // since every @Published assignment redraws the overlay.
+            guard let type = p["type"] as? String, voiceState != .off else { return }
+            let next: VoiceState
+            if type == "output_audio_buffer.started" { next = .speaking }
+            else if type == "output_audio_buffer.stopped" || type == "output_audio_buffer.cleared" { next = .live }
+            else { return }
+            if voiceState != next { voiceState = next }
         case "pulse/closed":
             realtimeActive = false
             finishLive()

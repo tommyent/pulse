@@ -78,11 +78,21 @@ struct BrandIcon: View {
     }
 }
 
+extension CodexPetSession {
+    /// Voice colours shared by the pet ring and both waveform buttons: yellow while the microphone
+    /// warms up, Codex blue while it is live. nil = off or muted (each view picks its neutral).
+    var voiceTint: Color? {
+        if voiceState == .connecting { return .yellow }
+        return isRecording ? AccountID.codex.accent : nil
+    }
+}
+
 private struct CodexPet: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var session = CodexPetSession.shared
     let size: CGFloat
+    var animateIdle = true   // false in the collapsed rail: an always-on 10 fps idle loop costs CPU all day
     private static let frames: [CodexPetSprite.State: [CGImage]] = Bundle.pulseResources
         .url(forResource: "Resources/codex-pet", withExtension: "webp")
         .map(CodexPetSprite.frames(from:)) ?? [:]
@@ -94,19 +104,15 @@ private struct CodexPet: View {
         return session.thinking ? .waiting : .idle
     }
 
-    private var ringColor: Color {
-        if session.voiceState == .connecting { return .yellow }
-        return session.isRecording ? AccountID.codex.accent : Color(white: scheme == .dark ? 0.19 : 0.85)
-    }
-
     var body: some View {
+        let still = reduceMotion || (state == .idle && !animateIdle)
         ZStack {
             Circle().fill(scheme == .dark ? Color.black : Color.white)
                 .padding(-size * 0.08)
-            Circle().stroke(ringColor, lineWidth: size * 0.12)
-            TimelineView(.animation(minimumInterval: 0.1, paused: reduceMotion)) { context in
+            Circle().stroke(session.voiceTint ?? Color(white: scheme == .dark ? 0.19 : 0.85), lineWidth: size * 0.12)
+            TimelineView(.animation(minimumInterval: 0.1, paused: still)) { context in
                 if let frames = Self.frames[state], frames.count == CodexPetSprite.track(state).durations.count {
-                    let index = reduceMotion ? 0 : CodexPetSprite.frame(state, at: context.date.timeIntervalSinceReferenceDate)
+                    let index = still ? 0 : CodexPetSprite.frame(state, at: context.date.timeIntervalSinceReferenceDate)
                     Image(decorative: frames[index], scale: 1)
                         .resizable()
                         .interpolation(.none)
@@ -355,7 +361,7 @@ struct PetCard: View {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     if session.messages.isEmpty {
                         Text(session.voiceState == .off ? "Type, or tap the waveform to talk. Same Codex sign-in, same threads."
-                                                         : "Listening…")
+                             : session.voiceState == .connecting ? "Starting microphone…" : "Listening…")
                             .font(.caption).foregroundStyle(Ink.secondary(scheme))
                     }
                     ForEach(session.messages) { m in
@@ -397,7 +403,8 @@ struct PetCard: View {
             }
             Button { session.toggleVoice() } label: {
                 Image(systemName: session.voiceState == .off ? "waveform.circle" : "waveform.circle.fill")
-                    .foregroundStyle(Ink.primary(scheme))
+                    .foregroundStyle(session.voiceTint ?? Ink.primary(scheme))
+                    .symbolEffect(.variableColor.iterative, isActive: session.voiceState == .connecting)
             }
             .buttonStyle(.plain)
             .help(session.voiceState == .off ? "Start live voice" : "End live voice")
@@ -471,7 +478,7 @@ struct OverlayView: View {
             if state.persisted.enabled.contains(.codex) {
                 VStack(spacing: 6) {
                     Button { togglePet(voice: NSApp.currentEvent?.modifierFlags.contains(.command) == true) } label: {
-                        CodexPet(size: expanded ? 52 : 28)
+                        CodexPet(size: expanded ? 52 : 28, animateIdle: expanded)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -483,7 +490,8 @@ struct OverlayView: View {
                         Button { togglePet(voice: true) } label: {
                             Image(systemName: session.voiceState == .off ? "waveform.circle" : "waveform.circle.fill")
                                 .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(state.isLight ? Color.black : Color.white)
+                                .foregroundStyle(session.voiceTint ?? (state.isLight ? Color.black : Color.white))
+                                .symbolEffect(.variableColor.iterative, isActive: session.voiceState == .connecting)
                                 .frame(width: 52)
                                 .contentShape(Rectangle())
                         }

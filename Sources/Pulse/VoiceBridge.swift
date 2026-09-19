@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import os
 
 /// Codex's installed native voice helper owns WebRTC, microphone capture and playback.
 /// Its private, same-build protocol uses length-prefixed JSON; audio never crosses this pipe.
@@ -20,6 +21,17 @@ final class VoiceBridge {
     private var sentMute = false
     private var devicesOpen = false
     private var announcedReady = false
+    private let log = Logger(subsystem: "app.pulse", category: "voice")
+    /// Set when a voice start begins; cleared once audio is ready. See `mark`.
+    var warmupStart: Date?
+
+    /// Warm-up timing, one line per step: `/usr/bin/log show --last 10m --predicate 'process == "Pulse"'`
+    /// (zsh's `log` builtin shadows the tool; the offline checks log under the same subsystem).
+    /// Step names and elapsed time only; never SDP, transcripts or credentials.
+    func mark(_ step: String) {
+        guard let warmupStart else { return }
+        log.notice("voice warm-up: \(step, privacy: .public) +\(Int(Date().timeIntervalSince(warmupStart) * 1000)) ms")
+    }
 
     init() {
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
@@ -107,6 +119,8 @@ final class VoiceBridge {
     }
 
     private func fail(_ message: String) {
+        mark("failed: \(message)")
+        warmupStart = nil
         let waiter = offerWaiter; offerWaiter = nil
         close()
         waiter?.resume(throwing: CodexAppServer.Failure.remote(message))
@@ -146,6 +160,7 @@ final class VoiceBridge {
                 fail("Unexpected native voice response."); return
             }
             deadline?.cancel(); deadline = nil; expected = nil
+            if type != "audioState" { mark(type) }
             switch type {
             case "ready": send(["type": "initializeRuntime"], expecting: "runtimeReady", seconds: 30)
             case "runtimeReady": send(["type": "startTransport"], expecting: "offer", seconds: 20)
@@ -168,6 +183,8 @@ final class VoiceBridge {
                 updateControls()
                 if expected == nil && !announcedReady {
                     announcedReady = true
+                    mark("audio ready (voice live)")
+                    warmupStart = nil
                     CodexAppServer.shared.onNotification?("pulse/voiceReady", [:])
                     startPolling()
                 }

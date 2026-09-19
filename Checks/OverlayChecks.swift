@@ -1,4 +1,4 @@
-// Run: swiftc Sources/Pulse/DockGeometry.swift Checks/OverlayChecks.swift -o /tmp/pulse-overlay-check && /tmp/pulse-overlay-check
+// Run: swiftc Sources/Pulse/DockGeometry.swift Sources/Pulse/Models.swift Checks/OverlayChecks.swift -o /tmp/pulse-overlay-check && /tmp/pulse-overlay-check
 import Foundation
 import CoreGraphics
 
@@ -43,6 +43,15 @@ enum OverlayChecks {
             let activationClick = CGPoint(x: -1258, y: 762).applying(rotation)
             assert(!overlayClickIsOutside(activationClick, in: bounds, rail: rail, card: card))
         }
-        print("Overlay checks passed: docking, expansion, displays, persistence and pop-out dismissal")
+        // Reset labels: relative under a day, weekday under six days, weekday plus date beyond.
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        assert(resetLabel(now.addingTimeInterval(-1), now: now) == "Resetting…")
+        assert(resetLabel(now.addingTimeInterval(5 * 60 + 30), now: now) == "Resets in 5 min")
+        assert(resetLabel(now.addingTimeInterval(2 * 3600 + 38 * 60 + 10), now: now) == "Resets in 2h 38m")
+        let soon = now.addingTimeInterval(3 * 86400), nextWeek = now.addingTimeInterval(7 * 86400 - 60)
+        assert(!resetLabel(soon, now: now).contains(soon.formatted(.dateTime.month())), "under six days: weekday only")
+        assert(resetLabel(nextWeek, now: now).contains(nextWeek.formatted(.dateTime.day())), "a week out names the date")
+        assert(resetLabel(nextWeek, now: now).contains(nextWeek.formatted(.dateTime.hour().minute())), "time follows the locale")
+        print("Overlay checks passed: docking, expansion, displays, persistence, pop-out dismissal and reset labels")
     }
 }

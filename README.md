@@ -1,6 +1,6 @@
 # Pulse
 
-A macOS menu bar app with floating usage rings for Claude, Codex and Grok, plus a Codex pet you can chat with by text or live voice. Usage refreshes every 10 minutes.
+A macOS menu bar app with floating usage rings for Claude, Codex and Grok, plus a Codex pet you can chat with by text or live voice. Usage refreshes every 2 minutes.
 
 Everything runs on your own subscription sign-ins. There are no API keys, no accounts with Pulse, and no backend of its own.
 
@@ -30,7 +30,7 @@ There are no binary releases; build from source.
 
 Click the menu bar icon for Settings. Drag the rings to any screen edge; top and bottom lay out horizontally. Click a ring for that account's windows and reset times.
 
-Click the pet to chat. The waveform button below the expanded pet ring starts or ends voice without opening the pop-out. **Command-click the pet** to start voice, then Command-click again to end the session; another Command-click starts a new voice session. Command-click leaves the pop-out closed (or preserves the current card). The **ring around the pet** is gray when voice is off or muted, yellow while warming up, and Codex blue when the microphone is ready. **⌘⌥V** opens the pet and starts a voice call; press it again to end the call, hold it for push-to-talk, and press Escape to end the call and close the card. The shortcut is configurable in Settings. Closing the card by clicking elsewhere does not end a call.
+Click the pet to chat. The waveform button below the expanded pet ring starts or ends voice without opening the pop-out. **Command-click the pet** to start voice, then Command-click again to end the session; another Command-click starts a new voice session. Command-click leaves the pop-out closed (or preserves the current card). The **ring around the pet** is gray when voice is off or muted, yellow while warming up, and Codex blue when the microphone is ready. The waveform buttons use the same colors, and Pulse plays the macOS Pluck sound when the microphone goes live and Pong when a live call ends. **⌘⌥V** opens the pet and starts a voice call; press it again to end the call, hold it for push-to-talk, and press Escape to end the call and close the card. The shortcut is configurable in Settings. Closing the card by clicking elsewhere does not end a call.
 
 Audio capture and playback use the native voice helper from your installed Codex package. Pulse includes the Codex thread's startup context in voice sessions. The audio helper does not change the thread's file or tool permissions.
 
@@ -49,7 +49,7 @@ The pet starts in `~/Documents/codex-pet`. Ask it to work in another folder, suc
 ./scripts/check.sh
 ```
 
-Offline, no sign-ins or audio capture; needs Node.js 18 or later. Covers overlay geometry, the pet sprite sheet, credential writes, redirect and cache policy, the voice shortcut, Grok parsing, the native voice protocol and lifecycle, and Codex Stop.
+Offline, no sign-ins or audio capture; needs Node.js 18 or later. Covers overlay geometry, reset labels, the pet sprite sheet, credential writes, redirect and cache policy, the voice shortcut, Grok parsing, Codex startup, timeouts and broken pipes, the native voice protocol and lifecycle, voice sounds, and Codex Stop.
 
 Live checks that use your accounts: `./scripts/grok-check.sh` may refresh Grok credentials, and `./scripts/codex-chat-check.sh` sends one prompt and negotiates a voice session. Provider endpoints and the experimental realtime protocol can change without notice.
 

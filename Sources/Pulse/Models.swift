@@ -63,7 +63,9 @@ struct AccountSnapshot: Codable, Identifiable {
 }
 
 
-/// "Resets in 51 min" / "Resets in 4h 12m" / "Resets Mon 3:00 AM"
+/// "Resets in 51 min" / "Resets in 4h 12m" / "Resets Mon 3:00 AM" / "Resets Fri, Sep 25, 12:21 PM".
+/// Time follows the user's locale and 12/24-hour setting. From six days out a weekday alone is
+/// ambiguous ("Fri" seen on a Friday means next week), so the date is added.
 func resetLabel(_ date: Date?, now: Date = .now) -> String {
     guard let date else { return "" }
     let s = date.timeIntervalSince(now)
@@ -73,7 +75,6 @@ func resetLabel(_ date: Date?, now: Date = .now) -> String {
         let h = Int(s) / 3600, m = (Int(s) % 3600) / 60
         return "Resets in \(h)h \(m)m"
     }
-    let f = DateFormatter()
-    f.dateFormat = "EEE h:mm a"
-    return "Resets \(f.string(from: date))"
+    let day: Date.FormatStyle = s < 6 * 86400 ? .dateTime.weekday() : .dateTime.weekday().month().day()
+    return "Resets " + date.formatted(day.hour().minute())
 }
