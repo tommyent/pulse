@@ -42,7 +42,13 @@ final class AppState: ObservableObject {
     private static let snapshotsURL = dir.appending(path: "snapshots.json")
 
     init() {
-        persisted = (try? JSONDecoder().decode(Persisted.self, from: Data(contentsOf: Self.stateURL))) ?? Persisted()
+        var saved = (try? JSONDecoder().decode(Persisted.self, from: Data(contentsOf: Self.stateURL))) ?? Persisted()
+        // accounts added since state.json was written start enabled, as on a fresh install
+        for id in AccountID.allCases where !saved.order.contains(id) {
+            saved.order.append(id)
+            saved.enabled.insert(id)
+        }
+        persisted = saved
         defer { Self.shared = self }
         // last run's snapshots, shown as stale until the first live fetch lands
         var cached = (try? JSONDecoder().decode([AccountID: AccountSnapshot].self,

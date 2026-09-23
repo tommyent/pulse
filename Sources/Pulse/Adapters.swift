@@ -568,10 +568,119 @@ enum GrokAdapter {
     }
 }
 
+// MARK: - Antigravity
+
+/// The Antigravity CLI's own usage report (`agy -p /usage`). agy asks Google as itself, so Pulse never
+/// reads the Google token; Google's quota API refuses that token from any other client. The report is
+/// a local command: no model prompt, no tokens, no conversation.
+enum AntigravityAdapter {
+    static func fetch() async -> AccountSnapshot {
+        var snap = AccountSnapshot(id: .antigravity, displayName: "Antigravity", planLabel: "Google account",
+                                   health: .missingClient, windows: [], fetchedAt: .now, source: .cliStatus)
+        guard let agy = locateBinary("agy") else { return snap }
+        snap.health = .providerError
+        guard let version = await run(agy, ["--version"], timeout: .seconds(10)) else {
+            snap.detail = "Antigravity CLI did not start"
+            return snap
+        }
+        guard supportsUsageReport(String(decoding: version.out, as: UTF8.self)) else {
+            snap.detail = "Update the Antigravity CLI (agy 1.1.11 or later)"
+            return snap
+        }
+        guard let report = await run(agy, ["-p", "/usage", "--output-format", "json", "--print-timeout", "45s"],
+                                     timeout: .seconds(60)) else {
+            snap.detail = "Antigravity CLI timed out"
+            return snap
+        }
+        if let json = try? JSONSerialization.jsonObject(with: report.out) as? [String: Any] {
+            snap.windows = windows(from: json)
+        }
+        if !snap.windows.isEmpty {
+            snap.health = .ok
+        } else if signedOut(report.err + report.out) {
+            snap.health = .needsAuth
+            snap.detail = "Run agy once to sign in to Antigravity"
+        } else {
+            snap.detail = "Antigravity CLI returned no usage"
+        }
+        return snap
+    }
+
+    /// Print mode before agy 1.1.11 sent unknown slash commands to the model as a prompt, so older
+    /// or unrecognised versions are never asked for `/usage`.
+    static func supportsUsageReport(_ version: String) -> Bool {
+        guard let r = version.range(of: #"\d+\.\d+\.\d+"#, options: .regularExpression) else { return false }
+        return !version[r].split(separator: ".").compactMap { Int($0) }.lexicographicallyPrecedes([1, 1, 11])
+    }
+
+    /// `command.data.groups[]` are separate pools (Gemini; Claude and GPT), each with a 5-hour and a
+    /// weekly bucket. The pool nearest its limit leads, so the ring shows it; the card lists both.
+    static func windows(from json: [String: Any]) -> [UsageWindow] {
+        guard json["status"] as? String == "SUCCESS",
+              let command = json["command"] as? [String: Any], command["name"] as? String == "usage",
+              let groups = (command["data"] as? [String: Any])?["groups"] as? [[String: Any]] else { return [] }
+        let pools: [[UsageWindow]] = groups.map { group in
+            let pool = (group["name"] as? String ?? "Quota")
+                .replacingOccurrences(of: " models", with: "", options: .caseInsensitive)
+            return (group["buckets"] as? [[String: Any]] ?? []).compactMap { b -> UsageWindow? in
+                guard let id = b["id"] as? String, b["disabled"] as? Bool != true else { return nil }
+                let window = b["window"] as? String
+                let label = window == "5h" ? "5-hour" : window == "weekly" ? "weekly" : b["name"] as? String ?? id
+                return UsageWindow(id: id, label: "\(pool) · \(label)",
+                                   percentUsed: (b["remaining_fraction"] as? Double).map { (1 - $0) * 100 },
+                                   resetsAt: (b["reset_time"] as? String).flatMap(parseISO))
+            }
+            .sorted { $0.label.hasSuffix("5-hour") && !$1.label.hasSuffix("5-hour") }   // session first, like Codex
+        }
+        return pools.filter { !$0.isEmpty }
+            .sorted { ($0.compactMap(\.percentUsed).max() ?? 0) > ($1.compactMap(\.percentUsed).max() ?? 0) }
+            .flatMap { $0 }
+    }
+
+    /// Only consulted when the report had no usage: agy also prints "not signed in" briefly while it
+    /// silently refreshes a working login.
+    static func signedOut(_ output: Data) -> Bool {
+        let text = String(decoding: output, as: UTF8.self).lowercased()
+        return ["not logged in", "not signed in", "login method", "unauthenticated",
+                "authentication required", "login required", "please log in", "please sign in"]
+            .contains { text.contains($0) }
+    }
+
+    /// Runs agy in a private temp folder with no stdin. Output goes to files, not pipes, so a full pipe
+    /// can never stall it and no thread blocks while it runs.
+    private static func run(_ agy: URL, _ args: [String], timeout: Duration) async -> (out: Data, err: Data)? {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appending(path: "pulse-agy-\(UUID().uuidString)")
+        guard (try? fm.createDirectory(at: dir, withIntermediateDirectories: false,
+                                       attributes: [.posixPermissions: 0o700])) != nil else { return nil }
+        defer { try? fm.removeItem(at: dir) }
+        let outURL = dir.appending(path: "out"), errURL = dir.appending(path: "err")
+        guard fm.createFile(atPath: outURL.path, contents: nil), fm.createFile(atPath: errURL.path, contents: nil),
+              let out = try? FileHandle(forWritingTo: outURL), let err = try? FileHandle(forWritingTo: errURL)
+        else { return nil }
+        let p = Process()
+        p.executableURL = agy
+        p.arguments = args
+        p.currentDirectoryURL = dir
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = out; p.standardError = err
+        guard (try? p.run()) != nil else { return nil }
+        let deadline = ContinuousClock.now + timeout
+        while p.isRunning {
+            guard ContinuousClock.now < deadline, (try? await Task.sleep(for: .milliseconds(100))) != nil else {
+                p.terminate()
+                return nil
+            }
+        }
+        return ((try? Data(contentsOf: outURL)) ?? Data(), (try? Data(contentsOf: errURL)) ?? Data())
+    }
+}
+
 func fetchSnapshot(_ id: AccountID) async -> AccountSnapshot {
     switch id {
     case .claude: await ClaudeAdapter.fetch()
     case .codex: await CodexAdapter.fetch()
     case .grok: await GrokAdapter.fetch()
+    case .antigravity: await AntigravityAdapter.fetch()
     }
 }

@@ -1,6 +1,6 @@
 # Pulse
 
-A macOS menu bar app with floating usage rings for Claude, Codex and Grok, plus a Codex pet you can chat with by text or live voice. Usage refreshes every 2 minutes.
+A macOS menu bar app with floating usage rings for Claude, Codex, Grok and Antigravity, plus a Codex pet you can chat with by text or live voice. Usage refreshes every 2 minutes.
 
 Everything runs on your own subscription sign-ins. There are no API keys, no accounts with Pulse, and no backend of its own.
 
@@ -10,8 +10,9 @@ Everything runs on your own subscription sign-ins. There are no API keys, no acc
 - **Build:** Xcode 26 or later (the Command Line Tools alone lack the SwiftUI macro plugin) and Swift 6.2 or later. No third-party packages.
 - **Codex:** a signed-in Codex CLI (`codex login`). Voice needs a CLI package containing `codex-voice-host` (tested with 0.155.0), microphone permission, and an account that supports the CLI's experimental realtime protocol.
 - **Claude and Grok:** sign in through their CLIs, or use **Connect** in Pulse's Settings. Grok CLI support reads Grok Build's `~/.grok/auth.json`.
+- **Antigravity:** the Antigravity CLI (`agy`) 1.1.11 or later (tested with 1.2.9), signed in by running `agy` once. The ring shows the Gemini or Claude and GPT pool nearer its limit; the card lists both pools' 5-hour and weekly limits.
 
-Pulse looks for the Codex executable in `~/.local/bin`, `~/.codex/bin`, `/opt/homebrew/bin` and `/usr/local/bin`. If yours lives elsewhere, link it into `~/.local/bin`; apps launched from Finder do not inherit your shell's PATH.
+Pulse looks for the Codex and `agy` executables in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`, and for Codex also in `~/.codex/bin`. If yours lives elsewhere, link it into `~/.local/bin`; apps launched from Finder do not inherit your shell's PATH.
 
 ## Build and install
 
@@ -40,6 +41,7 @@ The pet starts in `~/Documents/codex-pet`. Ask it to work in another folder, suc
 
 - Pulse reads the current user's own CLI credentials: Claude Code's Keychain item (through Apple's `security` tool, so it never prompts) or `~/.claude/.credentials.json`, `~/.codex/auth.json`, and `~/.grok/auth.json`. Grok's file is refreshed in place with an atomic, owner-only write.
 - Web sign-ins made through **Connect** live in macOS WebKit storage; Grok's saved cookie header uses the Keychain service `app.pulse.auth`. Preferences and usage snapshots live in `~/Library/Application Support/Pulse`. The voice helper's error output goes to `pulse-voice.err` in your temporary folder, for diagnosing failed calls.
+- Antigravity usage comes from the CLI's own report: Pulse runs `agy -p /usage --output-format json` in a private temporary folder on each refresh and never reads the Google sign-in. The report is a local command, so it sends no prompt and uses no quota; agy writes its usual log file for each run.
 - Usage requests go straight to each provider over HTTPS. Authenticated responses are not cached to disk and redirects are refused, so a token is never forwarded off-host.
 - Pet chat and audio go through Codex and OpenAI under your Codex account, which may retain threads. The pet thread starts in `~/Documents/codex-pet` with workspace-write sandboxing and user-reviewed, on-request approvals. Pulse creates the folder and seeds an `AGENTS.md` there on first open; existing files have only the original inbox-only restrictions updated, preserving other instructions. The instructions require permission before working outside the inbox; the sandbox enforces write restrictions, while normal read access follows Codex's workspace-write policy. Supported approval requests from the pet and its delegated agents are shown for review; unsupported requests are rejected. Your own Codex configuration and tools apply.
 
@@ -49,7 +51,7 @@ The pet starts in `~/Documents/codex-pet`. Ask it to work in another folder, suc
 ./scripts/check.sh
 ```
 
-Offline, no sign-ins or audio capture; needs Node.js 18 or later. Covers overlay geometry, reset labels, the pet sprite sheet, credential writes, redirect and cache policy, the voice shortcut, Grok parsing, Codex startup, timeouts and broken pipes, the native voice protocol and lifecycle, voice sounds, and Codex Stop.
+Offline, no sign-ins or audio capture; needs Node.js 18 or later. Covers overlay geometry, reset labels, the pet sprite sheet, credential writes, redirect and cache policy, the voice shortcut, Grok parsing, the Antigravity report and its version guard, Codex startup, timeouts and broken pipes, the native voice protocol and lifecycle, voice sounds, and Codex Stop.
 
 Live checks that use your accounts: `./scripts/grok-check.sh` may refresh Grok credentials, and `./scripts/codex-chat-check.sh` sends one prompt and negotiates a voice session. Provider endpoints and the experimental realtime protocol can change without notice.
 
@@ -57,7 +59,7 @@ Live checks that use your accounts: `./scripts/grok-check.sh` may refresh Grok c
 
 | File | Owns |
 |---|---|
-| `Adapters.swift` | usage fetch for Claude, Codex and Grok; credential reads and Grok token refresh |
+| `Adapters.swift` | usage fetch for Claude, Codex, Grok and Antigravity; credential reads and Grok token refresh |
 | `CodexChat.swift` | Codex app-server client and pet session |
 | `VoiceBridge.swift` | installed Codex native voice helper, audio controls and lifecycle |
 | `PetApprovals.swift` | native approval prompts, scoped replies and cancellation |

@@ -1,13 +1,14 @@
 import SwiftUI
 
 enum AccountID: String, Codable, CaseIterable, Identifiable {
-    case claude, codex, grok
+    case claude, codex, grok, antigravity
     var id: String { rawValue }
     var displayName: String {
         switch self {
         case .claude: "Claude"
         case .codex: "Codex"
         case .grok: "Grok"
+        case .antigravity: "Antigravity"
         }
     }
     var accent: Color {
@@ -15,6 +16,7 @@ enum AccountID: String, Codable, CaseIterable, Identifiable {
         case .claude: Color(red: 0xFF / 255, green: 0x7A / 255, blue: 0x45 / 255)  // #FF7A45
         case .codex: Color(red: 0x4D / 255, green: 0x7C / 255, blue: 0xFF / 255)   // #4D7CFF
         case .grok: Color(red: 0xFF / 255, green: 0xC1 / 255, blue: 0x4A / 255)    // #FFC14A
+        case .antigravity: Color(red: 0x00 / 255, green: 0xB9 / 255, blue: 0x5C / 255) // #00B95C
         }
     }
     var glyph: String {
@@ -22,6 +24,7 @@ enum AccountID: String, Codable, CaseIterable, Identifiable {
         case .claude: "asterisk"
         case .codex: "circle.hexagongrid"
         case .grok: "line.diagonal"
+        case .antigravity: "sparkle"
         }
     }
 }

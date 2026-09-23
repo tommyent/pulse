@@ -45,7 +45,8 @@ enum Ink {
 private let brandIcons: [AccountID: NSImage] = {
     var d: [AccountID: NSImage] = [:]
     for id in AccountID.allCases {
-        if let url = Bundle.pulseResources.url(forResource: "Resources/\(id.rawValue)", withExtension: "svg"),
+        // PNG for logos whose SVG needs filters macOS can't draw (Antigravity's blurs)
+        if let url = ["svg", "png"].lazy.compactMap({ Bundle.pulseResources.url(forResource: "Resources/\(id.rawValue)", withExtension: $0) }).first,
            let img = NSImage(contentsOf: url) {
             // template-tint only monochrome icons; full-color icons render as-is
             let src = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
@@ -510,7 +511,8 @@ struct OverlayView: View {
                     RingView(account: id,
                              percent: windows.first?.percentUsed,
                              secondary: windows.dropFirst().first?.percentUsed,
-                             tertiary: windows.dropFirst(2).first?.percentUsed,
+                             // Antigravity's third window is the other pool's 5-hour, not a per-model cap
+                             tertiary: id == .antigravity ? nil : windows.dropFirst(2).first?.percentUsed,
                              size: expanded ? 52 : 28,
                              showPercent: expanded)
                         .contentShape(Rectangle())
@@ -687,6 +689,10 @@ struct SettingsView: View {
                         if id == .codex {
                             Text("via Codex CLI").font(.caption).foregroundStyle(.secondary)
                                 .help("Codex signs in through its own CLI (codex login)")
+                        }
+                        if id == .antigravity {
+                            Text("via Antigravity CLI").font(.caption).foregroundStyle(.secondary)
+                                .help("Reads agy's own /usage report; sign in by running agy once")
                         }
                         Toggle("Enable \(id.displayName)", isOn: state.isEnabled(id)).labelsHidden()
                     } label: {

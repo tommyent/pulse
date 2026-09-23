@@ -59,6 +59,34 @@ enum SecurityChecks {
         assert(released == nil, "registry must not retain obsolete voice shortcuts")
         let replacement = HotKey(combo)
         assert(replacement != nil, "old shortcut must be unregistered")
-        print("Security checks passed: private atomic auth writes, redirect/cache policy and shortcut release")
+
+        // Antigravity: `/usage` only reaches agy versions that treat it as a local command, never a prompt.
+        for (v, ok) in [("1.2.9\n", true), ("1.1.11", true), ("agy 2.0.0", true), ("1.1.10", false), ("0.9.99", false), ("", false)] {
+            assert(AntigravityAdapter.supportsUsageReport(v) == ok, "agy version \(v)")
+        }
+        func report(_ gemini: Double, _ thirdParty: Double) -> [String: Any] {
+            let json = """
+            {"conversation_id":"","status":"SUCCESS","num_turns":0,"command":{"name":"usage","data":{"groups":[
+             {"name":"Gemini Models","buckets":[
+              {"id":"gemini-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":\(gemini),"reset_time":"2026-09-25T11:01:14Z"},
+              {"id":"gemini-5h","name":"Five Hour Limit Remaining","window":"5h","remaining_fraction":1,"reset_time":"2026-09-24T00:46:21Z"}]},
+             {"name":"Claude and GPT models","buckets":[
+              {"id":"3p-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":1,"reset_time":"2026-09-30T19:46:21Z"},
+              {"id":"3p-5h","name":"Five Hour Limit Remaining","window":"5h","remaining_fraction":\(thirdParty),"reset_time":"2026-09-24T00:46:21Z"}]}]}}}
+            """
+            return try! JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
+        }
+        let ag = AntigravityAdapter.windows(from: report(0.75, 1))
+        assert(ag.map(\.id) == ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"], "\(ag.map(\.id))")
+        assert(ag[1].label == "Gemini · weekly" && ag[1].percentUsed == 25 && ag[1].resetsAt != nil)
+        assert(ag[2].label == "Claude and GPT · 5-hour" && ag[2].percentUsed == 0)
+        assert(AntigravityAdapter.windows(from: report(1, 0.5)).first?.id == "3p-5h", "the pool nearest its limit leads")
+        var failed = report(0.5, 0.5); failed["status"] = "ERROR"
+        assert(AntigravityAdapter.windows(from: failed).isEmpty)
+        let prompted: [String: Any] = ["status": "SUCCESS", "response": "Here is your usage…", "num_turns": 1]
+        assert(AntigravityAdapter.windows(from: prompted).isEmpty, "a model answer is not a usage report")
+        assert(AntigravityAdapter.signedOut(Data("Select login method:".utf8)))
+        assert(!AntigravityAdapter.signedOut(Data("dial tcp: i/o timeout".utf8)))
+        print("Security checks passed: private atomic auth writes, redirect/cache policy, shortcut release and the agy usage guard")
     }
 }
