@@ -104,6 +104,7 @@ final class OverlayController {
     }
 
     private func mouseDown(_ event: NSEvent) {
+        guard NSApp.modalWindow == nil else { return }   // a click in an approval alert is not a click away from the pet
         let point = CGPoint(x: event.locationInWindow.x, y: panel.frame.height - event.locationInWindow.y)
         if event.window !== panel || overlayClickIsOutside(point, in: CGRect(origin: .zero, size: panel.frame.size),
                                                           rail: railFrame, card: state.cardVisible || state.petVisible ? cardFrame : nil) {
@@ -126,7 +127,8 @@ final class OverlayController {
                                      anchor: pinned ?? CGPoint(x: bounds.midX, y: bounds.midY),
                                      in: bounds)
         pinned = state.dock.anchor(of: frame)
-        panel.setFrame(frame, display: true)
+        guard panel.frame != frame else { return }
+        panel.setFrame(frame, display: false)
     }
 
     private func screenPoint(_ location: CGPoint) -> CGPoint {

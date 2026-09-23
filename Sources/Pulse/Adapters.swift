@@ -135,8 +135,8 @@ enum ClaudeAdapter {
             }
             if status == 401 {
                 ClaudeKeychain.shared.forget()   // token rotated or expired: re-read next poll, use the web session now
-            } else if status == 429 || status >= 500 {
-                snap.health = .providerError     // keep last good windows; the web session is not consulted for a throttle
+            } else if status == 0 || status == 429 || status >= 500 {
+                snap.health = .providerError     // offline or throttled: keep last good windows; the web session is not consulted
                 return snap
             }
         }
@@ -503,7 +503,7 @@ enum GrokAdapter {
             let cycle = (period["type"] as? String).map { $0.contains("WEEKLY") ? " (weekly)" : $0.contains("MONTHLY") ? " (monthly)" : "" } ?? ""
             var out = [UsageWindow(id: "period_all", label: "Credits\(cycle)",
                                    percentUsed: config["creditUsagePercent"] as? Double ?? 0, resetsAt: resets)]
-            let names = ["GrokBuild": "Grok Build", "GrokChat": "Grok Chat"]
+            let names = ["GrokBuild": "Grok Build", "GrokChat": "Grok Chat", "GrokImagine": "Grok Imagine"]
             for item in config["productUsage"] as? [[String: Any]] ?? [] {
                 guard let product = item["product"] as? String else { continue }
                 out.append(UsageWindow(id: "period_\(product)", label: names[product] ?? product,

@@ -80,10 +80,11 @@ struct BrandIcon: View {
 
 extension CodexPetSession {
     /// Voice colours shared by the pet ring and both waveform buttons: yellow while the microphone
-    /// warms up, Codex blue while it is live. nil = off or muted (each view picks its neutral).
+    /// warms up or is muted, Codex blue while it is live. nil = off only (each view picks its neutral).
     var voiceTint: Color? {
-        if voiceState == .connecting { return .yellow }
-        return isRecording ? AccountID.codex.accent : nil
+        guard voiceState != .off else { return nil }
+        if voiceState == .connecting || muted { return .yellow }
+        return AccountID.codex.accent
     }
 }
 

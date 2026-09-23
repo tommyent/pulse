@@ -304,6 +304,7 @@ final class CodexPetSession: ObservableObject {
     private var promotedAgentItems: Set<String> = []
     private var agentText: [String: String] = [:]
     private var voiceStartTask: Task<Void, Never>?
+    private var voiceMayRetry = true
     private let workspace: URL?
 
     init(workspace: URL? = nil) {
@@ -361,8 +362,10 @@ final class CodexPetSession: ObservableObject {
         if voiceState == .off { startVoice() } else { stopVoice() }
     }
 
-    func startVoice() {
+    /// `retryOnAudioGlitch` is false only for the one automatic retry below, so it can never loop.
+    func startVoice(retryOnAudioGlitch: Bool = true) {
         guard voiceState == .off else { return }
+        voiceMayRetry = retryOnAudioGlitch
         voiceState = .connecting
         status = nil
         VoiceBridge.shared.warmupStart = .now
@@ -504,7 +507,14 @@ final class CodexPetSession: ObservableObject {
         // The legacy role-only transcript notifications mirror this canonical stream: ignore them.
         case "thread/realtime/error":
             realtimeActive = false
+            // The native helper dying moments after its devices open means an audio device changed
+            // under it, which one quiet retry usually survives.
+            let retry = voiceMayRetry && voiceState != .off && VoiceBridge.shared.lastFailureWasEarlyDeath
             stopVoice()
+            guard !retry else {
+                Task { try? await Task.sleep(for: .milliseconds(300)); startVoice(retryOnAudioGlitch: false) }
+                return
+            }
             status = p["message"] as? String
         case "thread/realtime/closed":
             realtimeActive = false

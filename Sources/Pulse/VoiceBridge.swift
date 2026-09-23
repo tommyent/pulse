@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import CoreAudio
 import os
 
 /// Codex's installed native voice helper owns WebRTC, microphone capture and playback.
@@ -21,6 +22,14 @@ final class VoiceBridge {
     private var sentMute = false
     private var devicesOpen = false
     private var announcedReady = false
+    private var errorHandle: FileHandle?
+    private let errorLog = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("pulse-voice.err")
+    private var prewarmDevice: (AudioDeviceID, AudioDeviceIOProcID)?
+    private var bluetoothInput = false
+    private var devicesOpenedAt: Date?
+    /// The helper dying moments after its devices open is the signature of an audio device changing
+    /// under it. The chat reads this to retry the call once instead of showing an error.
+    private(set) var lastFailureWasEarlyDeath = false
     private let log = Logger(subsystem: "app.pulse", category: "voice")
     /// Set when a voice start begins; cleared once audio is ready. See `mark`.
     var warmupStart: Date?
@@ -42,6 +51,7 @@ final class VoiceBridge {
     func createOffer(muted: Bool) async throws -> String {
         close()
         self.muted = muted
+        lastFailureWasEarlyDeath = false
         guard let codex = locateBinary("codex")?.resolvingSymlinksInPath() else {
             throw CodexAppServer.Failure.notInstalled
         }
@@ -54,6 +64,13 @@ final class VoiceBridge {
               let commit = info["buildCommit"] as? String, !commit.isEmpty else {
             throw CodexAppServer.Failure.remote("Install a Codex CLI package with native voice support.")
         }
+        // Both ends of a headset drop to the hands-free rate when the microphone is its own,
+        // which is what a thin, crackly call sounds like. 24 kHz here means the call is on that
+        // profile; a built-in input leaves the headset at its full 44.1/48 kHz for playback.
+        mark("audio: input \(deviceRate(kAudioHardwarePropertyDefaultInputDevice)) Hz, output \(deviceRate(kAudioHardwarePropertyDefaultOutputDevice)) Hz")
+        let run = generation
+        await prewarmBluetoothInput()
+        guard generation == run else { throw CodexAppServer.Failure.remote("Voice stopped.") }
         let child = Process(), stdin = Pipe(), stdout = Pipe()
         child.executableURL = binary
         child.currentDirectoryURL = root
@@ -66,8 +83,9 @@ final class VoiceBridge {
         child.environment = environment
         child.standardInput = stdin
         child.standardOutput = stdout
-        child.standardError = FileHandle.nullDevice
-        let run = generation
+        FileManager.default.createFile(atPath: errorLog.path, contents: nil)
+        errorHandle = try? FileHandle(forWritingTo: errorLog)
+        child.standardError = errorHandle ?? FileHandle.nullDevice
         stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             Task { @MainActor in
@@ -76,7 +94,8 @@ final class VoiceBridge {
                 else { self.consume(data) }
             }
         }
-        child.terminationHandler = { [weak self] _ in
+        child.terminationHandler = { [weak self, log] child in
+            log.notice("voice helper exited: status \(child.terminationStatus, privacy: .public) reason \(child.terminationReason.rawValue, privacy: .public)")
             Task { @MainActor in
                 guard let self, self.generation == run else { return }
                 self.fail("Native voice helper stopped.")
@@ -114,12 +133,24 @@ final class VoiceBridge {
         process = nil; input = nil; output = nil
         buffer = Data(); expected = nil
         devicesOpen = false; announcedReady = false; appliedMute = nil
+        devicesOpenedAt = nil; bluetoothInput = false
+        try? errorHandle?.close(); errorHandle = nil
+        stopPrewarm()
         let waiter = offerWaiter; offerWaiter = nil
         waiter?.resume(throwing: CodexAppServer.Failure.remote("Voice stopped."))
     }
 
     private func fail(_ message: String) {
-        mark("failed: \(message)")
+        var message = message
+        lastFailureWasEarlyDeath = devicesOpenedAt.map { Date().timeIntervalSince($0) < 5 } ?? false
+        if bluetoothInput && devicesOpen {
+            message += " A Bluetooth microphone can stop the call; switching Sound input to the built-in microphone works around it."
+        }
+        if warmupStart != nil { mark("failed: \(message)") }
+        else { log.notice("voice failed: \(message, privacy: .public)") }
+        if let line = helperStderrTail() {
+            log.notice("voice helper stderr: \(line, privacy: .public)")
+        }
         warmupStart = nil
         let waiter = offerWaiter; offerWaiter = nil
         close()
@@ -177,7 +208,7 @@ final class VoiceBridge {
                     self.fail("Native voice timed out waiting for the server answer.")
                 }
             case "transportReady": send(["type": "openDevices"], expecting: "devicesOpened")
-            case "devicesOpened": devicesOpen = true; updateControls()
+            case "devicesOpened": devicesOpen = true; devicesOpenedAt = .now; updateControls()
             case "audioControlsApplied":
                 appliedMute = sentMute
                 updateControls()
@@ -186,6 +217,7 @@ final class VoiceBridge {
                     mark("audio ready (voice live)")
                     warmupStart = nil
                     CodexAppServer.shared.onNotification?("pulse/voiceReady", [:])
+                    stopPrewarm()          // the helper holds the microphone now
                     startPolling()
                 }
             case "audioState":
@@ -200,7 +232,95 @@ final class VoiceBridge {
     private func updateControls() {
         guard devicesOpen, expected == nil, appliedMute != muted else { return }
         sentMute = muted
+        // A mute is a state change, not speech: the helper ends the session on queue overflow, so
+        // knowing when the microphone went quiet is what lines a mid-call death up with its cause.
+        let state = muted ? "muted" : "unmuted"
+        log.notice("voice: microphone \(state, privacy: .public)")
         send(["type": "setAudioControls", "controls": ["microphoneMuted": muted, "speakerSuppressed": false]], expecting: "audioControlsApplied")
+    }
+
+    /// The helper's own last line, read straight off its stderr file so a failure explains itself.
+    /// Bounded at both ends: the last 4 KiB of the file, then the last 200 characters of one line.
+    private func helperStderrTail() -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: errorLog) else { return nil }
+        defer { try? handle.close() }
+        let end = (try? handle.seekToEnd()) ?? 0
+        try? handle.seek(toOffset: end > 4096 ? end - 4096 : 0)
+        guard let data = try? handle.readToEnd(), !data.isEmpty,
+              let line = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).last else { return nil }
+        return String(line.suffix(200))
+    }
+
+    // MARK: Bluetooth microphones
+
+    /// Codex's helper treats an input sample-rate change as fatal, and a Bluetooth headset changes
+    /// rate the moment its microphone opens (A2DP gives way to hands-free). Open the microphone
+    /// here first and hold it until the helper has its own, so the helper only ever sees the
+    /// settled hands-free rate. The headset keeps the call; nothing switches to the built-in mic.
+    private func prewarmBluetoothInput() async {
+        // Only the packaged app captures audio; the offline checks drive a fake helper.
+        guard Bundle.main.bundleIdentifier != nil, let device = bluetoothInputDevice() else { return }
+        bluetoothInput = true
+        var proc: AudioDeviceIOProcID?
+        guard AudioDeviceCreateIOProcIDWithBlock(&proc, device, nil, { _, _, _, _, _ in }) == noErr,
+              let proc else {
+            log.notice("voice: could not hold the Bluetooth microphone")
+            return
+        }
+        guard AudioDeviceStart(device, proc) == noErr else {
+            AudioDeviceDestroyIOProcID(device, proc)
+            log.notice("voice: could not start the Bluetooth microphone")
+            return
+        }
+        prewarmDevice = (device, proc)
+        // ponytail: 100 ms x 20 is a guess at how long the profile switch takes; widen it if a
+        // slower headset still trips the helper.
+        var rate: Double = 0
+        for _ in 0..<20 {
+            try? await Task.sleep(for: .milliseconds(100))
+            let current = sampleRate(device)
+            if current != 0, current == rate { break }
+            rate = current
+        }
+        mark("bluetooth microphone held at \(Int(rate)) Hz")
+    }
+
+    private func stopPrewarm() {
+        guard let (device, proc) = prewarmDevice else { return }
+        prewarmDevice = nil
+        AudioDeviceStop(device, proc)
+        AudioDeviceDestroyIOProcID(device, proc)
+    }
+
+    /// The default input device, when it is a Bluetooth headset.
+    private func bluetoothInputDevice() -> AudioDeviceID? {
+        guard let device = audioProperty(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultInputDevice),
+              let transport = audioProperty(device, kAudioDevicePropertyTransportType),
+              transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE else { return nil }
+        return device
+    }
+
+    private func deviceRate(_ selector: AudioObjectPropertySelector) -> Int {
+        guard let device = audioProperty(AudioObjectID(kAudioObjectSystemObject), selector) else { return 0 }
+        return Int(sampleRate(device))
+    }
+
+    private func sampleRate(_ device: AudioDeviceID) -> Double {
+        var address = audioAddress(kAudioDevicePropertyNominalSampleRate)
+        var rate = Float64(0), size = UInt32(MemoryLayout<Float64>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &rate) == noErr else { return 0 }
+        return rate
+    }
+
+    /// Device ids and transport types are both `UInt32`.
+    private func audioProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> UInt32? {
+        var address = audioAddress(selector)
+        var value = UInt32(0), size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(object, &address, 0, nil, &size, &value) == noErr ? value : nil
+    }
+
+    private func audioAddress(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
     }
 
     private func startPolling() {

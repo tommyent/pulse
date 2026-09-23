@@ -356,8 +356,16 @@ enum CodexSessionChecks {
         bridge.accept(answer: "malformed-frame")
         deadline = Date().addingTimeInterval(5)
         while failure == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
-        assert(failure != nil, "oversized helper frames must fail and close the process")
+        assert(failure != nil && !bridge.lastFailureWasEarlyDeath, "oversized helper frames must fail and close the process")
         bridge.close()
-        print("Native voice checks passed: fragmented frames, negotiation, initial mute, activity, cancellation, reopening and malformed frames")
+        failure = nil
+        let dying = try await bridge.createOffer(muted: true)
+        assert(dying == "fixture-offer")
+        bridge.accept(answer: "die-after-devices")
+        deadline = Date().addingTimeInterval(5)
+        while failure == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        assert(failure != nil && bridge.lastFailureWasEarlyDeath, "a helper dying just after its devices open must be retryable")
+        bridge.close()
+        print("Native voice checks passed: fragmented frames, negotiation, initial mute, activity, cancellation, reopening, malformed frames and early helper death")
     }
 }

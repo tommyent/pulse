@@ -93,7 +93,7 @@ final class AppState: ObservableObject {
         } while refreshRequested
         refreshing = false
         try? FileManager.default.createDirectory(at: Self.dir, withIntermediateDirectories: true)
-        try? JSONEncoder().encode(snapshots).write(to: Self.snapshotsURL)
+        try? JSONEncoder().encode(snapshots).write(to: Self.snapshotsURL, options: .atomic)
     }
 
     func isEnabled(_ id: AccountID) -> Binding<Bool> {
@@ -108,6 +108,6 @@ final class AppState: ObservableObject {
 
     private func save() {
         try? FileManager.default.createDirectory(at: Self.dir, withIntermediateDirectories: true)
-        try? JSONEncoder().encode(persisted).write(to: Self.stateURL)
+        try? JSONEncoder().encode(persisted).write(to: Self.stateURL, options: .atomic)
     }
 }
