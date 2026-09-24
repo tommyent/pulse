@@ -11,12 +11,14 @@ enum AccountID: String, Codable, CaseIterable, Identifiable {
         case .antigravity: "Antigravity"
         }
     }
+    /// Display P3, not sRGB: the same hues as before, deep enough to hold their own next to
+    /// macOS's P3 system colours on wide-gamut displays (sRGB screens clip them to their nearest).
     var accent: Color {
         switch self {
-        case .claude: Color(red: 0xFF / 255, green: 0x7A / 255, blue: 0x45 / 255)  // #FF7A45
-        case .codex: Color(red: 0x4D / 255, green: 0x7C / 255, blue: 0xFF / 255)   // #4D7CFF
-        case .grok: Color(red: 0xFF / 255, green: 0xC1 / 255, blue: 0x4A / 255)    // #FFC14A
-        case .antigravity: Color(red: 0x00 / 255, green: 0xB9 / 255, blue: 0x5C / 255) // #00B95C
+        case .claude: Color(.displayP3, red: 1.0, green: 0.40, blue: 0.16)
+        case .codex: Color(.displayP3, red: 0.22, green: 0.42, blue: 1.0)
+        case .grok: Color(.displayP3, red: 1.0, green: 0.72, blue: 0.10)
+        case .antigravity: Color(.displayP3, red: 0.0, green: 0.76, blue: 0.32)
         }
     }
     var glyph: String {

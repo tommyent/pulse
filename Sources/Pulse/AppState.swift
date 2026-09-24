@@ -9,6 +9,7 @@ final class AppState: ObservableObject {
         var alwaysOnTop: Bool = true
         var showOverlay: Bool = true
         var lightMode: Bool?   // optional so old state.json still decodes
+        var glassTint: Bool?   // nil = on: the white wash over light-mode glass
         var dock: DockEdge?
         var voiceHotKey: HotKeyCombo?   // nil = default ⌘⌥V
     }
@@ -23,6 +24,11 @@ final class AppState: ObservableObject {
     var isLight: Bool { persisted.lightMode ?? false }
     var lightModeBinding: Binding<Bool> {
         Binding(get: { self.persisted.lightMode ?? false }, set: { self.persisted.lightMode = $0 })
+    }
+
+    var glassTint: Bool { persisted.glassTint ?? true }
+    var glassTintBinding: Binding<Bool> {
+        Binding(get: { self.glassTint }, set: { self.persisted.glassTint = $0 })
     }
 
     @Published var persisted: Persisted { didSet { save() } }

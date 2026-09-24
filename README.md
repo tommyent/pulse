@@ -29,7 +29,7 @@ There are no binary releases; build from source.
 
 ## Use
 
-Click the menu bar icon for Settings. Drag the rings to any screen edge; top and bottom lay out horizontally. Click a ring for that account's windows and reset times.
+Click the menu bar icon for Settings, where **Launch at login** starts Pulse when you log in. Drag the rings to any screen edge; top and bottom lay out horizontally. In the light appearance the rings and cards sit on Liquid Glass with a white wash; the dark appearance is opaque black. Turn off **Tint the glass** in Settings for plain Liquid Glass in either appearance, which follows the Liquid Glass slider in System Settings → Appearance. Click a ring for that account's windows and reset times.
 
 Click the pet to chat. The waveform button below the expanded pet ring starts or ends voice without opening the pop-out. **Command-click the pet** to start voice, then Command-click again to end the session; another Command-click starts a new voice session. Command-click leaves the pop-out closed (or preserves the current card). The **ring around the pet** is gray when voice is off, yellow while warming up or muted, and Codex blue when the microphone is live. The waveform buttons use the same colors, and Pulse plays the macOS Pluck sound when the microphone goes live and Pong when a live call ends. **⌘⌥V** opens the pet and starts a voice call; press it again to end the call, hold it for push-to-talk, and press Escape to end the call and close the card. The shortcut is configurable in Settings. Closing the card by clicking elsewhere does not end a call.
 

@@ -1,13 +1,25 @@
+import ServiceManagement
 import SwiftUI
 
 private let cardBackground = Color.black
 
+private struct GlassTintKey: EnvironmentKey { static let defaultValue = true }
+extension EnvironmentValues {
+    /// Pulse's own finish: a white wash over the glass in light mode, opaque piano black in dark. Off
+    /// leaves plain system glass in both, spanning the full Liquid Glass slider in System Settings → Appearance.
+    var glassTint: Bool {
+        get { self[GlassTintKey.self] }
+        set { self[GlassTintKey.self] = newValue }
+    }
+}
+
 /// Liquid Glass on macOS 26+, a flat card on older systems. Follows the view's colorScheme.
 private struct GlassCard<S: Shape>: ViewModifier {
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.glassTint) private var tinted
     let shape: S
     func body(content: Content) -> some View {
-        if scheme == .dark {
+        if scheme == .dark && tinted {
             // glass frosts everything gray; the reference look is opaque piano black with a soft top sheen
             // shadow lives on the shape and stays inside the overlay's 12pt padding, or the window clips it flat
             content.background(shape.fill(LinearGradient(colors: [Color(white: 0.07), Color.black],
@@ -15,7 +27,7 @@ private struct GlassCard<S: Shape>: ViewModifier {
                                     .shadow(color: .black.opacity(0.45), radius: 7, y: 3))
                 .overlay(rim)
         } else if #available(macOS 26.0, *) {
-            content.glassEffect(.regular.tint(Color.white.opacity(0.35)), in: shape)
+            content.glassEffect(tinted ? .regular.tint(Color.white.opacity(0.35)) : .regular, in: shape)
                 .overlay(rim)
         } else {
             content.background(scheme == .dark ? cardBackground : Color(white: 0.95), in: shape)
@@ -90,7 +102,6 @@ extension CodexPetSession {
 }
 
 private struct CodexPet: View {
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var session = CodexPetSession.shared
     let size: CGFloat
@@ -109,9 +120,7 @@ private struct CodexPet: View {
     var body: some View {
         let still = reduceMotion || (state == .idle && !animateIdle)
         ZStack {
-            Circle().fill(scheme == .dark ? Color.black : Color.white)
-                .padding(-size * 0.08)
-            Circle().stroke(session.voiceTint ?? Color(white: scheme == .dark ? 0.19 : 0.85), lineWidth: size * 0.12)
+            Circle().stroke(session.voiceTint ?? Color.primary.opacity(0.18), lineWidth: size * 0.12)
             TimelineView(.animation(minimumInterval: 0.1, paused: still)) { context in
                 if let frames = Self.frames[state], frames.count == CodexPetSprite.track(state).durations.count {
                     let index = still ? 0 : CodexPetSprite.frame(state, at: context.date.timeIntervalSinceReferenceDate)
@@ -141,9 +150,7 @@ struct RingView: View {
     var body: some View {
         VStack(spacing: 6) {
             ZStack {
-                Circle().fill(scheme == .dark ? Color.black : Color.white)
-                    .padding(-size * 0.08)
-                Circle().stroke(Color(white: scheme == .dark ? 0.19 : 0.85), lineWidth: size * 0.12)
+                Circle().stroke(Color.primary.opacity(0.18), lineWidth: size * 0.12)
                 if let percent {
                     arc(percent, lineWidth: size * 0.12)
                 }
@@ -456,6 +463,7 @@ struct OverlayView: View {
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { onSize?($0) }
         .colorScheme(state.isLight ? .light : .dark)
+        .environment(\.glassTint, state.glassTint)
     }
 
     @ViewBuilder
@@ -650,9 +658,22 @@ struct AppearanceToggle: View {
 
 struct SettingsView: View {
     @ObservedObject var state: AppState
+    // owned by macOS, not state.json, so a change in System Settings → Login Items shows here too
+    @State private var loginItem = SMAppService.mainApp.status
 
     var body: some View {
         Form {
+            Section("General") {
+                Toggle("Launch at login", isOn: Binding(
+                    get: { loginItem == .enabled },
+                    set: { on in
+                        try? on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
+                        loginItem = SMAppService.mainApp.status
+                    }))
+                if loginItem == .requiresApproval {
+                    Button("Allow Pulse in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
+                }
+            }
             Section("Accounts") {
                 ForEach(AccountID.allCases) { id in
                     LabeledContent {
@@ -694,7 +715,7 @@ struct SettingsView: View {
                             Text("via Antigravity CLI").font(.caption).foregroundStyle(.secondary)
                                 .help("Reads agy's own /usage report; sign in by running agy once")
                         }
-                        Toggle("Enable \(id.displayName)", isOn: state.isEnabled(id)).labelsHidden()
+                        Toggle("Enable \(id.displayName)", isOn: state.isEnabled(id)).labelsHidden().toggleStyle(.switch)
                     } label: {
                         Text(id.displayName)
                         if let snap = state.snapshots[id] {
@@ -711,6 +732,8 @@ struct SettingsView: View {
                 LabeledContent("Appearance") {
                     AppearanceToggle(light: state.lightModeBinding)
                 }
+                Toggle("Tint the glass", isOn: state.glassTintBinding)
+                    .help("Off shows plain Liquid Glass in both appearances, following the whole range of the Liquid Glass slider in System Settings → Appearance")
             }
             Section("Codex voice") {
                 LabeledContent("Shortcut") { HotKeyRecorder(combo: state.voiceHotKeyBinding) }
@@ -725,6 +748,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { loginItem = SMAppService.mainApp.status }
         .frame(width: 420, height: 500)
         .preferredColorScheme(state.isLight ? .light : .dark)
     }
