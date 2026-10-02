@@ -5,3 +5,4 @@
 - The pet card makes Pulse active and the panel key (typing). Test its dismissal three ways: click inside, click in another app, and mouse leaving the card (which must NOT close a chat). `scripts/codex-chat-check.sh` covers the Codex path without the UI.
 - WKWebView: call async page functions as `void fn()`; a returned Promise makes evaluateJavaScript fail with "unsupported type".
 - Use canonical Codex realtime item IDs for voice bubbles and keep delegated agent text separate. Verify interleaved speaker deltas, full-text completions, repeated events, and late completions after voice ends.
+- For live voice, keep connecting, listening and a paused microphone visibly distinct in the ring, card and accessibility values; a connected call with a muted mic must not look as if it is starting.

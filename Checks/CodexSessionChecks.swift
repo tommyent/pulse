@@ -599,9 +599,18 @@ enum CodexSessionChecks {
         session.playCue = { _ in }
         session.muted = true   // the fake helper expects calls to open muted
         var inCall: Bool { session.voiceState == .live || session.voiceState == .speaking }
+        assert(!session.microphonePaused, "an off call has no paused-microphone badge")
         session.startVoice()
+        assert(session.voiceState == .connecting && !session.microphonePaused, "a muted connecting call still shows connecting")
         try await wait("a call goes live (\(session.voiceState), \(session.status ?? "no status"))") { inCall }
+        assert(session.microphonePaused && !session.isRecording, "a connected muted call shows microphone paused")
+        session.muted = false
+        assert(!session.microphonePaused && session.isRecording, "unmuting removes the paused state")
+        session.muted = true
+        CodexAppServer.shared.onNotification?("pulse/voice", ["type": "output_audio_buffer.started"])
+        assert(session.voiceState == .speaking && session.microphonePaused, "playback doesn't change the paused microphone state")
         session.stopVoice()
+        assert(!session.microphonePaused, "ending a muted call clears its paused state")
         session.startVoice()
         try await wait("the next call goes live") { inCall }
         try await Task.sleep(for: .milliseconds(400))

@@ -92,11 +92,11 @@ struct BrandIcon: View {
 }
 
 extension CodexPetSession {
-    /// Voice colours shared by the pet ring and both waveform buttons: yellow while the microphone
-    /// warms up or is muted, Codex blue while it is live. nil = off only (each view picks its neutral).
+    /// Yellow connects, blue listens, red pauses the microphone. nil = off (each view picks its neutral).
     var voiceTint: Color? {
         guard voiceState != .off else { return nil }
-        if voiceState == .connecting || muted { return .yellow }
+        if voiceState == .connecting { return .yellow }
+        if microphonePaused { return .red }
         return AccountID.codex.accent
     }
 }
@@ -137,6 +137,16 @@ private struct CodexPet: View {
             .frame(width: size * 0.72, height: size * 0.78)
         }
         .frame(width: size, height: size)
+        .overlay(alignment: .bottomTrailing) {
+            if session.microphonePaused {
+                Image(systemName: "mic.slash.fill")
+                    .font(.system(size: max(8, size * 0.22), weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: max(14, size * 0.36), height: max(14, size * 0.36))
+                    .background(.red, in: Circle())
+                    .accessibilityHidden(true).allowsHitTesting(false)
+            }
+        }
     }
 }
 
@@ -340,6 +350,11 @@ struct PetCard: View {
 
             transcript
 
+            if session.microphonePaused {
+                Label("Microphone paused · voice still on", systemImage: "mic.slash.fill")
+                    .font(.caption).foregroundStyle(Ink.secondary(scheme))
+            }
+
             if let status = session.status {
                 Text(status).font(.caption).foregroundStyle(.red.opacity(0.85)).lineLimit(2)
             }
@@ -387,7 +402,8 @@ struct PetCard: View {
                     }
                     if session.messages.isEmpty {
                         Text(session.voiceState == .off ? "Type, or tap the waveform to talk. Same Codex sign-in, same threads."
-                             : session.voiceState == .connecting ? "Starting microphone…" : "Listening…")
+                             : session.voiceState == .connecting ? "Starting microphone…"
+                             : session.microphonePaused ? "Use the microphone button or shortcut to talk." : "Listening…")
                             .font(.caption).foregroundStyle(Ink.secondary(scheme))
                     }
                     ForEach(session.messages) { m in
@@ -562,7 +578,8 @@ struct OverlayView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Codex pet — chat and voice")
-                    .accessibilityValue(session.isRecording ? "Recording" : session.voiceState == .off ? "Voice off" : session.muted ? "Microphone paused" : "Connecting")
+                    .accessibilityValue(session.voiceState == .off ? "Voice off" : session.voiceState == .connecting ? "Connecting"
+                                        : session.microphonePaused ? "Voice on, microphone paused" : "Recording")
                     .accessibilityAction(named: "Start or end voice session") { togglePet(voice: true) }
                     .help("Click to chat. Command-click to start or end voice.")
                     if expanded {
@@ -806,7 +823,7 @@ struct SettingsView: View {
             }
             Section("Codex voice") {
                 LabeledContent("Shortcut") { HotKeyRecorder(combo: state.voiceHotKeyBinding) }
-                Text("Tap to open the pet and start a call; tap again to end it. Hold it to talk: letting go mutes only the microphone while the reply keeps playing, and the next press unmutes. Escape ends the call and closes the card.")
+                Text("Tap to start hands-free voice; while listening, tap again to end the call. Hold to talk and release to pause the microphone; the next press unmutes. Replies keep playing while paused. Escape ends the call and closes the card.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Reset remembered approvals") { PetApprovals.shared.resetRemembered() }
                     .help("Ask again for future command and folder-access requests. Current task grants expire when that task ends.")

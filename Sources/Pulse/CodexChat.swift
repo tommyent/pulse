@@ -566,6 +566,7 @@ final class CodexPetSession: ObservableObject {
     // MARK: voice (client-owned WebRTC call negotiated through the app-server)
 
     var isRecording: Bool { (voiceState == .live || voiceState == .speaking) && !muted }
+    var microphonePaused: Bool { (voiceState == .live || voiceState == .speaking) && muted }
 
     /// The waveform button. Starting a call here always listens, even if push-to-talk last left it muted;
     /// `startVoice` itself keeps whatever mute the caller set.
