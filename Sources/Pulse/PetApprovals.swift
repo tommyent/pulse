@@ -21,6 +21,9 @@ struct PetApproval {
     struct Question { let id, header, text: String; let options: [(label: String, detail: String)] }
     final class Picks { var answers: [String: String] = [:] }
     var questions: [Question] = []
+    /// Set when a helper the pet started is asking: it can use existing remembered approvals, never create one.
+    var helper: String?
+    var canRemember: Bool { rememberKey != nil && helper == nil }
     let picks = Picks()
 
     init?(id: AnyHashable, method: String, params p: [String: Any], item: [String: Any]?) {
@@ -162,11 +165,12 @@ struct PetApproval {
         if !questions.isEmpty { return ask() }
         let alert = NSAlert()
         alert.messageText = title
-        alert.informativeText = "Codex in Pulse is asking for your permission."
+        alert.informativeText = helper.map { "A helper Codex started (\($0)) is asking for your permission. Helpers can't create remembered approvals." }
+            ?? "Codex in Pulse is asking for your permission."
         // Esc picks the first button: a consent tool remembers Deny, so Esc there must decide nothing.
         let choices: [(String, Decision)] = consent
             ? [("Not now", .dismiss), ("Deny", .deny), ("Allow", .allow)]
-            : [("Deny", .deny), (taskScope ? "Allow for this task" : "Allow once", .allow)] + (rememberKey != nil ? [("Always allow", .always)] : [])
+            : [("Deny", .deny), (taskScope ? "Allow for this task" : "Allow once", .allow)] + (canRemember ? [("Always allow", .always)] : [])
         for (title, _) in choices { alert.addButton(withTitle: title) }
         alert.buttons[0].keyEquivalent = "\u{1b}"
         for button in alert.buttons.dropFirst() { button.keyEquivalent = "" } // Enter while typing must not approve an unexpected prompt.
@@ -212,6 +216,7 @@ final class PetApprovals {
     static let shared = PetApprovals()
     var present: (PetApproval) -> PetApproval.Decision = { $0.show() }
     var onPromptOpened: (PetApproval) -> Void = { _ in }
+    var helperOf: (String) -> String? = { _ in nil }   // the asking thread's helper name; nil for the pet itself
     var defaults = UserDefaults.standard
     private let savedKey = "petRememberedApprovals"
     private var queue: [PetApproval] = []
@@ -223,7 +228,7 @@ final class PetApprovals {
         let tool = (params["_meta"] as? [String: Any])?["tool_name"] as? String ?? "-"
         log.info("request \(String(describing: id), privacy: .public) \(method, privacy: .public) tool=\(tool, privacy: .public)")
         guard let id = id as? AnyHashable,
-              let approval = PetApproval(id: id, method: method, params: params,
+              var approval = PetApproval(id: id, method: method, params: params,
                                          item: items[key(params)]) else {
             switch method {
             case "mcpServer/elicitation/request":
@@ -240,6 +245,7 @@ final class PetApprovals {
             }
             return
         }
+        approval.helper = helperOf(approval.thread)
         queue.append(approval)
         schedule()
     }
@@ -261,7 +267,7 @@ final class PetApprovals {
         let decision: PetApproval.Decision = remembered ? .allow : present(request)
         // A completed turn, cancellation or disconnected server invalidates an open prompt.
         if active?.id == request.id {
-            if decision == .always { remember(request) }
+            if decision == .always { remember(request) }   // a helper's .always is only Allow once
             CodexAppServer.shared.respond(id: request.id.base, result: request.reply(decision))
             log.info("reply \(String(describing: request.id.base), privacy: .public) \(decision.rawValue, privacy: .public)")
             active = nil
@@ -276,7 +282,7 @@ final class PetApprovals {
     }
 
     func remember(_ request: PetApproval) {
-        guard let key = request.rememberKey else { return }
+        guard request.canRemember, let key = request.rememberKey else { return }
         var keys = Set(defaults.stringArray(forKey: savedKey) ?? [])
         keys.insert(key)
         defaults.set(Array(keys), forKey: savedKey)

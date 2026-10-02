@@ -1,10 +1,10 @@
 import AppKit
 import Carbon
 
-/// A tap toggles continuous voice; a hold listens until release, leaving the speaker connected.
+/// A tap toggles the microphone; a hold listens until release. Neither ends the call.
 struct VoiceShortcutGesture {
-    enum Action: Equatable { case start, unmute, mute, end }
-    private var press: (time: TimeInterval, endsOnTap: Bool)?
+    enum Action: Equatable { case start, unmute, mute }
+    private var press: (time: TimeInterval, mutesOnTap: Bool)?
 
     mutating func keyDown(at time: TimeInterval, voiceActive: Bool, muted: Bool) -> Action? {
         guard press == nil else { return nil }   // repeated key-down events are still one gesture
@@ -16,7 +16,7 @@ struct VoiceShortcutGesture {
         guard let press else { return nil }
         self.press = nil
         if time - press.time > 0.5 { return .mute }
-        return press.endsOnTap ? .end : nil
+        return press.mutesOnTap ? .mute : nil
     }
 
     /// An ended call or a rebound shortcut must not leave a release aimed at a different call.
@@ -34,7 +34,7 @@ struct HotKeyCombo: Codable, Equatable {
     var carbonModifiers: UInt32
     var label: String
 
-    static let voiceDefault = HotKeyCombo(keyCode: UInt32(kVK_ANSI_V), carbonModifiers: UInt32(cmdKey | optionKey), label: "⌘⌥V")
+    static let voiceDefault = HotKeyCombo(keyCode: UInt32(kVK_Space), carbonModifiers: UInt32(controlKey | optionKey), label: "⌃⌥Space")
 
     init(keyCode: UInt32, carbonModifiers: UInt32, label: String) {
         self.keyCode = keyCode; self.carbonModifiers = carbonModifiers; self.label = label
@@ -69,7 +69,7 @@ final class HotKey {
     var onRelease: (() -> Void)?
 
     init?(_ combo: HotKeyCombo) {
-        Self.installHandler()
+        guard Self.installHandler() else { return nil }
         id = Self.nextID; Self.nextID += 1
         let hotKeyID = EventHotKeyID(signature: OSType(0x504C5345 /* PLSE */), id: id)
         guard RegisterEventHotKey(combo.keyCode, combo.carbonModifiers, hotKeyID,
@@ -82,11 +82,11 @@ final class HotKey {
         Self.registry.removeObject(forKey: NSNumber(value: id))
     }
 
-    private static func installHandler() {
-        guard handler == nil else { return }
+    private static func installHandler() -> Bool {
+        guard handler == nil else { return true }
         var types = [EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
                      EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))]
-        InstallEventHandler(GetApplicationEventTarget(), { _, event, _ -> OSStatus in
+        return InstallEventHandler(GetApplicationEventTarget(), { _, event, _ -> OSStatus in
             var hk = EventHotKeyID()
             GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
                               nil, MemoryLayout<EventHotKeyID>.size, nil, &hk)
@@ -96,7 +96,7 @@ final class HotKey {
                 if kind == UInt32(kEventHotKeyPressed) { key.onPress?() } else { key.onRelease?() }
             }
             return noErr
-        }, types.count, &types, nil, &handler)
+        }, types.count, &types, nil, &handler) == noErr
     }
 }
 

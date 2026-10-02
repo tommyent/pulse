@@ -36,7 +36,11 @@ enum CodexSessionChecks {
         const assert = require('node:assert/strict');
         const log = word => process.env.PULSE_CHECK_LOG && require('node:fs').appendFileSync(process.env.PULSE_CHECK_LOG, word + '\\n');
         log('spawn');
-        let dieNext = false, rejectNext = false, slowThread = false, listMode = 'empty';
+        let dieNext = false, rejectNext = false, slowThread = false, listMode = 'empty', reports = 0, earlyEnd = false;
+        let holdReport = false, configDefault = {}, teamSaved = 'high', silentReads = false;
+        let nextThreadId = null, startModel = null, startDelay = 0, configScript = [], threadScript = [];
+        let teamDefault = null, refuseEffortUpdate = false, reportBeforeReply = null, joinNextTurn = null, modelSwitching = false, catalogMode = null, openedModel = null, openedEffort = null;
+        const helperInterruptErrors = new Map(), heldHelperErrors = new Map(), heldInterrupts = new Set();
         require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
           const m = JSON.parse(line);
           if (m.method === 'initialize') setTimeout(() => send({ id: m.id, result: {} }), process.env.PULSE_CHECK_SLOW_START ? 600 : 0);
@@ -48,25 +52,51 @@ enum CodexSessionChecks {
             log('thread');
             const startEffort = (m.params.config || {}).model_reasoning_effort;
             log('start-model:' + (m.params.model || '') + ':' + (startEffort || ''));
+            const hint = p => (p.config || {})['features.multi_agent_v2.multi_agent_mode_hint_text'] || '';
+            log('start-rule:' + (hint(m.params).includes('fork_turns') && !('agents.max_concurrent_threads_per_session' in (m.params.config || {}))));
+            log('start-hint:' + ((/Pass reasoning_effort "([a-z]+)"/.exec(hint(m.params)) || [])[1] || ''));
+            log('start-rule-text:' + JSON.stringify(hint(m.params)));
             if (startEffort === 'refused') { send({ id: m.id, error: { message: 'fixture refusal' } }); return; }
-            const started = () => send({ id: m.id, result: { thread: { id: 'fixture-thread', createdAt: 1790000000 }, model: m.params.model || 'fixture-model', reasoningEffort: startEffort || 'medium', cwd: m.params.cwd } });
-            if (slowThread) { slowThread = false; setTimeout(started, 400); } else started();
+            const startedId = nextThreadId || 'fixture-thread';
+            const started = () => send({ id: m.id, result: { thread: { id: startedId, createdAt: 1790000000 }, model: openedModel || m.params.model || startModel || 'fixture-model', reasoningEffort: openedEffort || startEffort || ((m.params.model || startModel) === 'team-model' && teamDefault ? teamDefault : 'medium'), cwd: m.params.cwd } });
+            if (startDelay) { const ms = startDelay; startDelay = 0; setTimeout(started, ms); }
+            else if (slowThread) { slowThread = false; setTimeout(started, 400); } else started();
           }
           if (m.method === 'fixture/list') { listMode = m.params.mode; send({ id: m.id, result: {} }); }
           if (m.method === 'model/list') {
             const model = (id, name, hidden) => ({ id, model: id, displayName: name, hidden, isDefault: false, description: '', defaultReasoningEffort: 'low',
               supportedReasoningEfforts: [{ reasoningEffort: 'low', description: '' }, { reasoningEffort: 'high', description: '' }] });
-            send({ id: m.id, result: { data: [{ ...model('fixture-model', 'Fixture', false), isDefault: true }, model('fast-model', 'Fast', false), model('secret-model', 'Hidden', true)], nextCursor: null } });
+            const team = { ...model('team-model', 'Team', false), multiAgentVersion: 'v2', defaultReasoningEffort: teamDefault || 'low', supportedReasoningEfforts: ['low', 'medium', 'high', ...(modelSwitching ? ['ultra'] : [])].map(e => ({ reasoningEffort: e, description: '' })) };
+            if (catalogMode === 'unsupported-effort') team.supportedReasoningEfforts = team.supportedReasoningEfforts.filter(e => e.reasoningEffort !== 'high');
+            if (catalogMode === 'missing-effort') delete team.defaultReasoningEffort;
+            const extraTeams = modelSwitching ? [
+              { ...team, id: 'small-team', model: 'small-team', displayName: 'Small team', supportedReasoningEfforts: team.supportedReasoningEfforts.filter(e => e.reasoningEffort !== 'ultra') },
+              { ...team, id: 'compatible-team', model: 'compatible-team', displayName: 'Compatible team' }
+            ] : [];
+            const plain = { ...model('plain-model', 'Plain', false), supportedReasoningEfforts: team.supportedReasoningEfforts };   // medium, but no helpers
+            log('models:' + (m.params.includeHidden === true) + ':' + (m.params.cursor || 'first'));
+            let data = [{ ...model('fixture-model', 'Fixture', false), isDefault: true }, model('fast-model', 'Fast', false), model('secret-model', 'Hidden', true), team, plain, ...extraTeams];
+            if (catalogMode) {
+              data = data.map(row => ({ ...row, isDefault: catalogMode === 'ambiguous' ? ['fixture-model', 'team-model'].includes(row.model) : catalogMode !== 'none' && row.model === 'team-model', hidden: row.hidden || (catalogMode === 'hidden' && row.model === 'team-model') }));
+              if (!m.params.includeHidden) data = data.filter(row => !row.hidden);
+            }
+            const paged = catalogMode != null && !m.params.cursor;
+            send({ id: m.id, result: { data: catalogMode ? (paged ? data.slice(0, 2) : data.slice(2)) : data, nextCursor: paged ? 'catalog-page-2' : null } });
           }
           if (m.method === 'thread/settings/update') {
             log('settings:' + (m.params.model || '') + ':' + (m.params.effort || ''));
+            if (!m.params.model && refuseEffortUpdate) { send({ id: m.id, error: { message: 'fixture effort update refused' } }); return; }
+            if (!m.params.model) { send({ id: m.id, result: {} }); send({ method: 'thread/settings/updated', params: { threadId: m.params.threadId, threadSettings: { model: startModel || 'fixture-model', effort: m.params.effort } } }); return; }
             if (m.params.effort === 'refused' || (m.params.model === 'fixture-model' && m.params.effort === 'low')) {
               send({ id: m.id, error: { message: 'fixture refusal' } }); return;
             }
             send({ id: m.id, result: {} });
             send({ method: 'thread/settings/updated', params: { threadId: m.params.threadId, threadSettings: { model: m.params.model || 'fixture-model', effort: m.params.effort } } });
           }
-          if (m.method === 'thread/realtime/appendSpeech') { log('speech:' + m.params.text); send({ id: m.id, result: {} }); }
+          if (m.method === 'thread/realtime/appendSpeech') {
+            log('speech:' + m.params.text);
+            send(m.params.text === 'Refuse this.' ? { id: m.id, error: { message: 'fixture refusal' } } : { id: m.id, result: {} });
+          }
           if (m.method === 'thread/list') {
             log('list' + (m.params.cursor ? ':' + m.params.cursor : ''));
             const here = m.params.cwd, thread = (id, originator, cwd, updatedAt) => ({ id, originator, cwd, updatedAt });
@@ -77,16 +107,63 @@ enum CodexSessionChecks {
               send({ id: m.id, result: { data: [thread('legacy-pet', 'pulse', here + '/', 300), thread('older-pet', 'pulse', here, 100)], nextCursor: null } });
             else send({ id: m.id, result: { data: [], nextCursor: null } });
           }
-          if (m.method === 'thread/resume') {
+          if (m.method === 'fixture/hold-next-report') { holdReport = true; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/config-default') { configDefault = { model: 'team-model', model_reasoning_effort: 'high' }; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/silent-reads') { silentReads = true; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/next-thread-id') { nextThreadId = m.params.id; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/start-model') { startModel = m.params.model; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/start-delay') { startDelay = m.params.ms; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/thread-script') { threadScript = m.params.replies; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/config-script') { configScript = m.params.replies; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/catalog') { catalogMode = m.params.mode; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/opened-model') { openedModel = m.params.model; openedEffort = m.params.effort || null; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/model-switching') { modelSwitching = true; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/team-default-effort') { teamDefault = m.params.effort; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/refuse-effort-update') { refuseEffortUpdate = true; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/report-before-reply') { reportBeforeReply = m.params; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/join-next-turn') { joinNextTurn = m.params.turnId; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/helper-interrupt-error') { helperInterruptErrors.set(m.params.threadId, m.params.hold === true); send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/release-helper-error') {
+            const fail = heldHelperErrors.get(m.params.threadId); assert(fail, 'helper interrupt must be waiting');
+            heldHelperErrors.delete(m.params.threadId); fail(); send({ id: m.id, result: {} });
+          }
+          if (m.method === 'fixture/hold-interrupt') { heldInterrupts.add(m.params.turnId); send({ id: m.id, result: {} }); }
+          if (m.method === 'config/read' && !silentReads) {
+            log('config-read');
+            const scripted = configScript.shift();   // { delay, config }: one reply each, in order
+            const reply = () => {
+              if (scripted && scripted.error) send({ id: m.id, error: { message: scripted.error } });
+              else send({ id: m.id, result: scripted && scripted.malformed ? { config: 'not a config dictionary' } : { config: scripted ? scripted.config : configDefault, origins: {} } });
+            };
+            if (scripted && scripted.delay) setTimeout(reply, scripted.delay); else reply();
+          }
+          if (m.method === 'thread/read' && !silentReads) {   // a saved conversation's own settings, read without reopening it
+            log('read:' + m.params.threadId);
+            const team = m.params.threadId === 'saved-team-thread';
+            const scripted = threadScript.shift();
+            if (scripted && scripted.error) send({ id: m.id, error: { message: scripted.error } });
+            else send({ id: m.id, result: { thread: scripted ? { id: m.params.threadId, ...scripted.thread } : { id: m.params.threadId, model: team ? 'team-model' : null, reasoningEffort: team ? teamSaved : null } } });
+          }
+          if (m.method === 'thread/resume' && m.params.threadId === 'saved-team-thread') {
+            const cfg = m.params.config || {}, hint = cfg['features.multi_agent_v2.multi_agent_mode_hint_text'] || '';
+            log('resume-model:' + (m.params.model || ''));
+            log('resume-talk:' + (cfg.model_reasoning_effort || 'none') + ':' + ((/Pass reasoning_effort "([a-z]+)"/.exec(hint) || [])[1] || ''));
+            if (cfg.model_reasoning_effort) teamSaved = cfg.model_reasoning_effort;   // the thread saves the effort it runs at
+            send({ id: m.id, result: { thread: { id: m.params.threadId, createdAt: 1790000000 }, model: m.params.model || 'team-model', reasoningEffort: teamSaved, cwd: m.params.cwd, initialTurnsPage: null } });
+          } else if (m.method === 'thread/resume') {
+            log('resume-model:' + (m.params.model || ''));
+            const config = m.params.config || {}, hint = config['features.multi_agent_v2.multi_agent_mode_hint_text'] || '';
+            log('resume-talk:' + (config.model_reasoning_effort || 'none') + ':' + ((/Pass reasoning_effort "([a-z]+)"/.exec(hint) || [])[1] || ''));
             for (const [k, v] of [['approvalPolicy', 'on-request'], ['approvalsReviewer', 'user'], ['sandbox', 'workspace-write']]) assert.equal(m.params[k], v);
             log('resume:' + m.params.threadId + (m.params.excludeTurns ? ':reconnect' : ':history'));
+            log('resume-rule:' + (((m.params.config || {})['features.multi_agent_v2.multi_agent_mode_hint_text'] || '').includes('fork_turns')));
             if (m.params.threadId === 'missing-thread') send({ id: m.id, error: { message: 'no rollout found' } });
             else if (m.params.threadId === 'tools-only')   // a page with nothing to show but more before it
               send({ id: m.id, result: { thread: { id: 'tools-only' }, initialTurnsPage: { data: [{ id: 't9', status: 'completed', items: [{ type: 'commandExecution', id: 'c9' }] }], nextCursor: 'earlier' } } });
             else {
               const said = (text) => ({ type: 'userMessage', id: text, content: [{ type: 'text', text }] });
               const reply = (text) => ({ type: 'agentMessage', id: 'r-' + text, text });
-              const newest = { id: 't2', status: 'completed', items: [said('<realtime_delegation>\\n  <input>Open my inbox</input>\\n  <transcript_delta>user: open my inbox</transcript_delta>\\n</realtime_delegation>'), { type: 'commandExecution', id: 'c' }, { ...reply('Opening it now'), phase: 'commentary' }, reply('Done.')] };
+              const newest = { id: 't2', status: 'completed', items: [said('<realtime_delegation>\\n  <input>Open my inbox</input>\\n  <transcript_delta>user: open my inbox</transcript_delta>\\n</realtime_delegation>'), { type: 'commandExecution', id: 'c' }, { ...reply('Opening it now'), phase: 'commentary' }, reply('[ANALYSIS] private check'), reply('Done.')] };
               const flush = { id: 't1b', status: 'completed', items: [said('<realtime_delegation>\\n  <source>transcript_tail_flush</source>\\n  <input>The user just ended their realtime session.</input>\\n</realtime_delegation>'), reply('Talk soon.')] };
               const older = { id: 't1', status: 'completed', items: [said("What's due today?"), { ...reply('Let me look'), phase: 'commentary' }, reply('Two bills.')] };
               send({ id: m.id, result: { thread: { id: m.params.threadId, createdAt: 1790000000 }, model: 'resumed-model', cwd: m.params.cwd, initialTurnsPage: m.params.excludeTurns ? null : { data: [newest, flush, older], nextCursor: 'earlier' } } });
@@ -96,6 +173,7 @@ enum CodexSessionChecks {
             log('turns:' + m.params.cursor);
             send({ id: m.id, result: { data: [{ id: 't0', status: 'completed', items: [{ type: 'userMessage', id: 'u0', content: [{ type: 'text', text: 'First thing today' }] }, { type: 'agentMessage', id: 'a0', text: 'Noted.' }] }], nextCursor: null } });
           }
+          if (m.method === 'fixture/big') { log('big:' + m.params.n + ':' + m.params.text.length); send({ id: m.id, result: {} }); }
           if (m.method === 'fixture/exit') process.exit(0);   // fixture/silent is never answered
           if (m.method === 'fixture/approvals') {
             const p = {threadId:'fixture-thread',turnId:'fixture-turn',itemId:'edit'};
@@ -145,12 +223,46 @@ enum CodexSessionChecks {
             else throw new Error('unexpected or stale approval reply');
             send({method:'fixture/approved',params:{id:m.id}});
           }
+          if (m.method === 'fixture/early-turn-end') { earlyEnd = true; send({ id: m.id, result: {} }); }
           if (m.method === 'turn/start') {
             const text = m.params.input[0].text;
-            log('turn/start:' + text);
+            const report = text.startsWith('<pulse_helper_report>');   // Pulse's own request: its own turn id, logged whole
+            log('turn/start:' + text.split('\\n')[0]);
+            if (report) log('report:' + JSON.stringify(text));
+            if (!report && joinNextTurn) {
+              const joined = joinNextTurn; joinNextTurn = null;
+              send({ id: m.id, result: { turn: { id: joined } } });
+              return;
+            }
+            const turn = report ? 'report-' + (++reports) : 'fixture-turn';
+            if (report && reportBeforeReply) {
+              const before = reportBeforeReply; reportBeforeReply = null;
+              const p = { threadId: m.params.threadId, turnId: turn };
+              const result = { type: 'agentMessage', id: 'early-result', text: 'Early report result.', phase: 'final_answer' };
+              send({ method: 'turn/started', params: { ...p, turn: { id: turn } } });
+              if (before.items) {
+                send({ method: 'item/agentMessage/delta', params: { ...p, itemId: 'private-report', delta: 'PRIVATE REPORT COMMENTARY' } });
+                send({ method: 'item/completed', params: { ...p, item: { type: 'agentMessage', id: 'private-report', text: 'PRIVATE REPORT COMMENTARY', phase: 'commentary' } } });
+                send({ method: 'item/completed', params: { ...p, item: result } });
+              }
+              if (before.other) send({ method: 'item/completed', params: { ...p, turnId: 'other-early', item: { type: 'agentMessage', id: 'other-result', text: 'Other turn text.', phase: 'final_answer' } } });
+              log('report-items:' + turn);
+              if (before.end) send({ method: 'turn/completed', params: { ...p, turn: { id: turn, status: 'completed', items: [result] } } });
+              setTimeout(() => { log('report-reply:' + turn); send({ id: m.id, result: { turn: { id: turn } } }); }, before.delay);
+              return;
+            }
+            if (report && holdReport) { holdReport = false; setTimeout(() => { send({ id: m.id, result: { turn: { id: turn } } }); send({ method: 'turn/started', params: { threadId: m.params.threadId, turn: { id: turn } } }); }, 400); return; }
+            if (report && earlyEnd) {   // the turn's end beats the reply to turn/start
+              earlyEnd = false;
+              send({ method: 'turn/started', params: { threadId: m.params.threadId, turn: { id: turn } } });
+              send({ method: 'turn/completed', params: { threadId: m.params.threadId, turn: { id: turn, status: 'completed',
+                items: [{ type: 'agentMessage', id: 'early-final', text: 'Reported early.', phase: 'final_answer' }] } } });
+              send({ id: m.id, result: { turn: { id: turn } } });
+              return;
+            }
             const accept = () => {
-              send({ id: m.id, result: { turn: { id: 'fixture-turn' } } });
-              send({ method: 'turn/started', params: { threadId: m.params.threadId, turn: { id: 'fixture-turn' } } });
+              send({ id: m.id, result: { turn: { id: turn } } });
+              send({ method: 'turn/started', params: { threadId: m.params.threadId, turn: { id: turn } } });
               send({ method: 'item/started', params: { threadId: 'fixture-thread', item: { id: 'fixture-item', type: 'reasoning' } } });
             };
             if (text === 'slow acknowledgement') setTimeout(accept, 300); else accept();
@@ -160,6 +272,8 @@ enum CodexSessionChecks {
           if (m.method === 'fixture/reject-next') { rejectNext = true; send({ id: m.id, result: {} }); }
           if (m.method === 'thread/realtime/start' && rejectNext) { rejectNext = false; log('realtime/rejected'); send({ id: m.id, error: { message: 'fixture rejection' } }); }
           else if (m.method === 'thread/realtime/start') {
+            assert.equal(m.params.clientManagedHandoffs, true, 'Pulse, not Codex, hands the voice its results');
+            assert.equal(m.params.includeStartupContext, true); assert.equal(m.params.flushTranscriptTailOnSessionEnd, true);
             log('realtime/start');
             send({ id: m.id, result: {} });
             send({ method: 'thread/realtime/started', params: { threadId: m.params.threadId } });
@@ -170,13 +284,25 @@ enum CodexSessionChecks {
             send({ id: m.id, result: {} });
             setTimeout(() => { log('realtime/closed'); send({ method: 'thread/realtime/closed', params: { threadId: m.params.threadId, reason: 'requested' } }); }, 150);
           }
-          if (m.method === 'turn/interrupt') {
+          if (m.method === 'turn/interrupt' && m.params.threadId.startsWith('helper-')) {   // stopping a helper's turn
+            log('interrupt-helper:' + m.params.threadId + ':' + m.params.turnId);
+            if (helperInterruptErrors.has(m.params.threadId)) {
+              const hold = helperInterruptErrors.get(m.params.threadId); helperInterruptErrors.delete(m.params.threadId);
+              const fail = () => { log('interrupt-helper-error:' + m.params.threadId); send({ id: m.id, error: { message: 'fixture transient failure' } }); };
+              if (hold) heldHelperErrors.set(m.params.threadId, fail); else fail();
+              return;
+            }
+            if (m.params.threadId === 'helper-ended') { send({ id: m.id, error: { message: 'no active turn to interrupt' } }); return; }
+            send({ id: m.id, result: {} });
+            setTimeout(() => send({ method: 'turn/completed', params: { threadId: m.params.threadId, turn: { id: m.params.turnId, status: 'interrupted', items: [] } } }), 30);
+          } else if (m.method === 'turn/interrupt') {
             log('turn/interrupt');
-            if (m.params.threadId !== 'fixture-thread' || m.params.turnId !== 'fixture-turn') {
+            if (heldInterrupts.delete(m.params.turnId)) { send({ id: m.id, result: {} }); return; }
+            if (m.params.threadId !== 'fixture-thread' || (m.params.turnId !== 'fixture-turn' && !m.params.turnId.startsWith('report-'))) {
               send({ id: m.id, error: { message: 'missing or incorrect turn identity' } });
             } else {
               send({ id: m.id, result: {} });
-              send({ method: 'turn/completed', params: { threadId: 'fixture-thread' } });
+              send({ method: 'turn/completed', params: { threadId: 'fixture-thread', turn: { id: m.params.turnId, status: 'interrupted' } } });
             }
           }
         });
@@ -199,6 +325,12 @@ enum CodexSessionChecks {
         assert(session.status == nil)
         print("Codex session check passed: text Stop supplies the active thread and turn IDs")
 
+        if CommandLine.arguments.contains("--audit-case") {
+            try await checkNativeVoice(in: dir)
+            try await checkVoiceLifecycle(in: dir, server: cli)
+            try await checkAuditFixes(in: dir)
+            return
+        }
         checkRecording(session)
         checkTranscripts(session)
         try await checkApprovals()
@@ -207,8 +339,13 @@ enum CodexSessionChecks {
         try await checkRecovery(in: dir)
         try await checkWorkModel(in: dir)
         try await checkStartup(in: dir)
+        try await checkConcurrentWrites(in: dir)
         try await checkNativeVoice(in: dir)
         try await checkVoiceLifecycle(in: dir, server: cli)
+        try await checkVoiceResults(in: dir)
+        try await checkHelpers(in: dir)
+        try await checkHelperRaces(in: dir)
+        try await checkAuditFixes(in: dir)
     }
 
     @MainActor
@@ -253,6 +390,7 @@ enum CodexSessionChecks {
         try await wait("Stop interrupts delegated voice work") { !session.thinking && lines(log).filter { $0 == "turn/interrupt" }.count == 1 }
 
         notify("turn/started", ["turn": ["id": "background"]])
+        notify("item/started", ["turnId": "background", "item": ["id": "u-background", "type": "userMessage", "content": [["type": "text", "text": "<realtime_delegation>\n  <input>Check my flights</input>\n</realtime_delegation>"]]]])
         notify("thread/realtime/closed")
         let before = session.messages.count
         let result: [String: Any] = ["turnId": "background", "item": ["id": "result", "type": "agentMessage", "text": "Finished after the call"]]
@@ -266,6 +404,7 @@ enum CodexSessionChecks {
         // after a newer typed turn; core's end-of-call handoff counts as such work; typed turns stay normal.
         notify("thread/realtime/started")
         notify("turn/started", ["turn": ["id": "tabs"]])
+        notify("item/started", ["turnId": "tabs", "item": ["id": "u-tabs", "type": "userMessage", "content": [["type": "text", "text": "<realtime_delegation>\n  <input>Bring Frontier forward</input>\n</realtime_delegation>"]]]])
         notify("thread/realtime/closed")
         let beforeTabs = session.messages.count
         notify("item/agentMessage/delta", ["turnId": "tabs", "itemId": "progress", "delta": "I found both flight tabs"])
@@ -381,6 +520,7 @@ enum CodexSessionChecks {
         session.reopen()
         try await wait("the saved conversation reopens on card open") { session.messages.count == 7 }
         assert(lines(log).contains("resume:saved-thread:history") && count("thread") == 0 && count("turn/") == 0 && session.voiceState == .off)
+        assert(lines(log).contains("resume-rule:true"), "a reopened conversation gets the helper rule too")
         assert(session.messages.prefix(6).map(\.text) == ["What's due today?", "Let me look", "Two bills.", "Talk soon.", "Open my inbox", "Done."],
                "history oldest first: typed turns as they were, voice work without progress notes or the end-of-call handoff (got \(session.messages.map(\.text)))")
         assert(session.messages.prefix(6).map(\.caption) == [nil, nil, nil, "After the call", nil, "Work result"],
@@ -497,7 +637,7 @@ enum CodexSessionChecks {
         let fresh = isolatedDefaults(); fresh.set(true, forKey: CodexPetSession.legacyCheckedKey)
         let early = CodexPetSession(workspace: dir.appendingPathComponent("pet-early"), defaults: fresh)
         early.loadWorkModels()
-        try await wait("work models load when the card opens") { early.workModels.map(\.id) == ["fixture-model", "fast-model"] }
+        try await wait("work models load when the card opens") { early.workModels.map(\.id) == ["fixture-model", "fast-model", "team-model", "plain-model"] }
         assert(early.shownModel == nil && early.shownEffort == nil && count("thread") == 0, "no made-up default, and no conversation started")
         early.chooseWork(model: "fast-model", effort: "high")
         try await wait("with nothing to continue, an offered choice is kept for the first conversation") {
@@ -578,6 +718,26 @@ enum CodexSessionChecks {
         stubborn.send("go")
         try await wait("a refused start is visible") { stubborn.status == "fixture refusal" && !stubborn.thinking }
         assert(refused.string(forKey: CodexPetSession.savedThreadKey) == nil, "no conversation is saved from a refused start")
+        // A model with helpers: the pet talks at medium, its helpers work at the owner's pick, named in the rule.
+        let teamDefaults = isolatedDefaults(); teamDefaults.set(true, forKey: CodexPetSession.legacyCheckedKey)
+        let team = CodexPetSession(workspace: dir.appendingPathComponent("pet-team"), defaults: teamDefaults)
+        team.loadWorkModels()
+        try await wait("models load") { team.workModels.contains { $0.id == "team-model" && $0.helpers } }
+        team.chooseWork(model: "team-model", effort: "high")
+        try await wait("kept for the first conversation") { teamDefaults.string(forKey: effortKey) == "high" && !team.choosingWork }
+        team.send("team task")
+        try await wait("it starts with the pet at medium and helpers at high (\(lines(log).suffix(4)))") {
+            lines(log).contains("start-model:team-model:medium") && lines(log).last { $0.hasPrefix("start-hint:") } == "start-hint:high" && team.effort == "medium"
+        }
+        assert(team.helperEffort == "high" && team.chosenEffort == "high", "the header shows both; the menu checks the owner's pick")
+        CodexAppServer.shared.onNotification?("turn/completed", ["threadId": "fixture-thread", "turn": ["id": "fixture-turn", "status": "completed"]])
+        team.chooseWork(model: "team-model", effort: "low")
+        try await wait("a low pick keeps the pet at low (\(switches()))") { switches().last == "settings:team-model:low" && !team.choosingWork }
+        assert(teamDefaults.string(forKey: effortKey) == "low" && team.helperEffort == "high" && team.pendingHelperEffort == "low",
+               "a new pick is kept, shown as applying from the next open: the running rule still names the old one")
+        team.chooseWork(model: "plain-model", effort: "high")
+        try await wait("a model without helpers works at the pick itself, even one offering medium") { switches().last == "settings:plain-model:high" && !team.choosingWork }
+        assert(team.helperEffort == nil && team.pendingHelperEffort == nil, "no helpers, no split")
         print("Work model checks passed: no made-up default, offered choices only, one at a time, kept once accepted, refusals cleared by success, reconnect, New conversation, lookup, a conversation being created, atomic start, reroutes")
     }
 
@@ -661,6 +821,1153 @@ enum CodexSessionChecks {
         print("Voice lifecycle checks passed: prompt announced mid-call, End then Start, stale close, one audio retry, retry cancelled by New conversation or a lost server, rejected start")
     }
 
+    /// What the voice says about delegated work, as Codex's CLI does it: only a finished turn's result, once,
+    /// into the call that asked, if nothing newer was said or typed; never a progress note. Every result shows.
+    @MainActor
+    static func checkVoiceResults(in dir: URL) async throws {
+        let log = dir.appendingPathComponent("voice-results.log")
+        setenv("PULSE_CHECK_LOG", log.path, 1)
+        CodexAppServer.shared.stop()
+        try await Task.sleep(for: .milliseconds(50))
+        let session = CodexPetSession(workspace: dir.appendingPathComponent("pet-results"), defaults: isolatedDefaults())
+        session.playCue = { _ in }
+        session.muted = true   // the fake helper expects calls to open muted
+        var inCall: Bool { session.voiceState == .live || session.voiceState == .speaking }
+        var items: [String: [[String: Any]]] = [:]   // what each turn/completed carries, as the protocol does
+        var utterances = 0
+        func notify(_ method: String, _ fields: [String: Any] = [:]) {
+            var p = fields; p["threadId"] = "fixture-thread"
+            CodexAppServer.shared.onNotification?(method, p)
+        }
+        func heard(_ id: String, _ text: String, done: Bool = true) {   // the canonical transcript of what the user said
+            notify(done ? "thread/realtime/item/completed" : "thread/realtime/item/started",
+                   ["item": ["id": id, "type": "transcriptSegment", "role": "user", "text": done ? text : ""]])
+        }
+        func said(_ text: String, done: Bool = true) -> String {   // starts empty and streams its first word, as live speech does
+            utterances += 1
+            let id = "said-\(utterances)"
+            heard(id, text, done: false)
+            notify("thread/realtime/item/transcript/delta", ["itemId": id, "delta": String(text.prefix { $0 != " " })])
+            if done { heard(id, text) }
+            return id
+        }
+        func delegate(_ turn: String, _ asked: String, started: Bool = true) {
+            if started { notify("turn/started", ["turn": ["id": turn]]) }
+            notify("item/started", ["turnId": turn, "item": ["id": "u-\(turn)-\(asked.count)", "type": "userMessage",
+                   "content": [["type": "text", "text": "<realtime_delegation>\n  <input>\(asked)</input>\n</realtime_delegation>"]]]])
+        }
+        func ask(_ turn: String, _ asked: String) { _ = said(asked); delegate(turn, asked) }   // said, then handed over
+        func result(_ turn: String, _ id: String, _ text: String, phase: Any = "final_answer", questions: Any = NSNull()) {
+            let item: [String: Any] = ["id": id, "type": "agentMessage", "text": text, "phase": phase, "questions": questions]
+            items[turn, default: []].append(item)
+            notify("item/completed", ["turnId": turn, "item": item])
+        }
+        func finish(_ turn: String, _ status: String = "completed", items snapshot: [[String: Any]]? = nil) {
+            notify("turn/completed", ["turn": ["id": turn, "status": status, "items": snapshot ?? items[turn] ?? []]])
+        }
+        func spoken() -> [String] { lines(log).filter { $0.hasPrefix("speech:") }.map { String($0.dropFirst(7)) } }
+        func shown(_ text: String) -> ChatMessage? { session.messages.last { $0.text == text } }
+        func settle() async throws { try await Task.sleep(for: .milliseconds(150)) }
+        session.startVoice()
+        try await wait("a call goes live (\(session.voiceState), \(session.status ?? "no status"))") { inCall }
+
+        ask("todo", "Make a to-do app")
+        result("todo", "note", "The app will save each change before updating the list.", phase: "commentary")
+        result("todo", "file", "todo.html is in your pet folder.")
+        try await settle()
+        assert(spoken().isEmpty, "neither a progress note nor an unfinished turn's result reaches the voice")
+        assert(!session.messages.contains { $0.text.hasPrefix("The app will save") } && shown("todo.html is in your pet folder.")?.caption == "Work result",
+               "the result shows in the chat as work; the progress note doesn't")
+        _ = said("Where did you put it?")   // asked again while it works: handed into the same turn
+        delegate("todo", "Where did you put it?", started: false)
+        finish("todo"); finish("todo")
+        try await wait("the finished result is spoken (\(spoken()))") { spoken() == ["todo.html is in your pet folder."] }
+        try await settle()
+        assert(spoken().count == 1, "once, even when Codex reports the turn finished twice")
+
+        ask("broken", "Fix it"); result("broken", "b", "Half done."); finish("broken", "failed")
+        ask("stopped", "Stop this"); result("stopped", "s", "Stopped midway."); finish("stopped", "interrupted")
+        ask("bem", "Check")
+        result("bem", "a", "[ANALYSIS] thinking it over", phase: NSNull()); result("bem", "f", "[FINAL] Ready.", phase: NSNull()); finish("bem")
+        ask("ask", "Rename it"); result("ask", "q", "Which name should it have?", questions: [["title": "Name", "options": ["a.html", "b.html"]]]); finish("ask")
+        let long = String(repeating: "word ", count: 1000)
+        ask("long", "Explain"); result("long", "l", long); finish("long")
+        ask("refused", "Again"); result("refused", "r", "Refuse this."); finish("refused")
+        ask("after", "And again"); result("after", "g", "After a refusal."); finish("after")
+        try await wait("finished results are spoken (\(spoken()))") { spoken().count == 6 }
+        try await settle()
+        assert(spoken() == ["todo.html is in your pet folder.", "Ready.", "Codex has a question for you in the pet chat.", "Codex's answer is in the pet chat.", "Refuse this.", "After a refusal."],
+               "in finish order: a failed or stopped turn says nothing, a private note never shows, a question or long answer gets a pointer, a refused speech isn't retried (got \(spoken()))")
+        assert(shown("Half done.")?.caption == "Work result" && shown("Stopped midway.") != nil && shown("Which name should it have?") != nil
+               && shown(long) != nil && shown("Refuse this.") != nil && !session.messages.contains { $0.text.hasPrefix("[ANALYSIS]") },
+               "every result shows, spoken or not, and private notes never do")
+
+        // The finished turn's own items decide: one only they carry, a changed one, or none at all.
+        ask("snapshot-only", "Anything new?")
+        finish("snapshot-only", items: [["id": "only", "type": "agentMessage", "text": "Only in the finished turn.", "phase": "final_answer"]])
+        try await wait("a result only the finished turn carries is spoken (\(spoken()))") { spoken().last == "Only in the finished turn." }
+        assert(shown("Only in the finished turn.")?.caption == "Work result", "and shown")
+        ask("changed", "Check the folder")
+        result("changed", "c", "Stale streamed answer.")
+        finish("changed", items: [["id": "c", "type": "agentMessage", "text": "Which folder?", "phase": "final_answer", "questions": [["title": "Folder", "options": ["A", "B"]]]]])
+        try await wait("a changed result is the one spoken (\(spoken()))") { spoken().last == "Codex has a question for you in the pet chat." && spoken().count == 8 }
+        assert(shown("Which folder?") != nil && shown("Stale streamed answer.") == nil, "and it replaces what streamed")
+        ask("emptied", "Anything else?")
+        result("emptied", "e", "Old streamed answer.")
+        finish("emptied", items: [["id": "n", "type": "agentMessage", "text": "Still checking.", "phase": "commentary"]])
+        try await settle()
+        assert(spoken().count == 8 && shown("Old streamed answer.") != nil, "a finished turn with no result says nothing, and what streamed stays shown")
+
+        // Input order: a new utterance supersedes an unspoken answer before its own request reaches Codex; both
+        // orders of a request and its transcript keep its answer; repeated events never change who asked last.
+        ask("older", "Build the page")
+        result("older", "o", "The page is built.")
+        _ = said("Actually, make it blue", done: false)   // still being transcribed; its request comes later
+        finish("older")
+        try await settle()
+        assert(spoken().count == 8 && shown("The page is built.") != nil, "a new utterance supersedes an answer not yet spoken")
+        let first = said("Name it index", done: false); delegate("order-a", "Name it index"); heard(first, "Name it index")
+        result("order-a", "a", "Named index.html."); finish("order-a")
+        delegate("order-b", "Add a footer"); let late = said("Add a footer", done: false); heard(late, "Add a footer")   // the request ahead of its transcript
+        result("order-b", "b", "Footer added."); finish("order-b")
+        let hi = said("Say hi"); delegate("repeat", "Say hi"); heard(hi, "Say hi"); heard(hi, "", done: false)   // repeated transcript events
+        result("repeat", "h", "Hi!"); finish("repeat")
+        ask("steer", "First part"); _ = said("Second part"); delegate("steer", "Second part", started: false)
+        delegate("steer", "First part", started: false)   // a late repeat of the older request
+        result("steer", "p", "Both parts done."); finish("steer")
+        try await wait("answers to the current request speak in either order (\(spoken()))") { spoken().count == 12 }
+        assert(Array(spoken().suffix(4)) == ["Named index.html.", "Footer added.", "Hi!", "Both parts done."], "got \(spoken())")
+        ask("dup", "Check the weather")
+        _ = said("Never mind")
+        delegate("dup", "Check the weather", started: false)   // a repeated handoff of the superseded request
+        result("dup", "w", "Sunny."); finish("dup")
+        try await settle()
+        assert(spoken().count == 12, "a repeated handoff of a superseded request doesn't make its answer current again (got \(spoken()))")
+
+        ask("typed-after", "Do X")
+        session.send("never mind, I'll type")
+        try await wait("the typed turn starts") { lines(log).contains("turn/start:never mind, I'll type") }
+        result("typed-after", "x", "X is done."); finish("typed-after")
+        finish("fixture-turn")
+        ask("old-call", "Slow work")
+        session.stopVoice()
+        result("old-call", "o", "Finished after hanging up.")
+        assert(shown("Finished after hanging up.")?.caption == "After the call", "a result after hanging up is marked so")
+        session.startVoice()
+        try await wait("the next call goes live") { inCall }
+        finish("old-call")
+        ask("old-call-2", "More work")
+        session.stopVoice()
+        session.startVoice()
+        try await wait("and another call goes live") { inCall }
+        result("old-call-2", "o2", "Finished in a later call."); finish("old-call-2")
+        ask("hung-up", "Long job")
+        session.stopVoice()
+        result("hung-up", "h", "Done with no call open."); finish("hung-up")
+        session.startVoice()
+        try await wait("a call goes live again") { inCall }
+        _ = said("Wrap it up")
+        notify("turn/started", ["turn": ["id": "flush"]])   // an end-of-call handoff landing in this call, its words ones just said
+        notify("item/started", ["turnId": "flush", "item": ["id": "u-flush", "type": "userMessage", "content": [["type": "text",
+               "text": "<realtime_delegation>\n  <source>transcript_tail_flush</source>\n  <input>Wrap it up</input>\n</realtime_delegation>"]]]])
+        result("flush", "ack", "Acknowledged."); finish("flush")
+        // Same tick: a turn finishing just before a hang-up is spoken at once, while its call is live; one
+        // finishing just after, or after New conversation, never is.
+        ask("race-before", "One last job"); result("race-before", "rb", "Spoken as it finished."); finish("race-before"); session.stopVoice()
+        session.startVoice()
+        try await wait("a call goes live once more") { inCall }
+        ask("race-after", "Another job"); result("race-after", "ra", "Never spoken."); session.stopVoice(); finish("race-after")
+        session.startVoice()
+        try await wait("and one more call goes live") { inCall }
+        try await settle()
+        assert(Array(spoken().dropFirst(12)) == ["Spoken as it finished."],
+               "typing supersedes a request; a result never reaches a call that didn't ask, nor goes out with no call; the end-of-call handoff is never spoken (got \(spoken()))")
+
+        notify("turn/started", ["turn": ["id": "mixed"]])   // a typed turn the voice then asks into
+        notify("item/agentMessage/delta", ["turnId": "mixed", "itemId": "m", "delta": "Working on"])
+        assert(shown("Working on")?.caption == nil && shown("Working on")?.live == true, "a typed turn streams as usual")
+        _ = said("And also this"); delegate("mixed", "And also this", started: false)
+        result("mixed", "m", "Both are done."); finish("mixed")
+        assert(shown("Both are done.")?.caption == "Work result" && session.messages.filter { $0.text == "Both are done." }.count == 1,
+               "a bubble that becomes the voice's result is marked as work, in place")
+        try await wait("the voice speaks the answer to its own question") { spoken().last == "Both are done." }
+        // Ownership needs this call's transcript of the request's words: a reworded request, a repeat after typing,
+        // and an old call's request arriving in a new one are only shown; the newest of two same-worded utterances counts.
+        let beforeOwnership = spoken().count
+        _ = said("Tell me about the weather")
+        delegate("reworded", "Check the weather forecast")
+        session.send("Forget that; I will type")
+        try await wait("the typed request starts") { lines(log).contains("turn/start:Forget that; I will type") }
+        delegate("reworded", "Check the weather forecast", started: false)
+        result("reworded", "rw", "Old weather result after typing."); finish("reworded")
+        finish("fixture-turn")
+        ask("previous-call", "Old slow request")
+        session.stopVoice(); session.startVoice()
+        try await wait("a new call goes live") { inCall }
+        delegate("previous-call", "Old slow request", started: false)   // its repeat lands in the new call
+        result("previous-call", "pc", "Previous call result."); finish("previous-call")
+        _ = said("Old question with queued handoff")
+        session.stopVoice(); session.startVoice()
+        try await wait("another call goes live") { inCall }
+        delegate("delayed-first", "Old question with queued handoff")   // first handed over in a call that never heard it
+        result("delayed-first", "df", "Old first handoff after restart."); finish("delayed-first")
+        try await settle()
+        assert(spoken().count == beforeOwnership, "a reworded request, a repeat after typing or into a new call, and an old call's request are never spoken (got \(spoken()))")
+        assert(shown("Old weather result after typing.") != nil && shown("Previous call result.") != nil && shown("Old first handoff after restart.") != nil, "but all are shown")
+        let firstSame = said("Repeat this question")
+        _ = said("Repeat this question")
+        heard(firstSame, "Repeat this question")   // a late repeat of the older utterance
+        delegate("same-words", "Repeat this question")
+        result("same-words", "sw", "Answer to the latest one."); finish("same-words")
+        try await wait("the newest of two same-worded utterances keeps its answer (\(spoken()))") { spoken().last == "Answer to the latest one." }
+
+        // Only words count as a new question: a noise that stays empty never silences an answer; a transcript
+        // seen only when complete still counts; a question posted mid-task doesn't replace the later final.
+        let beforeWords = spoken().count
+        ask("noise", "Tidy the inbox"); result("noise", "nz", "Inbox tidied.")
+        heard("cough", "", done: false); heard("cough", "  ")   // a cough: a transcript with no words
+        finish("noise")
+        heard("solo", "Plan the trip")   // only its completion arrives
+        delegate("solo", "Plan the trip"); result("solo", "so", "Trip planned."); finish("solo")
+        ask("asked-midway", "Sort the photos")
+        result("asked-midway", "q-mid", "Which album?", phase: NSNull(), questions: [["title": "Album", "options": ["2025", "2026"]]])
+        result("asked-midway", "f-mid", "Photos sorted into 2026."); finish("asked-midway")
+        try await wait("words, not noise, count as questions (\(spoken()))") { spoken().count == beforeWords + 3 }
+        assert(Array(spoken().suffix(3)) == ["Inbox tidied.", "Trip planned.", "Photos sorted into 2026."], "got \(spoken())")
+        let oven = said("Check the oven"); delegate("oven", "Check the oven")
+        result("oven", "ov", "The oven is off.")
+        _ = said("Never mind that")
+        heard(oven, "Check the oven")   // a late repeat of the older question
+        finish("oven")
+        try await settle()
+        assert(spoken().count == beforeWords + 3, "a late repeat of an older question never makes its answer current again (got \(spoken()))")
+        // An utterance keeps its place in line from when it first appeared: words that arrive late never jump
+        // ahead of a newer question, or of typing.
+        let beforeLateText = spoken().count
+        heard("earlier-empty-start", "", done: false)
+        delegate("earlier-empty-start", "First question")
+        ask("newer-complete", "Newer question")
+        heard("earlier-empty-start", "First question")
+        result("newer-complete", "newer-answer", "Answer to the newer question."); finish("newer-complete")
+        result("earlier-empty-start", "older-answer", "Answer to the older question."); finish("earlier-empty-start")
+        heard("typed-gap", "", done: false)
+        delegate("typed-gap", "Second thought")
+        session.send("I'll type it instead")
+        try await wait("the typed message starts") { lines(log).contains("turn/start:I'll type it instead") }
+        heard("typed-gap", "Second thought")   // its words arrive after the typing
+        result("typed-gap", "tg", "Answer to the second thought."); finish("typed-gap")
+        finish("fixture-turn")
+        try await settle()
+        assert(Array(spoken().dropFirst(beforeLateText)) == ["Answer to the newer question."],
+               "late words for an earlier utterance never supersede a newer question or typing (got \(spoken()))")
+        ask("cleared", "Last thing"); result("cleared", "cl", "Never after New conversation."); session.clear(); finish("cleared")
+        try await settle()
+        assert(!spoken().contains("Never after New conversation."), "New conversation silences the old one's results")
+        print("Voice result checks passed: only finished results, once, in order, into the call that asked; the finished turn's own result; new speech supersedes, in either order with its request; failed, stopped, private, typed-over, other-call and old-conversation results unspoken; pointers; every result shown")
+    }
+
+    /// Frames written at once from several executors arrive whole: requests from background tasks and posts
+    /// from the main actor, each far larger than the pipe writes atomically.
+    @MainActor
+    static func checkConcurrentWrites(in dir: URL) async throws {
+        let log = dir.appendingPathComponent("writes.log")
+        setenv("PULSE_CHECK_LOG", log.path, 1)
+        CodexAppServer.shared.stop()
+        try await Task.sleep(for: .milliseconds(50))
+        try await CodexAppServer.shared.start()
+        let size = 200_000, requests = 6, posts = 6
+        let frames = (0..<(requests + posts)).map { n in ["n": n, "text": String(repeating: String(UnicodeScalar(UInt8(65 + n))), count: size)] as [String: Any] }
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for n in 0..<requests { let frame = frames[n]; group.addTask { _ = try await CodexAppServer.shared.request("fixture/big", frame) } }
+            for n in requests..<(requests + posts) { CodexAppServer.shared.post("fixture/big", frames[n]) }
+            try await group.waitForAll()
+        }
+        let expected = Set((0..<(requests + posts)).map { "big:\($0):\(size)" })
+        try await wait("every frame arrives whole (got \(lines(log).filter { $0.hasPrefix("big:") }))") { Set(lines(log).filter { $0.hasPrefix("big:") }) == expected }
+        print("Write checks passed: large frames from background requests and main-actor posts at once arrive whole")
+    }
+
+    /// Helpers (Codex sub-agents) the pet starts: tracked from Pulse's one server, reported by the pet when Pulse
+    /// asks once it's free, spoken only into the call that asked, stopped by Stop and New conversation.
+    @MainActor
+    static func checkHelpers(in dir: URL) async throws {
+        let log = dir.appendingPathComponent("helpers.log")
+        setenv("PULSE_CHECK_LOG", log.path, 1)
+        CodexAppServer.shared.stop()
+        try await Task.sleep(for: .milliseconds(50))
+        let session = CodexPetSession(workspace: dir.appendingPathComponent("pet-helpers"), defaults: isolatedDefaults())
+        session.playCue = { _ in }
+        session.muted = true   // the fake helper expects calls to open muted
+        var inCall: Bool { session.voiceState == .live || session.voiceState == .speaking }
+        var utterances = 0
+        func on(_ thread: String, _ method: String, _ fields: [String: Any] = [:]) {
+            var p = fields; p["threadId"] = thread
+            CodexAppServer.shared.onNotification?(method, p)
+        }
+        func notify(_ method: String, _ fields: [String: Any] = [:]) { on("fixture-thread", method, fields) }
+        func heard(_ id: String, _ text: String, done: Bool = true) {
+            notify(done ? "thread/realtime/item/completed" : "thread/realtime/item/started",
+                   ["item": ["id": id, "type": "transcriptSegment", "role": "user", "text": done ? text : ""]])
+        }
+        func said(_ text: String, done: Bool = true) -> String {
+            utterances += 1
+            let id = "h-said-\(utterances)"
+            heard(id, text, done: false)
+            notify("thread/realtime/item/transcript/delta", ["itemId": id, "delta": String(text.prefix { $0 != " " })])
+            if done { heard(id, text) }
+            return id
+        }
+        func delegate(_ turn: String, _ asked: String, started: Bool = true) {
+            if started { notify("turn/started", ["turn": ["id": turn]]) }
+            notify("item/started", ["turnId": turn, "item": ["id": "u-\(turn)-\(asked.count)", "type": "userMessage",
+                   "content": [["type": "text", "text": "<realtime_delegation>\n  <input>\(asked)</input>\n</realtime_delegation>"]]]])
+        }
+        func ask(_ turn: String, _ asked: String) { _ = said(asked); delegate(turn, asked) }
+        func final(_ id: String, _ text: String) -> [String: Any] { ["id": id, "type": "agentMessage", "text": text, "phase": "final_answer"] }
+        func finish(_ turn: String, _ text: String? = nil, status: String = "completed") {
+            if let text { notify("item/completed", ["turnId": turn, "item": final("f-\(turn)", text)]) }
+            notify("turn/completed", ["turn": ["id": turn, "status": status, "items": text.map { [final("f-\(turn)", $0)] } ?? []]])
+        }
+        func spawn(_ turn: String, _ child: String, _ path: String, on thread: String = "fixture-thread") {
+            let item: [String: Any] = ["type": "subAgentActivity", "id": "spawn-\(child)", "kind": "started", "agentThreadId": child, "agentPath": path]
+            on(thread, "item/started", ["turnId": turn, "item": item]); on(thread, "item/completed", ["turnId": turn, "item": item])
+        }
+        func childStarts(_ child: String, _ turn: String) { on(child, "turn/started", ["turn": ["id": turn]]) }
+        func childEnds(_ child: String, _ turn: String, _ status: String, _ text: String?) {
+            on(child, "turn/completed", ["turn": ["id": turn, "status": status, "items": text.map { [final("cf-\(turn)", $0)] } ?? []]])
+        }
+        func spoken() -> [String] { lines(log).filter { $0.hasPrefix("speech:") }.map { String($0.dropFirst(7)) } }
+        func reports() -> [String] { lines(log).filter { $0.hasPrefix("report:") }.compactMap { try? JSONSerialization.jsonObject(with: Data($0.dropFirst(7).utf8), options: .fragmentsAllowed) as? String } }
+        func shown(_ text: String) -> ChatMessage? { session.messages.last { $0.text == text } }
+        func settle() async throws { try await Task.sleep(for: .milliseconds(150)) }
+        session.startVoice()
+        try await wait("a call goes live (\(session.voiceState), \(session.status ?? "no status"))") { inCall }
+
+        // One helper, asked for by voice: the pet acknowledges and is free; the result is reported once, by voice.
+        ask("build", "Build a habit tracker")
+        spawn("build", "helper-1", "/root/habit_tracker")
+        childStarts("helper-1", "h1-work")
+        finish("build", "Started a helper on that.")
+        try await wait("the acknowledgment is spoken (\(spoken()))") { spoken() == ["Started a helper on that."] }
+        assert(session.helpersWorking == 1 && !session.thinking, "the helper works while the pet is free")
+        ask("other", "Any sourdough tip?"); finish("other", "Feed it daily.")
+        try await wait("a foreground answer while the helper works (\(spoken()))") { spoken().last == "Feed it daily." }
+        assert(reports().isEmpty, "nothing to report yet")
+        on("helper-1", "item/agentMessage/delta", ["turnId": "h1-work", "itemId": "x", "delta": "chatter"])
+        on("helper-1", "item/completed", ["turnId": "h1-work", "item": final("x", "Helper chatter")])
+        assert(!session.messages.contains { $0.text.contains("chatter") } && session.helpersWorking == 1, "a helper's own messages never reach the chat")
+        childEnds("helper-1", "h1-work", "completed", "Built habit-tracker.html and checked it.")
+        try await wait("the pet is asked to report (\(reports().count))") { reports().count == 1 }
+        assert(session.helpersWorking == 0 && reports()[0].contains("/root/habit_tracker: ended with status completed") && reports()[0].contains("Built habit-tracker.html and checked it."),
+               "the report carries the helper's outcome and final text (got \(reports()))")
+        finish("report-1", "Your habit tracker is ready.")
+        try await wait("the report is spoken once (\(spoken()))") { spoken().last == "Your habit tracker is ready." }
+        assert(shown("Your habit tracker is ready.")?.caption == "Helper result" && !session.messages.contains { $0.text.contains("pulse_helper_report") },
+               "the report shows as a helper result; Pulse's request stays hidden")
+        childEnds("helper-1", "h1-work", "completed", "Built habit-tracker.html and checked it.")
+        try await settle()
+        assert(reports().count == 1 && spoken().filter { $0 == "Your habit tracker is ready." }.count == 1, "a repeated end reports nothing new")
+
+        // A helper ending during the owner's own turn waits for it; a failure says so, even without a final message.
+        ask("build2", "Write a packing list"); spawn("build2", "helper-2", "/root/packing"); childStarts("helper-2", "h2-work")
+        finish("build2", "On it.")
+        delegate("fg", "And check the weather")   // a foreground turn in progress
+        childEnds("helper-2", "h2-work", "failed", nil)
+        try await settle()
+        assert(reports().count == 1, "no report inside the owner's own turn")
+        finish("fg", "Sunny.")
+        try await wait("then the report starts (\(reports().count))") { reports().count == 2 }
+        assert(reports()[1].contains("/root/packing: ended with status failed. It left no final message."), "got \(reports()[1])")
+
+        // New words while a report is under way supersede it: not spoken, one more try, which speaks.
+        _ = said("Wait a second", done: false)
+        finish("report-2", "The packing list failed.")
+        try await wait("the superseded report gets one more try (\(reports().count))") { reports().count == 3 }
+        assert(!spoken().contains("The packing list failed."), "a superseded report is never spoken")
+        finish("report-3", "The packing list helper failed; nothing was written.")
+        try await wait("the retry speaks (\(spoken()))") { spoken().last == "The packing list helper failed; nothing was written." }
+
+        // Typed requests are shown, never spoken; a voice request's helper keeps the call that asked, even if the
+        // same turn is later asked into from another call; a request ahead of its transcript gets its owner on binding.
+        session.send("Build me a budget sheet")
+        try await wait("the typed turn starts") { lines(log).contains("turn/start:Build me a budget sheet") }
+        spawn("fixture-turn", "helper-3", "/root/budget"); childStarts("helper-3", "h3-work")
+        finish("fixture-turn", "Started a helper.")
+        childEnds("helper-3", "h3-work", "completed", "Budget sheet done.")
+        try await wait("a typed helper is reported (\(reports().count))") { reports().count == 4 }
+        let beforeTyped = spoken().count
+        finish("report-4", "Your budget sheet is ready.")
+        try await settle()
+        assert(spoken().count == beforeTyped && shown("Your budget sheet is ready.")?.caption == "Helper result", "a typed request's result is shown, not spoken")
+        ask("trip", "Plan my trip"); spawn("trip", "helper-4", "/root/trip"); childStarts("helper-4", "h4-work"); finish("trip", "Planning it.")
+        session.stopVoice(); session.startVoice()
+        try await wait("a second call goes live") { inCall }
+        delegate("trip", "Add Rome too", started: false); _ = said("Add Rome too")   // the same turn, asked into from the new call
+        childEnds("helper-4", "h4-work", "completed", "Trip planned.")
+        try await wait("the old call's helper is reported (\(reports().count))") { reports().count == 5 }
+        let beforeOld = spoken().count
+        finish("report-5", "Your trip is planned.")
+        try await settle()
+        assert(spoken().count == beforeOld && shown("Your trip is planned.") != nil, "a helper never speaks into a call that didn't start it")
+        delegate("late-owner", "Draft an invite")   // ahead of its transcript
+        spawn("late-owner", "helper-5", "/root/invite"); childStarts("helper-5", "h5-work")
+        _ = said("Draft an invite")
+        finish("late-owner", "Drafting it.")
+        childEnds("helper-5", "h5-work", "completed", "Invite drafted.")
+        try await wait("reported (\(reports().count))") { reports().count == 6 }
+        finish("report-6", "The invite is drafted.")
+        try await wait("its owner was proven when its words arrived (\(spoken()))") { spoken().last == "The invite is drafted." }
+
+        // A report never speaks after the call that asked has ended (and no new call has started).
+        ask("ended", "Clean my downloads"); spawn("ended", "helper-e", "/root/downloads"); childStarts("helper-e", "he-work"); finish("ended", "Cleaning.")
+        session.stopVoice()
+        childEnds("helper-e", "he-work", "completed", "Downloads cleaned.")
+        try await wait("reported after the call (\(reports().count))") { reports().count == 7 }
+        let beforeEnded = spoken().count
+        finish("report-7", "Your downloads are clean.")
+        try await settle()
+        assert(spoken().count == beforeEnded && shown("Your downloads are clean.") != nil, "a report after hanging up is shown, not spoken")
+        session.startVoice()
+        try await wait("a call goes live again") { inCall }
+        // A voice question starting in the same instant a report is queued wins; the report waits for its end.
+        ask("quick-q", "Quick question"); spawn("quick-q", "helper-q", "/root/q"); childStarts("helper-q", "hq-work"); finish("quick-q", "On it.")
+        childEnds("helper-q", "hq-work", "completed", "Q done."); notify("turn/started", ["turn": ["id": "racer"]])   // a turn begun before its request item
+        try await settle()
+        assert(reports().count == 7, "a report never starts inside another turn, even one that began in the same instant")
+        finish("racer", "Done with that.")
+        try await wait("then it reports (\(reports().count))") { reports().count == 8 }
+        finish("report-8", "Q is done.")
+        try await wait("and speaks") { spoken().last == "Q is done." }
+
+        // A report whose end beats Codex's reply to its start is still settled, once.
+        _ = try await CodexAppServer.shared.request("fixture/early-turn-end", [:])
+        on("helper-6", "turn/started", ["turn": ["id": "h6-work"]])   // before its registration: kept briefly
+        ask("early", "Sort my photos"); spawn("early", "helper-6", "/root/photos"); finish("early", "Sorting.")
+        childEnds("helper-6", "h6-work", "completed", "Photos sorted.")
+        try await wait("an early end is settled (\(spoken()))") { spoken().last == "Reported early." }
+
+        // Stop stops the helpers, confirmed by their own ends; one whose turn isn't known yet is stopped when it is.
+        ask("stopme", "Index my files"); childStarts("helper-7", "h7-work"); spawn("stopme", "helper-7", "/root/index")   // its turn beats its registration
+        spawn("stopme", "helper-8", "/root/archive")
+        finish("stopme", "Two helpers started.")
+        try await wait("both work") { session.helpersWorking == 2 }
+        let reportsBeforeStop = reports().count
+        session.interrupt()
+        try await wait("the known helper is stopped (\(lines(log).filter { $0.hasPrefix("interrupt-helper") }))") { lines(log).contains("interrupt-helper:helper-7:h7-work") }
+        childStarts("helper-8", "h8-work")
+        try await wait("the other is stopped once its turn is known") { lines(log).contains("interrupt-helper:helper-8:h8-work") }
+        try await wait("stops are confirmed by the helpers' ends") { session.messages.contains { $0.text == "Stopped helper index." } && session.messages.contains { $0.text == "Stopped helper archive." } }
+        try await settle()
+        assert(session.helpersWorking == 0 && reports().count == reportsBeforeStop, "stopped helpers aren't reported")
+
+        // A helper's own helper is stopped on sight.
+        ask("nest", "Research flights"); spawn("nest", "helper-9", "/root/flights"); childStarts("helper-9", "h9-work"); finish("nest", "Researching.")
+        spawn("h9-work", "helper-9a", "/root/flights/sub", on: "helper-9")
+        childStarts("helper-9a", "h9a-work")
+        try await wait("a helper's helper is stopped") { lines(log).contains("interrupt-helper:helper-9a:h9a-work") }
+        assert(session.helpersWorking == 1, "it never counts as the pet's helper")
+        try await settle()
+        assert(reports().count == reportsBeforeStop, "stopped helpers aren't reported, even after the owner asks something new")
+
+        // New conversation stops the old helpers; the confirmation shows in the new card, marked as not saved.
+        session.clear()
+        try await wait("the old helper is stopped") { lines(log).contains("interrupt-helper:helper-9:h9-work") }
+        try await wait("its stop is noted in the new card") { session.messages.contains { $0.text == "Stopped helper flights from the previous conversation. (This note isn't saved.)" } }
+        assert(session.helpersWorking == 0, "the new conversation has no helpers")
+        assert(lines(log).contains("start-rule:true"), "a new conversation gets the helper rule, and no Pulse cap")
+        let approvals = PetApprovals.shared, originalDefaults = approvals.defaults
+        approvals.defaults = UserDefaults(suiteName: isolatedSuite())!
+        defer { approvals.defaults = originalDefaults }
+        let request: [String: Any] = ["turnId": "t", "itemId": "i", "command": "touch notes.txt", "cwd": "/tmp"]
+        var fromHelper = PetApproval(id: "h", method: "item/commandExecution/requestApproval", params: request.merging(["threadId": "helper-z"]) { $1 }, item: nil)!
+        fromHelper.helper = approvals.helperOf("helper-z")
+        assert(fromHelper.helper == "a helper", "a thread that isn't the pet's asks as a helper")
+        approvals.remember(fromHelper)
+        assert(!fromHelper.canRemember && !approvals.isRemembered(fromHelper), "a helper can never create a remembered approval")
+        let fromPet = PetApproval(id: "p", method: "item/commandExecution/requestApproval", params: request.merging(["threadId": "fixture-thread"]) { $1 }, item: nil)!
+        approvals.remember(fromPet)
+        assert(approvals.isRemembered(fromHelper), "but the owner's own remembered approvals still apply to it")
+        let reopened = CodexPetSession.history([["id": "r", "items": [
+            ["type": "userMessage", "id": "u", "content": [["type": "text", "text": CodexPetSession.reportTag + "\n- /root/x: ended\n</pulse_helper_report>"]]],
+            ["type": "agentMessage", "id": "n", "text": "Checking.", "phase": "commentary"],
+            ["type": "agentMessage", "id": "a", "text": "Your x is done.", "phase": "final_answer"]]]])
+        assert(reopened.map(\.text) == ["Your x is done."] && reopened.first?.caption == "Helper result", "a reopened report shows only its result (got \(reopened.map(\.text)))")
+        try await Task.sleep(for: .milliseconds(300))   // the fake reuses thread ids: the old call's close must land first
+        session.startVoice()
+        try await wait("a call for the last case") { inCall }
+        ask("lost", "Long job"); spawn("lost", "helper-10", "/root/long"); childStarts("helper-10", "h10-work"); finish("lost", "Started.")
+        try await wait("it works") { session.helpersWorking == 1 }
+        CodexAppServer.shared.stop()
+        try await wait("a lost server is noted") { session.messages.contains { $0.text.hasPrefix("Pulse lost track of a helper") } }
+        assert(session.helpersWorking == 0, "lost helpers aren't counted as working")
+        print("Helper checks passed: one helper reported once by voice, chatter hidden, owner's turn first, failure, superseded report retried, typed shown only, the asking call kept, late owner binding, early report end, Stop and a helper's helper stopped and confirmed, New conversation")
+    }
+
+    /// The reviewer's six helper races: who owns a helper across calls and typed input, a report accepted after Stop
+    /// or New conversation, a helper reported after New conversation, a later turn of a known helper, and the effort
+    /// split without the model menu.
+    @MainActor
+    static func checkHelperRaces(in dir: URL) async throws {
+        let log = dir.appendingPathComponent("helper-races.log")
+        setenv("PULSE_CHECK_LOG", log.path, 1)
+        CodexAppServer.shared.stop()
+        try await Task.sleep(for: .milliseconds(50))
+
+        // 6. The split without the model menu: a saved conversation's own model and effort, read before reopening it,
+        // and kept for the next reopen though the pet's medium is saved back to the thread; Codex's default for a new one.
+        let saved = isolatedDefaults()
+        saved.set("saved-team-thread", forKey: CodexPetSession.savedThreadKey); saved.set(true, forKey: CodexPetSession.legacyCheckedKey)
+        let restored = CodexPetSession(workspace: dir.appendingPathComponent("pet-saved-team"), defaults: saved)
+        restored.reopen()
+        try await wait("a saved conversation opens at medium, helpers at its own high (\(lines(log).suffix(3)))") {
+            lines(log).contains("resume-talk:medium:high") && restored.shownEffort == "medium" && restored.helperEffort == "high"
+        }
+        let again = CodexPetSession(workspace: dir.appendingPathComponent("pet-saved-team"), defaults: saved)   // the thread now saves medium
+        again.reopen()
+        try await wait("a second reopen keeps the work choice (\(lines(log).filter { $0.hasPrefix("resume-talk") }))") {
+            lines(log).filter { $0 == "resume-talk:medium:high" }.count == 2 && again.helperEffort == "high"
+        }
+        _ = try await CodexAppServer.shared.request("fixture/config-default", [:])
+        let native = isolatedDefaults(); native.set(true, forKey: CodexPetSession.legacyCheckedKey)
+        let fresh = CodexPetSession(workspace: dir.appendingPathComponent("pet-native"), defaults: native)
+        fresh.send("native default task")
+        try await wait("a new conversation with Codex's default model gets the split") {
+            lines(log).contains("start-model::medium") && lines(log).last { $0.hasPrefix("start-hint:") } == "start-hint:high"
+        }
+        CodexAppServer.shared.onNotification?("turn/completed", ["threadId": "fixture-thread", "turn": ["id": "fixture-turn", "status": "completed"]])
+        _ = try await CodexAppServer.shared.request("fixture/silent-reads", [:])
+        let quiet = isolatedDefaults(); quiet.set(true, forKey: CodexPetSession.legacyCheckedKey)
+        let unanswered = CodexPetSession(workspace: dir.appendingPathComponent("pet-quiet"), defaults: quiet)
+        let asked = Date()
+        unanswered.send("reads go unanswered")
+        try await wait("an open never waits long on the optional reads") { lines(log).contains("turn/start:reads go unanswered") }
+        assert(Date().timeIntervalSince(asked) < 4.5, "the reads give up after a few seconds")
+        let quietSaved = isolatedDefaults()
+        quietSaved.set("saved-team-thread", forKey: CodexPetSession.savedThreadKey); quietSaved.set(true, forKey: CodexPetSession.legacyCheckedKey)
+        let unread = CodexPetSession(workspace: dir.appendingPathComponent("pet-quiet-saved"), defaults: quietSaved)
+        let reopened = Date()
+        unread.reopen()
+        try await wait("a saved conversation opens though its read goes unanswered") { unread.shownModel != nil }
+        assert(Date().timeIntervalSince(reopened) < 4.5, "that read gives up after a few seconds too")
+        CodexAppServer.shared.stop()
+        try await Task.sleep(for: .milliseconds(50))
+
+        let session = CodexPetSession(workspace: dir.appendingPathComponent("pet-races"), defaults: isolatedDefaults())
+        session.playCue = { _ in }
+        session.muted = true
+        var inCall: Bool { session.voiceState == .live || session.voiceState == .speaking }
+        var utterances = 0
+        func on(_ thread: String, _ method: String, _ fields: [String: Any] = [:]) {
+            var p = fields; p["threadId"] = thread
+            CodexAppServer.shared.onNotification?(method, p)
+        }
+        func notify(_ method: String, _ fields: [String: Any] = [:]) { on("fixture-thread", method, fields) }
+        func heard(_ id: String, _ text: String, done: Bool = true) {
+            notify(done ? "thread/realtime/item/completed" : "thread/realtime/item/started",
+                   ["item": ["id": id, "type": "transcriptSegment", "role": "user", "text": done ? text : ""]])
+        }
+        func said(_ text: String) {
+            utterances += 1
+            let id = "r-said-\(utterances)"
+            heard(id, text, done: false)
+            notify("thread/realtime/item/transcript/delta", ["itemId": id, "delta": String(text.prefix { $0 != " " })])
+            heard(id, text)
+        }
+        func delegate(_ turn: String, _ asked: String, started: Bool = true) {
+            if started { notify("turn/started", ["turn": ["id": turn]]) }
+            notify("item/started", ["turnId": turn, "item": ["id": "u-\(turn)-\(asked.count)", "type": "userMessage",
+                   "content": [["type": "text", "text": "<realtime_delegation>\n  <input>\(asked)</input>\n</realtime_delegation>"]]]])
+        }
+        func ask(_ turn: String, _ asked: String) { said(asked); delegate(turn, asked) }
+        func final(_ id: String, _ text: String) -> [String: Any] { ["id": id, "type": "agentMessage", "text": text, "phase": "final_answer"] }
+        func finish(_ turn: String, _ text: String? = nil) {
+            if let text { notify("item/completed", ["turnId": turn, "item": final("f-\(turn)", text)]) }
+            notify("turn/completed", ["turn": ["id": turn, "status": "completed", "items": text.map { [final("f-\(turn)", $0)] } ?? []]])
+        }
+        func spawn(_ turn: String, _ child: String) {
+            let item: [String: Any] = ["type": "subAgentActivity", "id": "spawn-\(child)", "kind": "started", "agentThreadId": child, "agentPath": "/root/\(child)"]
+            notify("item/started", ["turnId": turn, "item": item]); notify("item/completed", ["turnId": turn, "item": item])
+        }
+        func childStarts(_ child: String, _ turn: String) { on(child, "turn/started", ["turn": ["id": turn]]) }
+        func childEnds(_ child: String, _ turn: String, _ status: String = "completed", _ text: String? = "Done.") {
+            on(child, "turn/completed", ["turn": ["id": turn, "status": status, "items": text.map { [final("cf-\(turn)", $0)] } ?? []]])
+        }
+        func spoken() -> [String] { lines(log).filter { $0.hasPrefix("speech:") }.map { String($0.dropFirst(7)) } }
+        func reportCount() -> Int { lines(log).filter { $0.hasPrefix("report:") }.count }
+        func interrupts(_ prefix: String) -> Int { lines(log).filter { $0.hasPrefix(prefix) }.count }
+        func settle() async throws { try await Task.sleep(for: .milliseconds(150)) }
+        func reported(_ text: String) async throws -> String {   // the next report starts; finish it with this text
+            let before = reportCount()
+            try await wait("a report starts (\(reportCount()))") { reportCount() > before }
+            let turn = "report-\(reportCount())"
+            finish(turn, text)
+            try await settle()
+            return turn
+        }
+        func liveCall() async throws {
+            try await Task.sleep(for: .milliseconds(300))   // the fake reuses thread ids: an old call's close lands first
+            session.startVoice()
+            try await wait("a call goes live (\(session.voiceState))") { inCall }
+        }
+        try await liveCall()
+
+        // 1. Asked in call A (its words not yet bound), the helper registered during call B, a B question in the
+        // same turn: A's helper never speaks in B.
+        heard("a-pending", "", done: false)
+        delegate("origin-a", "Original build request")
+        session.stopVoice(); try await liveCall()
+        spawn("origin-a", "helper-a"); childStarts("helper-a", "a-work")
+        said("Question from call B"); delegate("origin-a", "Question from call B", started: false)
+        finish("origin-a")
+        childEnds("helper-a", "a-work", "completed", "Old A job finished.")
+        var before = spoken().count
+        _ = try await reported("Old job from call A finished.")
+        assert(spoken().count == before, "a helper never borrows a later call (got \(spoken()))")
+
+        // 2. A helper started for a voice request keeps its owner when typed input joins the turn; one started
+        // after the typed input is chat only.
+        ask("mixed", "Initial spoken question")
+        spawn("mixed", "helper-voice"); childStarts("helper-voice", "v-work")
+        session.send("Typed background job")
+        try await wait("the typed message goes out") { lines(log).contains("turn/start:Typed background job") }
+        spawn("mixed", "helper-typed"); childStarts("helper-typed", "t-work")
+        finish("mixed"); finish("fixture-turn")
+        childEnds("helper-typed", "t-work", "completed", "Typed job finished.")
+        before = spoken().count
+        _ = try await reported("Typed-only job result.")
+        assert(spoken().count == before, "a helper started after typed input joined is chat only (got \(spoken()))")
+        said("Unrelated question")   // a newer input never silences the separate report path
+        childEnds("helper-voice", "v-work", "completed", "Voice job finished.")
+        _ = try await reported("The voice job is done.")
+        try await wait("a helper started before the typed input keeps its voice owner (\(spoken()))") { spoken().last == "The voice job is done." }
+
+        // 3. A report Codex accepts after Stop, or after New conversation, is interrupted, and never shown or requeued.
+        ask("held", "Build something"); spawn("held", "helper-held"); childStarts("helper-held", "h-work"); finish("held")
+        _ = try await CodexAppServer.shared.request("fixture/hold-next-report", [:])
+        var stopsBefore = interrupts("turn/interrupt")
+        childEnds("helper-held", "h-work", "completed", "Held build finished.")
+        try await wait("its report goes out, the reply held") { reportCount() == 4 }
+        session.interrupt()
+        try await wait("the report accepted after Stop is interrupted (\(interrupts("turn/interrupt") - stopsBefore))") { interrupts("turn/interrupt") > stopsBefore }
+        try await settle()
+        assert(reportCount() == 4 && !session.messages.contains { $0.caption == "Helper result" && $0.text.contains("Held") }, "never shown or requeued")
+        ask("held2", "Build another"); spawn("held2", "helper-held2"); childStarts("helper-held2", "h2-work"); finish("held2")
+        _ = try await CodexAppServer.shared.request("fixture/hold-next-report", [:])
+        stopsBefore = interrupts("turn/interrupt")
+        childEnds("helper-held2", "h2-work", "completed", "Second held build finished.")
+        try await wait("the next report goes out, the reply held (\(reportCount()))") { reportCount() >= 5 }
+        session.clear()
+        try await wait("the report accepted after New conversation is interrupted") { interrupts("turn/interrupt") > stopsBefore }
+
+        // 4. A helper the old conversation's interrupted turn starts, reported after New conversation, is stopped,
+        // whether its own turn starts before or after it's registered.
+        try await liveCall()
+        ask("late-parent", "Build a file")
+        session.clear()
+        spawn("late-parent", "helper-late"); childStarts("helper-late", "late-work")
+        childStarts("helper-early", "early-work"); spawn("late-parent", "helper-early")
+        try await wait("late helpers of the old conversation are stopped") {
+            lines(log).contains("interrupt-helper:helper-late:late-work") && lines(log).contains("interrupt-helper:helper-early:early-work")
+        }
+        assert(session.helpersWorking == 0, "they never count in the new conversation")
+
+        // 5. A known helper's later turn: Stop and New conversation stop it, confirmed by its own end; one that
+        // completes before the interrupt lands isn't called stopped.
+        try await liveCall()
+        ask("follow", "Build a file"); spawn("follow", "helper-follow"); childStarts("helper-follow", "first"); finish("follow")
+        childEnds("helper-follow", "first", "completed", "First task finished.")
+        _ = try await reported("First task reported.")
+        childStarts("helper-follow", "second")
+        try await wait("its later turn counts as working") { session.helpersWorking == 1 }
+        session.interrupt()
+        try await wait("Stop stops the later turn") { lines(log).contains("interrupt-helper:helper-follow:second") }
+        try await wait("confirmed by its own end") { session.messages.contains { $0.text == "Stopped helper helper-follow." } }
+        childStarts("helper-follow", "third")
+        session.interrupt()
+        childEnds("helper-follow", "third", "completed", "Third finished first.")   // beats the interrupt's own end
+        try await settle()
+        assert(!session.messages.contains { $0.text.contains("helper-follow") && $0.text.hasPrefix("Stopped") && $0.text != "Stopped helper helper-follow." }
+               && session.messages.filter { $0.text == "Stopped helper helper-follow." }.count == 1, "work that completed isn't called stopped")
+        childStarts("helper-follow", "fourth")
+        session.clear()
+        try await wait("New conversation stops a later turn too") { lines(log).contains("interrupt-helper:helper-follow:fourth") }
+        try await wait("confirmed in the new card") { session.messages.contains { $0.text == "Stopped helper helper-follow from the previous conversation. (This note isn't saved.)" } }
+        session.stopVoice()
+
+        // A known helper's later turn: an old repeated end never consumes its Stop's confirmation.
+        try await liveCall()
+        ask("again", "Build a page"); spawn("again", "helper-repeat"); childStarts("helper-repeat", "r-first"); finish("again")
+        childEnds("helper-repeat", "r-first", "completed", "First finished.")
+        _ = try await reported("First reported.")
+        childStarts("helper-repeat", "r-second")
+        session.interrupt()
+        childEnds("helper-repeat", "r-first", "completed", "First finished.")   // the old end, repeated
+        try await wait("the later turn's own end still confirms the stop") { session.messages.contains { $0.text == "Stopped helper helper-repeat." } }
+        try await settle()
+        assert(session.messages.filter { $0.text == "Stopped helper helper-repeat." }.count == 1, "once")
+        session.stopVoice()
+
+        // Five New conversations in a row: the oldest conversation's late helper is still stopped.
+        CodexAppServer.shared.stop(); try await Task.sleep(for: .milliseconds(50)); try await CodexAppServer.shared.start()
+        let roots = CodexPetSession(workspace: dir.appendingPathComponent("pet-roots"), defaults: isolatedDefaults())
+        _ = try await CodexAppServer.shared.request("fixture/next-thread-id", ["id": "root-a"])
+        roots.send("first root")
+        try await wait("root A opens") { lines(log).contains("turn/start:first root") }
+        roots.clear()
+        _ = try await CodexAppServer.shared.request("fixture/next-thread-id", ["id": "root-b"])
+        roots.send("second root")
+        try await wait("root B opens") { lines(log).contains("turn/start:second root") }
+        roots.clear()
+        for extra in ["root-c", "root-d", "root-e"] {   // five conversations retired in all: none is forgotten
+            _ = try await CodexAppServer.shared.request("fixture/next-thread-id", ["id": extra])
+            roots.send("open " + extra)
+            try await wait("\(extra) opens") { lines(log).contains("turn/start:open " + extra) }
+            roots.clear()
+        }
+        let late: [String: Any] = ["type": "subAgentActivity", "id": "late-oldest", "kind": "started", "agentThreadId": "helper-oldest", "agentPath": "/root/oldest"]
+        on("helper-oldest-early", "turn/started", ["turn": ["id": "early-work"]])
+        on("root-a", "item/started", ["turnId": "fixture-turn", "item": late])
+        on("root-a", "item/started", ["turnId": "fixture-turn", "item": ["type": "subAgentActivity", "id": "late-early", "kind": "started", "agentThreadId": "helper-oldest-early", "agentPath": "/root/early"]])
+        on("helper-oldest", "turn/started", ["turn": ["id": "oldest-work"]])
+        try await wait("the oldest root's late helpers are stopped, whichever comes first") {
+            lines(log).contains("interrupt-helper:helper-oldest:oldest-work") && lines(log).contains("interrupt-helper:helper-oldest-early:early-work")
+        }
+
+        // The model is only known once opened (a default with an effort but no model): the pet is lowered then, and
+        // only proven settings count as the split.
+        CodexAppServer.shared.stop(); try await Task.sleep(for: .milliseconds(50)); try await CodexAppServer.shared.start()
+        _ = try await CodexAppServer.shared.request("fixture/start-model", ["model": "team-model"])
+        _ = try await CodexAppServer.shared.request("fixture/team-default-effort", ["effort": "high"])   // native config's high survives an open without an explicit override
+        _ = try await CodexAppServer.shared.request("fixture/catalog", ["mode": "none"])   // no unique default: the model is still learned after open
+        _ = try await CodexAppServer.shared.request("fixture/config-script", ["replies": [["config": ["model_reasoning_effort": "high"]]]])
+        let modelless = CodexPetSession(workspace: dir.appendingPathComponent("pet-modelless"), defaults: isolatedDefaults())
+        modelless.send("effort but no model")
+        try await wait("lowered once the model is known (\(lines(log).suffix(3)))") {
+            lines(log).contains("settings::medium") && modelless.effort == "medium" && modelless.helperEffort == "high"
+        }
+        CodexAppServer.shared.onNotification?("turn/completed", ["threadId": "fixture-thread", "turn": ["id": "fixture-turn", "status": "completed"]])
+
+        // A canceled open's late read, or a late start reply from before New conversation, never sets the new
+        // conversation's helper effort.
+        CodexAppServer.shared.stop(); try await Task.sleep(for: .milliseconds(50)); try await CodexAppServer.shared.start()
+        _ = try await CodexAppServer.shared.request("fixture/start-model", ["model": "team-model"])
+        _ = try await CodexAppServer.shared.request("fixture/config-script", ["replies": [["delay": 300, "config": ["model": "team-model", "model_reasoning_effort": "high"]]]])
+        let raced = CodexPetSession(workspace: dir.appendingPathComponent("pet-raced"), defaults: isolatedDefaults())
+        raced.muted = true; raced.playCue = { _ in }
+        let readsBefore = lines(log).filter { $0 == "config-read" }.count
+        raced.startVoice()
+        try await wait("the first open waits on its read") { lines(log).filter { $0 == "config-read" }.count > readsBefore }
+        raced.clear()
+        raced.chooseWork(model: "team-model", effort: "low")
+        try await wait("the new pick is kept") { raced.preferredEffort == "low" }
+        _ = try await CodexAppServer.shared.request("fixture/start-delay", ["ms": 600])
+        raced.send("new low open")
+        try await wait("the new conversation opens") { lines(log).contains("turn/start:new low open") }
+        assert(raced.helperEffort == nil && raced.effort == "low" && lines(log).last { $0.hasPrefix("start-hint:") } == "start-hint:low", "only the current open's choice applies (got \(raced.helperEffort ?? "nil"))")
+        CodexAppServer.shared.onNotification?("turn/completed", ["threadId": "fixture-thread", "turn": ["id": "fixture-turn", "status": "completed"]])
+        _ = try await CodexAppServer.shared.request("fixture/start-delay", ["ms": 400])
+        raced.send("old open")   // a fresh conversation whose start reply comes late
+        try await Task.sleep(for: .milliseconds(100))
+        raced.clear()
+        raced.chooseWork(model: "team-model", effort: "medium")   // medium itself: no split
+        try await Task.sleep(for: .milliseconds(600))
+        assert(raced.helperEffort == nil, "a start reply from before New conversation applies nothing (got \(raced.helperEffort ?? "nil"))")
+        print("Helper race checks passed: owner from the call that asked, typed input joining a voice turn, reports accepted after Stop or New conversation, late helpers after New conversation, later helper turns stopped, effort split without the model menu")
+    }
+
+    /// Independent event-order regressions. --audit-case <name> runs one with the same fake transports.
+    @MainActor
+    static func checkAuditFixes(in dir: URL) async throws {
+        let cases = ["stop-before-ack", "stop-report-before-ack", "stop-retry", "stale-stop-failure", "settled-stop-failure", "stop-report-completed", "stop-report-interrupted",
+                     "early-queue", "typed-report-supersede", "early-commentary", "stopped-early-items", "stopped-report-late-items",
+                     "missing-effort-low", "missing-effort-high", "deferred-model", "compatible-model", "deferred-resume", "pending-medium", "pending-from-medium", "refused-split",
+                     "default-low", "default-high", "default-hidden", "default-read-failed", "default-read-malformed", "default-ambiguous", "default-missing", "default-saved-thread", "default-model-mismatch", "default-server-restart", "default-unsupported-effort", "default-missing-effort",
+                     "default-wrong-model", "default-wrong-effort", "default-absent", "default-thread-wrong-model", "default-thread-wrong-effort", "default-thread-null", "default-thread-absent",
+                     "default-known-model-failed", "default-known-model-malformed", "default-known-effort-malformed", "default-thread-known-model-failed"]
+        let option = CommandLine.arguments.firstIndex(of: "--audit-case")
+        let selected = option.flatMap { $0 + 1 < CommandLine.arguments.count ? CommandLine.arguments[$0 + 1] : nil }
+        assert(option == nil || selected == "all" || cases.contains(selected ?? ""), "--audit-case needs a known case or all")
+        for name in cases where selected == nil || selected == "all" || selected == name {
+            CodexAppServer.shared.stop()
+            try await Task.sleep(for: .milliseconds(50))
+            let log = dir.appendingPathComponent("audit-\(name).log")
+            setenv("PULSE_CHECK_LOG", log.path, 1)
+            let saved = isolatedDefaults()
+            if name == "pending-from-medium" { saved.set("medium", forKey: CodexPetSession.workEffortKey) }
+            if name == "default-saved-thread" || name.hasPrefix("default-thread-") {
+                saved.set(name == "default-thread-known-model-failed" ? "saved-team-thread" : "saved-thread", forKey: CodexPetSession.savedThreadKey)
+            }
+            if ["default-known-model-failed", "default-known-model-malformed", "default-thread-known-model-failed"].contains(name) { saved.set("team-model", forKey: CodexPetSession.workModelKey) }
+            if name == "default-known-effort-malformed" { saved.set("high", forKey: CodexPetSession.workEffortKey) }
+            let session = CodexPetSession(workspace: dir.appendingPathComponent("pet-audit-\(name)"), defaults: saved)
+            session.playCue = { _ in }; session.muted = true
+            let server = CodexAppServer.shared
+            try await server.start()
+            func fixture(_ method: String, _ fields: [String: Any] = [:]) async throws {
+                _ = try await server.request("fixture/" + method, fields)
+            }
+            func on(_ thread: String, _ method: String, _ fields: [String: Any] = [:]) {
+                var p = fields; p["threadId"] = thread
+                server.onNotification?(method, p)
+            }
+            func notify(_ method: String, _ fields: [String: Any] = [:]) { on("fixture-thread", method, fields) }
+            func final(_ id: String, _ text: String) -> [String: Any] { ["id": id, "type": "agentMessage", "text": text, "phase": "final_answer"] }
+            func ask(_ turn: String) {
+                notify("thread/realtime/item/completed", ["item": ["id": "said-" + turn, "type": "transcriptSegment", "role": "user", "text": turn]])
+                notify("turn/started", ["turn": ["id": turn]])
+                notify("item/started", ["turnId": turn, "item": ["id": "ask-" + turn, "type": "userMessage",
+                       "content": [["type": "text", "text": "<realtime_delegation>\n<input>\(turn)</input>\n</realtime_delegation>"]]]])
+            }
+            func finish(_ turn: String, _ text: String? = nil, status: String = "completed") {
+                if let text { notify("item/completed", ["turnId": turn, "item": final("f-" + turn, text)]) }
+                notify("turn/completed", ["turn": ["id": turn, "status": status, "items": text.map { [final("f-" + turn, $0)] } ?? []]])
+            }
+            func spawn(_ turn: String, _ child: String) {
+                notify("item/started", ["turnId": turn, "item": ["type": "subAgentActivity", "id": "spawn-" + child,
+                       "kind": "started", "agentThreadId": child, "agentPath": "/root/" + child]])
+            }
+            func childStarts(_ child: String, _ turn: String) { on(child, "turn/started", ["turn": ["id": turn]]) }
+            func childEnds(_ child: String, _ turn: String, status: String = "completed") {
+                on(child, "turn/completed", ["turn": ["id": turn, "status": status, "items": [final("f-" + turn, "Background result.")]]])
+            }
+            func count(_ prefix: String) -> Int { lines(log).filter { $0.hasPrefix(prefix) }.count }
+            func reports() -> Int { count("report:") }
+            func spoken() -> [String] { lines(log).filter { $0.hasPrefix("speech:") }.map { String($0.dropFirst(7)) } }
+            func settle() async throws { try await Task.sleep(for: .milliseconds(150)) }
+            func startJob() {
+                ask("voice-job"); spawn("voice-job", "helper-voice"); childStarts("helper-voice", "voice-work"); finish("voice-job")
+                childEnds("helper-voice", "voice-work")
+            }
+            func waitForReport(_ number: Int) async throws {
+                try await wait("\(name): report \(number) starts, got \(reports())") { reports() == number && session.thinking }
+                try await settle()   // the normal fake replies immediately; allow its main-actor acknowledgment to settle
+            }
+
+            // The owner approved medium as a cap; a lower work choice stays lower.
+            let switchingModel = ["deferred-model", "compatible-model", "deferred-resume"].contains(name)
+            if ["missing-effort-low", "missing-effort-high", "pending-medium", "pending-from-medium", "refused-split"].contains(name) || switchingModel {
+                let known = name != "refused-split"
+                let work = switchingModel ? "ultra" : name == "pending-from-medium" ? "medium" : name == "missing-effort-low" ? "low" : "high"
+                if switchingModel { try await fixture("model-switching") }
+                if name == "deferred-resume" { try await fixture("next-thread-id", ["id": "saved-team-thread"]) }
+                try await fixture("team-default-effort", ["effort": work])
+                try await fixture("start-model", ["model": "team-model"])
+                var config: [String: Any] = known ? ["model": "team-model"] : [:]
+                if switchingModel || name == "pending-medium" || name == "pending-from-medium" { config["model_reasoning_effort"] = work }
+                if name == "refused-split" {
+                    config["model_reasoning_effort"] = "high"
+                    try await fixture("refuse-effort-update")
+                    try await fixture("catalog", ["mode": "none"])   // keep this a post-open split, not a resolved-default start
+                }
+                try await fixture("config-script", ["replies": [["config": config]]])
+            }
+            if name.hasPrefix("default-") {
+                try await fixture("team-default-effort", ["effort": "high"])
+                try await fixture("start-model", ["model": "team-model"])
+                if name != "default-low" {
+                    let mode = name == "default-hidden" ? "hidden" : name == "default-ambiguous" ? "ambiguous" : name == "default-missing" ? "none" : name == "default-unsupported-effort" ? "unsupported-effort" : name == "default-missing-effort" ? "missing-effort" : "team"
+                    try await fixture("catalog", ["mode": mode])
+                }
+                var reply: [String: Any] = ["config": ["model": NSNull(), "model_reasoning_effort": NSNull()]]
+                if name == "default-read-failed" || name == "default-known-model-failed" { reply = ["error": "fixture config read failed"] }
+                if name == "default-read-malformed" { reply = ["malformed": true] }
+                if ["default-wrong-model", "default-known-model-malformed", "default-known-effort-malformed"].contains(name) { reply = ["config": ["model": 123, "model_reasoning_effort": "high"]] }
+                if name == "default-wrong-effort" { reply = ["config": ["model": "team-model", "model_reasoning_effort": false]] }
+                if name == "default-absent" { reply = ["config": [String: Any]()] }
+                try await fixture("config-script", ["replies": [reply]])
+                if name.hasPrefix("default-thread-") {
+                    var thread: [String: Any] = ["model": NSNull(), "reasoningEffort": NSNull()]
+                    if name == "default-thread-wrong-model" { thread = ["model": 123, "reasoningEffort": "high"] }
+                    if name == "default-thread-wrong-effort" { thread = ["model": "team-model", "reasoningEffort": false] }
+                    if name == "default-thread-absent" { thread = [:] }
+                    let response: [String: Any] = name == "default-thread-known-model-failed" ? ["error": "fixture thread read failed"] : ["thread": thread]
+                    try await fixture("thread-script", ["replies": [response]])
+                }
+                if name == "default-model-mismatch" {
+                    try await fixture("model-switching")
+                    try await fixture("opened-model", ["model": "compatible-team", "effort": "high"])
+                }
+            }
+            session.startVoice()
+            try await wait("\(name): fake call goes live (\(session.status ?? "no error"))") { session.voiceState == .live || session.voiceState == .speaking }
+
+            switch name {
+            case "stop-before-ack", "stop-report-before-ack":
+                let parent: String
+                if name == "stop-before-ack" {
+                    session.send("slow acknowledgement")
+                    try await wait("typed request is in flight") { lines(log).contains("turn/start:slow acknowledgement") }
+                    parent = "fixture-turn"
+                } else {
+                    try await fixture("hold-next-report")
+                    startJob()
+                    try await wait("report request is in flight") { reports() == 1 }
+                    parent = "report-1"
+                }
+                session.interrupt()
+                spawn(parent, "helper-between"); childStarts("helper-between", "between-work")
+                try await wait("\(name): accepted parent interrupted") { count("turn/interrupt") > 0 }
+                spawn(parent, "helper-later"); childStarts("helper-later", "later-work")
+                try await wait("\(name): helpers before and after acknowledgment are interrupted") {
+                    lines(log).contains("interrupt-helper:helper-between:between-work") && lines(log).contains("interrupt-helper:helper-later:later-work")
+                }
+                try await wait("both canceled helpers settle") { session.helpersWorking == 0 }
+
+            case "stop-retry":
+                ask("retry-job"); spawn("retry-job", "helper-retry"); childStarts("helper-retry", "retry-work"); finish("retry-job")
+                try await fixture("helper-interrupt-error", ["threadId": "helper-retry"])
+                session.interrupt()
+                try await wait("first helper interrupt failed visibly") { session.status?.contains("Couldn't stop helper") == true }
+                session.interrupt()
+                try await wait("stop-retry: second Stop retries the same live helper") { count("interrupt-helper:helper-retry:retry-work") == 2 }
+                try await wait("retry confirmed by helper end") { session.helpersWorking == 0 }
+                ask("ended-job"); spawn("ended-job", "helper-ended"); childStarts("helper-ended", "ended-work"); finish("ended-job")
+                session.interrupt()
+                try await wait("no-active-turn reply arrives") { count("interrupt-helper:helper-ended:ended-work") == 1 }
+                try await settle(); session.interrupt(); try await settle()
+                assert(count("interrupt-helper:helper-ended:ended-work") == 1, "no active turn is reconciled by its end, never retried")
+                childEnds("helper-ended", "ended-work", status: "interrupted")
+                assert(session.helpersWorking == 0 && session.messages.filter { $0.text == "Stopped helper helper-ended." }.count == 1)
+
+            case "stale-stop-failure":
+                ask("old-job"); spawn("old-job", "helper-stale"); childStarts("helper-stale", "old-work"); finish("old-job")
+                try await fixture("helper-interrupt-error", ["threadId": "helper-stale", "hold": true])
+                session.interrupt()
+                try await wait("old helper interrupt is in flight") { count("interrupt-helper:helper-stale:old-work") == 1 }
+                session.clear()
+                try await fixture("next-thread-id", ["id": "new-status-thread"])
+                session.send("New conversation status probe")
+                try await wait("new conversation has opened and sent its input") { lines(log).contains("turn/start:New conversation status probe") }
+                try await settle()
+                on("new-status-thread", "error", ["willRetry": true, "error": ["message": "New conversation is retrying."]])
+                assert(session.status == "New conversation is retrying.", "the new conversation owns its status before the old failure")
+                let newStatus = session.status
+                try await fixture("release-helper-error", ["threadId": "helper-stale"])
+                try await settle()   // release has written the response; let the main-actor catch process it
+                assert(session.status == newStatus, "stale-stop-failure: an old helper's failed interrupt cannot overwrite the new conversation's status")
+
+            case "settled-stop-failure":
+                ask("settled-job"); spawn("settled-job", "helper-settled"); childStarts("helper-settled", "settled-work"); finish("settled-job")
+                try await fixture("helper-interrupt-error", ["threadId": "helper-settled", "hold": true])
+                session.interrupt()
+                try await wait("settled helper interrupt is in flight") { count("interrupt-helper:helper-settled:settled-work") == 1 }
+                childEnds("helper-settled", "settled-work", status: "interrupted")
+                assert(session.helpersWorking == 0 && session.messages.filter { $0.text == "Stopped helper helper-settled." }.count == 1, "the helper's own end settles Stop before its failed reply")
+                assert(session.status == nil, "settled helper has no stop error before the old reply")
+                try await fixture("release-helper-error", ["threadId": "helper-settled"])
+                try await settle()   // the released failure must reach the main-actor catch after the helper's end
+                assert(session.status == nil, "settled-stop-failure: an already-ended helper's late interrupt failure cannot replace its settled status")
+                assert(session.helpersWorking == 0 && session.messages.filter { $0.text == "Stopped helper helper-settled." }.count == 1, "the late failure leaves the helper settled exactly once")
+
+            case "stop-report-completed":
+                startJob(); try await waitForReport(1)
+                try await fixture("hold-interrupt", ["turnId": "report-1"])
+                session.interrupt()
+                finish("report-1", "Completed report after Stop.")
+                try await settle()
+                assert(!spoken().contains("Completed report after Stop."), "stop-report-completed: Stop suppresses report speech even if completion wins")
+                let shown = session.messages.filter { $0.text == "Completed report after Stop." }
+                assert(shown.count == 1 && shown[0].caption == "Helper result", "a completed stopped report stays shown once and captioned")
+                ask("next-question"); finish("next-question"); try await settle()
+                assert(reports() == 1, "a completed stopped report counts as reported")
+
+            case "stop-report-interrupted":
+                startJob(); try await waitForReport(1)
+                for attempt in 1...3 {
+                    session.interrupt()
+                    try await wait("stopped report ends interrupted") { !session.thinking }
+                    try await settle()
+                    assert(reports() == attempt && spoken().isEmpty, "stopped interrupted reports stay held and silent")
+                    ask("resume-\(attempt)"); finish("resume-\(attempt)")
+                    try await waitForReport(attempt + 1)
+                }
+                finish("report-4", "Result after three Stops.")
+                try await wait("stop-report-interrupted: Stop never spends the report retry budget") { spoken() == ["Result after three Stops."] }
+
+            case "early-queue":
+                ask("voice-job"); spawn("voice-job", "helper-voice"); childStarts("helper-voice", "voice-work"); finish("voice-job")
+                notify("turn/started", ["turn": ["id": "typed-job"]])
+                spawn("typed-job", "helper-typed"); childStarts("helper-typed", "typed-work")
+                childEnds("helper-voice", "voice-work"); childEnds("helper-typed", "typed-work")
+                try await fixture("report-before-reply", ["delay": 100, "end": true])
+                finish("typed-job")
+                try await wait("early report result speaks") { spoken().contains("Early report result.") }
+                try await waitForReport(2)
+                finish("report-2", "Typed result.")
+                try await settle()
+                assert(!spoken().contains("Typed result."), "the second batch keeps its typed ownership")
+
+            case "typed-report-supersede":
+                session.send("Typed background task")
+                try await wait("typed task starts") { lines(log).contains("turn/start:Typed background task") }
+                try await settle()
+                spawn("fixture-turn", "helper-typed"); childStarts("helper-typed", "typed-work"); finish("fixture-turn")
+                childEnds("helper-typed", "typed-work"); try await waitForReport(1)
+                for attempt in 1...3 {
+                    try await fixture("join-next-turn", ["turnId": "report-\(attempt)"])
+                    session.send("Foreground question \(attempt)")
+                    try await wait("foreground question reaches the same report turn") { lines(log).contains("turn/start:Foreground question \(attempt)") }
+                    try await settle()
+                    finish("report-\(attempt)", "Foreground-only answer \(attempt).")
+                    if attempt < 3 { try await waitForReport(attempt + 1) }
+                }
+                try await settle()
+                assert(reports() == 3 && !session.thinking, "typed-report-supersede: at most three tries, with one retry charged per supersession")
+                assert(spoken().isEmpty, "typed reports never acquire voice ownership")
+
+            case "early-commentary", "stopped-early-items", "stopped-report-late-items":
+                let canceled = name != "early-commentary"
+                try await fixture("report-before-reply", ["delay": 250, "end": !canceled, "items": true, "other": true])
+                startJob()
+                try await wait("report items emitted before acknowledgment") { lines(log).contains("report-items:report-1") }
+                try await Task.sleep(for: .milliseconds(30))
+                assert(!session.messages.contains { $0.text.contains("PRIVATE REPORT COMMENTARY") }, "\(name): pending report commentary never becomes visible")
+                if canceled {
+                    session.interrupt()
+                    try await wait("canceled pending report accepted and interrupted") { lines(log).contains("report-reply:report-1") && count("turn/interrupt") > 0 }
+                    try await settle()
+                    assert(!session.messages.contains { $0.text.contains("PRIVATE REPORT COMMENTARY") || $0.text == "Early report result." }, "Stop before acknowledgment drops every accepted report item, regardless of caption")
+                    assert(spoken().isEmpty)
+                    if name == "stopped-report-late-items" {
+                        // The accepted report ID stays canceled after its buffered items and interrupted end settle.
+                        notify("item/agentMessage/delta", ["turnId": "report-1", "itemId": "late-private", "delta": "LATE STOPPED REPORT COMMENTARY"])
+                        assert(!session.messages.contains { $0.text.contains("LATE STOPPED REPORT") }, "stopped-report-late-items: a late canceled-report delta never appears transiently")
+                        notify("item/completed", ["turnId": "report-1", "item": ["id": "late-private", "type": "agentMessage", "text": "LATE STOPPED REPORT COMMENTARY", "phase": "commentary"]])
+                        notify("item/completed", ["turnId": "report-1", "item": final("late-final", "Late stopped report final.")])
+                        assert(!session.messages.contains { $0.text.contains("LATE STOPPED REPORT") || $0.text.hasPrefix("Late stopped report") }, "stopped-report-late-items: late canceled-report completed items stay hidden")
+                        finish("report-1", "Late stopped report snapshot.")
+                        notify("item/agentMessage/delta", ["turnId": "other-late", "itemId": "other-late-final", "delta": "Unrelated late turn"])
+                        assert(session.messages.contains { $0.text == "Unrelated late turn" && $0.caption == nil }, "canceling a report preserves unrelated late streaming text")
+                        notify("item/completed", ["turnId": "other-late", "item": final("other-late-final", "Unrelated late turn text.")])
+                        try await settle()
+                        assert(!session.messages.contains { $0.text.contains("LATE STOPPED REPORT") || $0.text.hasPrefix("Late stopped report") },
+                               "stopped-report-late-items: commentary and finals after a canceled start acknowledgment stay hidden")
+                        assert(spoken().isEmpty && reports() == 1, "a canceled pending report stays silent and held after late items or a late completion snapshot")
+                        assert(session.messages.contains { $0.text == "Unrelated late turn text." && $0.caption == nil }, "canceling one report preserves unrelated late turn display")
+                    }
+                } else {
+                    try await wait("early final is settled") { spoken().contains("Early report result.") }
+                    let shown = session.messages.filter { $0.text == "Early report result." }
+                    assert(shown.count == 1 && shown[0].caption == "Helper result", "early final is shown once through report filtering")
+                    assert(!session.messages.contains { $0.text.contains("PRIVATE REPORT COMMENTARY") })
+                }
+                assert(session.messages.contains { $0.text == "Other turn text." && $0.caption == nil }, "held items from an unrelated turn retain ordinary display")
+
+            case "missing-effort-low":
+                assert(lines(log).contains("start-hint:low"), "missing-effort-low: helper hint uses the selected model's default")
+                assert(lines(log).contains("start-model::") && !lines(log).contains("settings::medium"), "low work never raises the pet to medium")
+                assert(session.helperEffort == nil && session.effort == "low")
+            case "missing-effort-high":
+                assert(lines(log).contains("start-model::medium") && lines(log).contains("start-hint:high"), "missing-effort-high: high model default is split atomically")
+                assert(session.helperEffort == "high" && session.effort == "medium")
+            case "deferred-model", "deferred-resume":
+                assert(session.model == "team-model" && session.effort == "medium" && session.helperEffort == "ultra")
+                assert(lines(log).contains("start-hint:ultra"))
+                let settingsBefore = count("settings:")
+                session.chooseWork(model: "small-team", effort: "high")
+                try await wait("incompatible pick is kept for the next open") { session.preferredModel == "small-team" && !session.choosingWork }
+                assert(count("settings:") == settingsBefore, "deferred-model: an incompatible pick sends no live settings update")
+                assert(session.model == "team-model" && session.effort == "medium" && session.helperEffort == "ultra", "the valid current model and frozen helper effort remain applied")
+                assert(session.pendingModel == "small-team" && session.pendingHelperEffort == "high" && session.chosenEffort == "high", "the header and chooser distinguish the requested pair from the applied pair")
+                assert(saved.string(forKey: CodexPetSession.workModelKey) == "small-team" && saved.string(forKey: CodexPetSession.workEffortKey) == "high", "the exact deferred pair survives restart")
+                assert(session.voiceState == .live || session.voiceState == .speaking, "deferral keeps the call running")
+                if name == "deferred-model" {
+                    session.clear()
+                    try await fixture("next-thread-id", ["id": "new-small-team"])
+                    session.send("Open the deferred model")
+                    try await wait("New conversation applies the deferred model") { session.model == "small-team" && session.effort == "medium" }
+                    assert(lines(log).last { $0.hasPrefix("start-model:") } == "start-model:small-team:medium" && lines(log).last { $0.hasPrefix("start-hint:") } == "start-hint:high", "the next start carries the selected model and exact helper effort together")
+                    assert(session.helperEffort == "high" && session.pendingModel == nil && session.pendingHelperEffort == nil)
+                } else {
+                    session.stopVoice(); server.stop()
+                    try await Task.sleep(for: .milliseconds(50))
+                    try await server.start()
+                    try await fixture("model-switching")
+                    let reopened = CodexPetSession(workspace: dir.appendingPathComponent("pet-audit-" + name), defaults: saved)
+                    reopened.reopen()
+                    try await wait("cold resume applies the saved deferred model") { reopened.model == "small-team" }
+                    assert(lines(log).contains("resume-model:small-team") && lines(log).contains("resume-talk:medium:high"), "deferred-resume: the cold resume request carries model, talk effort and helper hint")
+                    assert(reopened.effort == "medium" && reopened.helperEffort == "high" && reopened.pendingModel == nil && reopened.pendingHelperEffort == nil)
+                    assert(count("thread") == 1, "cold resume preserves the saved conversation instead of starting another")
+                }
+            case "compatible-model":
+                assert(session.helperEffort == "ultra")
+                session.chooseWork(model: "compatible-team", effort: "ultra")
+                try await wait("compatible choice switches live") { session.model == "compatible-team" && !session.choosingWork }
+                assert(lines(log).contains("settings:compatible-team:medium"), "compatible-model: a model supporting the frozen helper effort switches live")
+                assert(session.effort == "medium" && session.helperEffort == "ultra" && session.pendingModel == nil && session.pendingHelperEffort == nil)
+                assert(count("thread") == 1 && (session.voiceState == .live || session.voiceState == .speaking), "a compatible switch needs no new conversation or call")
+            case "pending-from-medium":
+                assert(lines(log).contains("start-hint:medium") && session.effort == "medium" && session.helperEffort == nil, "an equal medium hint needs no split badge")
+                assert(session.pendingHelperEffort == nil, "pending-from-medium: a stored medium pick matching its frozen hint is already applied, never pending")
+                session.chooseWork(model: "team-model", effort: "low")
+                try await wait("low choice changes the pet's own effort") { session.effort == "low" && !session.choosingWork }
+                assert(lines(log).contains("settings:team-model:low"))
+                assert(session.helperEffort == "medium" && session.pendingHelperEffort == "low", "pending-from-medium: the frozen medium hint stays visible while the next-open low choice is pending")
+            case "pending-medium":
+                assert(session.helperEffort == "high")
+                session.chooseWork(model: "team-model", effort: "medium")
+                try await wait("medium selection accepted") { session.preferredEffort == "medium" && !session.choosingWork }
+                assert(session.pendingHelperEffort == "medium" && session.helperEffort == "high", "pending-medium: the future medium choice stays visible beside applied high")
+            case "default-low":
+                assert(lines(log).contains("start-model:fixture-model:") && lines(log).contains("start-hint:low"), "default-low: a decoded both-null config pins the catalog default with its low hint and no effort override")
+                assert(session.model == "fixture-model" && session.helperEffort == nil)
+            case "default-high", "default-hidden", "default-server-restart", "default-absent":
+                assert(lines(log).contains("models:true:first") && lines(log).contains("models:true:catalog-page-2"), "default-high: includeHidden and every page are needed to find the actual default")
+                assert(session.workModels.first?.id == "fixture-model", "the first visible row is deliberately not the default")
+                assert(lines(log).contains("start-model:team-model:medium") && lines(log).contains("start-hint:high"), "default-high: the resolved model, medium talk effort and default high helper hint are sent together")
+                assert(session.model == "team-model" && session.effort == "medium" && session.helperEffort == "high")
+                if name == "default-hidden" { assert(!session.workModels.contains { $0.id == "team-model" }, "a hidden default can be applied without being offered in the chooser") }
+                if name == "default-server-restart" {
+                    let reads = count("models:")
+                    server.stop()
+                    try await wait("transport loss clears the old conversation connection") { session.status?.contains("reconnects") == true }
+                    session.clear()
+                    session.send("Use the replacement server's default")
+                    try await wait("the next server's catalog is loaded") { count("models:") > reads && session.model == "fixture-model" }
+                    assert(lines(log).last { $0.hasPrefix("start-model:") } == "start-model:fixture-model:" && lines(log).last { $0.hasPrefix("start-hint:") } == "start-hint:low", "the replacement server's different default replaces the stale cached one")
+                    assert(session.helperEffort == nil)
+                }
+            case "default-read-failed", "default-read-malformed", "default-ambiguous", "default-missing", "default-wrong-model", "default-wrong-effort":
+                assert(lines(log).contains("start-model::") && lines(log).contains("start-hint:"), "\(name): no default model or helper effort is invented without a decoded config and one catalog default")
+                assert(count("settings:") == 0 && session.helperEffort == nil, "unresolved defaults never become a post-open split")
+            case "default-known-model-failed", "default-known-model-malformed":
+                assert(lines(log).contains("start-model:team-model:") && lines(log).contains("start-hint:"), "\(name): preserve the owner's model, but an unknown read never invents its work effort")
+                assert(count("settings:") == 0 && session.effort == "high" && session.helperEffort == nil && session.preferredModel == "team-model")
+            case "default-known-effort-malformed":
+                assert(lines(log).contains("start-model::high") && lines(log).contains("start-hint:high"), "a malformed read never discards the independently valid owner's effort or guesses a model")
+                assert(session.preferredEffort == "high" && session.helperEffort == "high" && session.effort == "medium", "the owner's known effort can still split once the actual helper model opens")
+            case "default-thread-known-model-failed":
+                assert(lines(log).contains("read:saved-team-thread") && lines(log).contains("resume-model:team-model") && lines(log).contains("resume-talk:none:"), "a failed saved-thread read preserves the owner's model without substituting its default effort")
+                assert(count("thread") == 0 && count("settings:") == 0 && session.effort == "high" && session.helperEffort == nil)
+            case "default-saved-thread", "default-thread-wrong-model", "default-thread-wrong-effort", "default-thread-null", "default-thread-absent":
+                assert(lines(log).contains("read:saved-thread") && lines(log).contains("resume-model:") && lines(log).contains("resume-talk:none:"), "a saved conversation with unknown settings never borrows the fresh catalog default")
+                assert(count("thread") == 0 && count("config-read") == 0 && count("settings:") == 0 && session.helperEffort == nil)
+            case "default-unsupported-effort", "default-missing-effort":
+                assert(lines(log).contains("start-model:team-model:") && lines(log).contains("start-hint:"), "\(name): pin the resolved default model, but never invent or substitute an unusable derived effort")
+                assert(count("settings:") == 0 && session.helperEffort == nil && saved.string(forKey: CodexPetSession.threadWorkKey) == nil, "no lowering or saved split is derived from missing/unsupported default metadata")
+            case "default-model-mismatch":
+                assert(lines(log).contains("start-model:team-model:medium") && session.model == "compatible-team", "the fake deliberately reports a different helper-capable model than the pinned default")
+                assert(!lines(log).contains("settings::medium") && session.effort == "high", "default-model-mismatch: an unexpected opened model is never lowered after open")
+                assert(saved.string(forKey: CodexPetSession.threadWorkKey) == nil, "an unproven model/split never saves an applied work effort")
+            case "refused-split":
+                assert(lines(log).contains("settings::medium"), "post-open split was attempted")
+                assert(session.helperEffort == nil && session.effort == "high", "refused-split: a refused effort update never claims the split")
+                assert(saved.string(forKey: CodexPetSession.threadWorkKey) == nil, "an unproven split saves no thread work effort")
+            default: assertionFailure("unknown audit case")
+            }
+            if ["default-known-model-failed", "default-known-model-malformed", "default-thread-known-model-failed"].contains(name) {
+                assert(saved.string(forKey: CodexPetSession.workModelKey) == "team-model" && saved.string(forKey: CodexPetSession.workEffortKey) == nil, "unknown reads preserve the stored owner model and do not fill its absent effort")
+            }
+            if name == "default-known-effort-malformed" {
+                assert(saved.string(forKey: CodexPetSession.workEffortKey) == "high" && saved.string(forKey: CodexPetSession.workModelKey) == nil, "an unknown read preserves the stored owner effort without filling its absent model")
+            }
+            session.stopVoice(); server.stop()
+            try await Task.sleep(for: .milliseconds(50))
+            print("Audit regression passed: \(name)")
+        }
+    }
+
     @MainActor
     static func checkRecording(_ session: CodexPetSession) {
         var cues: [String] = []
@@ -698,6 +2005,7 @@ enum CodexSessionChecks {
         let count = session.messages.count
         send("thread/realtime/started")
         send("turn/started", ["turn": ["id": "voice-turn"]])
+        send("item/started", ["turnId": "voice-turn", "item": ["id": "u-voice", "type": "userMessage", "content": [["type": "text", "text": "<realtime_delegation>\n  <input>How are you?</input>\n</realtime_delegation>"]]]])
         send("thread/realtime/item/started", ["item": item("spoken", "assistant", "")])
         send("thread/realtime/item/transcript/delta", ["itemId": "spoken", "delta": "Doing great—"])
         send("thread/realtime/transcript/delta", ["role": "assistant", "delta": "Doing great—"])
@@ -713,16 +2021,17 @@ enum CodexSessionChecks {
         send("thread/realtime/item/completed", ["item": item("question", "user", "Where is Downloads?")])
         send("thread/realtime/item/completed", ["item": item("question", "user", "Where is Downloads?")])
         let bubbles = Array(session.messages.dropFirst(count))
-        assert(bubbles.map(\.text) == ["Doing great—ready whenever you are.", "Where is Downloads?"], "overlapping streams must retain two whole bubbles without legacy or background duplicates")
+        assert(bubbles.map(\.text) == ["Doing great—ready whenever you are.", "Where is Downloads?", "Background answer"] && bubbles.map(\.caption) == [nil, nil, "Work result"],
+               "overlapping streams retain two whole bubbles without legacy duplicates, and the delegated result shows once, as work")
         assert(bubbles.allSatisfy { !$0.live })
         let stableID = bubbles[0].id
         send("thread/realtime/item/completed", ["item": item("spoken", "assistant", "Doing great—ready whenever you are!")])
         assert(session.messages[count].id == stableID && session.messages[count].text.hasSuffix("!"), "final text must replace the same bubble")
         send("thread/realtime/closed")
         send("item/completed", ["turnId": "voice-turn", "item": ["id": "background", "type": "agentMessage", "text": "Background answer"]])
-        assert(session.messages.count == count + 2, "late delegated completion must not duplicate voice after closing")
+        assert(session.messages.count == count + 3 && session.messages.last?.caption == "Work result", "a repeated completion after closing updates the same result, keeping its mark")
         send("thread/realtime/item/completed", ["item": ["id": "promotion", "type": "bemItemPromoted", "turnId": "voice-turn", "itemId": "background", "presentation": ["type": "wholeItem"]]])
-        assert(session.messages.last?.text == "Background answer", "explicitly promoted results remain available")
+        assert(session.messages.count == count + 3, "a promotion adds nothing: the result already shows")
         send("turn/started", ["turn": ["id": "text-turn"]])
         send("item/agentMessage/delta", ["turnId": "text-turn", "itemId": "text-one", "delta": "First"])
         send("item/agentMessage/delta", ["turnId": "text-turn", "itemId": "text-two", "delta": "Second"])

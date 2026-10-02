@@ -1,4 +1,5 @@
 import Foundation
+import Carbon
 
 @main
 struct VoiceShortcutChecks {
@@ -10,8 +11,8 @@ struct VoiceShortcutChecks {
 
         check(gesture.keyDown(at: 1, voiceActive: false, muted: true) == .start, "a fresh press starts voice even after mute")
         check(gesture.keyUp(at: 1.1) == nil, "a short starting tap leaves continuous voice on")
-        check(gesture.keyDown(at: 2, voiceActive: true, muted: false) == nil, "pressing during a call must not end it before we know tap versus hold")
-        check(gesture.keyUp(at: 2.1) == .end, "a short tap ends an unmuted call")
+        check(gesture.keyDown(at: 2, voiceActive: true, muted: false) == nil, "pressing during a call leaves the microphone open until release")
+        check(gesture.keyUp(at: 2.1) == .mute, "a short tap pauses the microphone and keeps the call open")
 
         check(gesture.keyDown(at: 3, voiceActive: false, muted: false) == .start, "a held shortcut starts a call")
         check(gesture.keyUp(at: 4) == .mute, "release mutes capture instead of ending playback, even while connecting")
@@ -31,6 +32,11 @@ struct VoiceShortcutChecks {
         check(!gesture.cancel(), "cancelling an idle shortcut does not mute continuous voice")
         check(gesture.keyDown(at: 12, voiceActive: false, muted: true) == .start, "a new gesture works after cancellation")
         check(gesture.keyUp(at: 13) == .mute, "a new hold still mutes on release")
+        check(HotKeyCombo.voiceDefault.keyCode == UInt32(kVK_Space)
+              && HotKeyCombo.voiceDefault.carbonModifiers == UInt32(controlKey | optionKey), "the default is Control-Option-Space")
+        let custom = HotKeyCombo(keyCode: UInt32(kVK_ANSI_V), carbonModifiers: UInt32(cmdKey | optionKey), label: "⌘⌥V")
+        let restored = try! JSONDecoder().decode(HotKeyCombo.self, from: JSONEncoder().encode(custom))
+        check(restored == custom && restored != .voiceDefault, "a saved custom shortcut stays unchanged")
         print("Voice shortcut checks passed")
     }
 }

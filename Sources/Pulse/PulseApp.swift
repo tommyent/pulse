@@ -82,6 +82,20 @@ final class OverlayController {
         cancelVoiceKey()
         voiceKey = nil   // unregister before registering its replacement
         voiceKey = HotKey(combo)
+        if voiceKey == nil {
+            // Enter outside GCD's serial main queue so a modal cannot delay microphone mute.
+            RunLoop.main.perform(inModes: [.default]) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.voiceKey == nil, self.state.voiceHotKey == combo else { return }
+                    let alert = NSAlert()
+                    alert.messageText = "Voice shortcut unavailable"
+                    alert.informativeText = "Pulse couldn't register \(combo.label). Choose another shortcut in Settings → Codex voice. You can still use the waveform button to start or end a call."
+                    alert.addButton(withTitle: "OK")
+                    NSApp.activate(ignoringOtherApps: true)
+                    alert.runModal()
+                }
+            }
+        }
         voiceKey?.onPress = { [weak self] in
             guard let self else { return }
             let session = CodexPetSession.shared
@@ -106,7 +120,6 @@ final class OverlayController {
                 session.startVoice()
             }
         case .mute: session.muted = true
-        case .end: session.stopVoice()
         case nil: break
         }
     }

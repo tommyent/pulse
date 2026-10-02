@@ -11,7 +11,7 @@ final class AppState: ObservableObject {
         var lightMode: Bool?   // optional so old state.json still decodes
         var glassTint: Bool?   // nil = on: the white wash over light-mode glass
         var dock: DockEdge?
-        var voiceHotKey: HotKeyCombo?   // nil = default ⌘⌥V
+        var voiceHotKey: HotKeyCombo?   // nil = the default shortcut
     }
 
     var voiceHotKey: HotKeyCombo { persisted.voiceHotKey ?? .voiceDefault }

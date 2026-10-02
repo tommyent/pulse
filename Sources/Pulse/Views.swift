@@ -327,7 +327,8 @@ struct PetCard: View {
                 Button("Usage", action: showUsage).buttonStyle(.plain).font(.caption)
                     .foregroundStyle(Ink.secondary(scheme)).fixedSize()
                 Button { session.clear() } label: { Image(systemName: "square.and.pencil") }
-                    .buttonStyle(.plain).help("New conversation").accessibilityLabel("New conversation")
+                    .buttonStyle(.plain).help("New conversation: starts over and stops running helpers")
+                    .accessibilityLabel("New conversation").accessibilityHint("Starts over and stops running helpers")
             }
             .foregroundStyle(Ink.primary(scheme))
 
@@ -350,6 +351,11 @@ struct PetCard: View {
 
             transcript
 
+            if session.helpersWorking > 0 {
+                Label(session.helpersWorking == 1 ? "A helper is working" : "\(session.helpersWorking) helpers are working", systemImage: "person.2")
+                    .font(.caption).foregroundStyle(Ink.secondary(scheme))
+            }
+
             if session.microphonePaused {
                 Label("Microphone paused · voice still on", systemImage: "mic.slash.fill")
                     .font(.caption).foregroundStyle(Ink.secondary(scheme))
@@ -367,10 +373,12 @@ struct PetCard: View {
                     .onSubmit { submit() }
                     .padding(.horizontal, 10).padding(.vertical, 6)
                     .background(RoundedRectangle(cornerRadius: 10).fill(scheme == .dark ? Color(white: 0.14) : Color(white: 0.92)))
-                if session.thinking {
+                // Stop stays while helpers work, even with the pet free; Send stays then too, so talking goes on.
+                if session.thinking || session.helpersWorking > 0 {
                     Button { session.interrupt() } label: { Image(systemName: "stop.circle.fill") }
-                        .buttonStyle(.plain).help("Stop").accessibilityLabel("Stop")
-                } else {
+                        .buttonStyle(.plain).help("Stop work and helpers").accessibilityLabel("Stop work and helpers")
+                }
+                if !session.thinking {
                     Button { submit() } label: { Image(systemName: "arrow.up.circle.fill") }
                         .buttonStyle(.plain).help("Send").accessibilityLabel("Send")
                         .disabled(session.draft.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -470,7 +478,10 @@ struct PetCard: View {
     /// Model · folder · since when, as Codex reported them for the open conversation.
     /// Model · effort, as Codex reported them (or the saved choice before a conversation).
     private var workDetail: String? {
-        let parts = [session.shownModel, session.shownEffort].compactMap { $0 }
+        let parts = [session.shownModel, session.shownEffort.map { session.helperEffort != nil ? "talks at \($0)" : $0 },
+                     session.helperEffort.map { "helpers at \($0)" },
+                     session.pendingModel.map { "switches to \($0) from the next open" },
+                     session.pendingHelperEffort.map { "helpers at \($0) from the next open" }].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
@@ -489,7 +500,7 @@ struct PetCard: View {
                 ForEach(session.workModels) { work in
                     Menu(work.id == session.shownModel ? "✓ " + work.name : work.name) {
                         ForEach(work.efforts, id: \.self) { level in
-                            Button(work.id == session.shownModel && level == session.shownEffort ? "✓ " + level : level) {
+                            Button(work.id == session.shownModel && level == session.chosenEffort ? "✓ " + level : level) {
                                 session.chooseWork(model: work.id, effort: level)
                             }
                         }
@@ -501,7 +512,7 @@ struct PetCard: View {
         }
         .menuStyle(.borderlessButton)
         .disabled(session.choosingWork)
-        .help("Work model: \(detail). Choose the model and effort Codex works with; the voice doesn't change.")
+        .help("Work model: \(detail). Choose the model and effort Codex works with; the voice doesn't change. With helpers and an effort above medium, the pet talks at medium and helpers work at the effort you pick; a new helper effort, or a model that can't run the helpers' current effort, applies from the next conversation or Pulse restart.")
         .accessibilityLabel("Work model: \(detail)")
     }
 
@@ -823,7 +834,7 @@ struct SettingsView: View {
             }
             Section("Codex voice") {
                 LabeledContent("Shortcut") { HotKeyRecorder(combo: state.voiceHotKeyBinding) }
-                Text("Tap to start hands-free voice; while listening, tap again to end the call. Hold to talk and release to pause the microphone; the next press unmutes. Replies keep playing while paused. Escape ends the call and closes the card.")
+                Text("Tap to start hands-free voice; tap again to pause or resume the microphone. Hold to talk; letting go pauses the microphone while replies keep playing. The shortcut never ends a call: Escape ends it and closes the card.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Reset remembered approvals") { PetApprovals.shared.resetRemembered() }
                     .help("Ask again for future command and folder-access requests. Current task grants expire when that task ends.")
