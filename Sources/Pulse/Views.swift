@@ -110,8 +110,10 @@ private struct CodexPet: View {
         .url(forResource: "Resources/codex-pet", withExtension: "webp")
         .map(CodexPetSprite.frames(from:)) ?? [:]
 
-    /// The pet mirrors the session: waving while a voice call is live, waiting while Codex thinks.
+    /// The pet mirrors the session: waiting while Codex needs an answer (even mid-call) or thinks,
+    /// running while it speaks, waving while a voice call is live.
     private var state: CodexPetSprite.State {
+        if session.waitingOnYou { return .waiting }
         if session.voiceState == .speaking { return .running }
         if session.voiceState != .off { return .waving }
         return session.thinking ? .waiting : .idle
@@ -387,7 +389,10 @@ struct PetCard: View {
                         }
                         .id(m.id)
                     }
-                    if session.thinking, !(session.messages.last?.live ?? false) {
+                    if session.waitingOnYou {
+                        Label("Waiting for your answer in the Codex prompt", systemImage: "hand.raised")
+                            .font(.caption).foregroundStyle(Ink.secondary(scheme)).id("thinking")
+                    } else if session.thinking, !(session.messages.last?.live ?? false) {
                         HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Thinking…").font(.caption) }
                             .foregroundStyle(Ink.secondary(scheme)).id("thinking")
                     }

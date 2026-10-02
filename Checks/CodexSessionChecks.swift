@@ -36,6 +36,7 @@ enum CodexSessionChecks {
         const assert = require('node:assert/strict');
         const log = word => process.env.PULSE_CHECK_LOG && require('node:fs').appendFileSync(process.env.PULSE_CHECK_LOG, word + '\\n');
         log('spawn');
+        let dieNext = false, rejectNext = false;
         require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
           const m = JSON.parse(line);
           if (m.method === 'initialize') send({ id: m.id, result: {} });
@@ -97,11 +98,31 @@ enum CodexSessionChecks {
             send({method:'fixture/approved',params:{id:m.id}});
           }
           if (m.method === 'turn/start') {
-            send({ id: m.id, result: { turn: { id: 'fixture-turn' } } });
-            send({ method: 'turn/started', params: { threadId: 'fixture-thread', turn: { id: 'fixture-turn' } } });
-            send({ method: 'item/started', params: { threadId: 'fixture-thread', item: { id: 'fixture-item', type: 'reasoning' } } });
+            const text = m.params.input[0].text;
+            log('turn/start:' + text);
+            const accept = () => {
+              send({ id: m.id, result: { turn: { id: 'fixture-turn' } } });
+              send({ method: 'turn/started', params: { threadId: 'fixture-thread', turn: { id: 'fixture-turn' } } });
+              send({ method: 'item/started', params: { threadId: 'fixture-thread', item: { id: 'fixture-item', type: 'reasoning' } } });
+            };
+            if (text === 'slow acknowledgement') setTimeout(accept, 300); else accept();
+          }
+          if (m.method === 'fixture/die-next') { dieNext = true; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/reject-next') { rejectNext = true; send({ id: m.id, result: {} }); }
+          if (m.method === 'thread/realtime/start' && rejectNext) { rejectNext = false; log('realtime/rejected'); send({ id: m.id, error: { message: 'fixture rejection' } }); }
+          else if (m.method === 'thread/realtime/start') {
+            log('realtime/start');
+            send({ id: m.id, result: {} });
+            send({ method: 'thread/realtime/started', params: { threadId: m.params.threadId } });
+            send({ method: 'thread/realtime/sdp', params: { threadId: m.params.threadId, sdp: dieNext ? 'die-after-devices' : 'fixture-answer' } });
+            dieNext = false;
+          }
+          if (m.method === 'thread/realtime/stop') {   // closes late, like a real call winding down
+            send({ id: m.id, result: {} });
+            setTimeout(() => { log('realtime/closed'); send({ method: 'thread/realtime/closed', params: { threadId: m.params.threadId, reason: 'requested' } }); }, 150);
           }
           if (m.method === 'turn/interrupt') {
+            log('turn/interrupt');
             if (m.params.threadId !== 'fixture-thread' || m.params.turnId !== 'fixture-turn') {
               send({ id: m.id, error: { message: 'missing or incorrect turn identity' } });
             } else {
@@ -132,8 +153,174 @@ enum CodexSessionChecks {
         checkTranscripts(session)
         try await checkApprovals()
         try await checkConsent()
+        try await checkLifecycle(in: dir)
         try await checkStartup(in: dir)
         try await checkNativeVoice(in: dir)
+        try await checkVoiceLifecycle(in: dir, server: cli)
+    }
+
+    @MainActor
+    static func wait(_ what: @autoclosure () -> String, _ done: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while !done() && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        assert(done(), what())
+    }
+
+    static func lines(_ log: URL) -> [String] {
+        ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+    }
+
+    /// Turn control: delegated voice work, results after hangup, failures, waiting on the user, and Stop
+    /// before a turn starts or while Codex is still accepting it.
+    @MainActor
+    static func checkLifecycle(in dir: URL) async throws {
+        let log = dir.appendingPathComponent("lifecycle.log")
+        setenv("PULSE_CHECK_LOG", log.path, 1)
+        CodexAppServer.shared.stop()   // respawn so the fake server logs here
+        try await Task.sleep(for: .milliseconds(50))   // the old server's pulse/closed goes to the old session
+        let session = CodexPetSession(workspace: dir.appendingPathComponent("pet-lifecycle"))
+        func notify(_ method: String, _ fields: [String: Any] = [:]) {
+            var p = fields; p["threadId"] = "fixture-thread"
+            CodexAppServer.shared.onNotification?(method, p)
+        }
+        session.send("first")
+        try await wait("a text turn starts (status \(session.status ?? "none"), thinking \(session.thinking), log \(lines(log)))") { session.thinking && lines(log).contains("turn/start:first") }
+        notify("turn/completed", ["turn": ["id": "fixture-turn", "status": "completed"]])
+
+        notify("thread/realtime/started")
+        notify("turn/started", ["turn": ["id": "fixture-turn"]])
+        assert(session.thinking, "work the voice delegated shows as running")
+        session.interrupt()
+        try await wait("Stop interrupts delegated voice work") { !session.thinking && lines(log).filter { $0 == "turn/interrupt" }.count == 1 }
+
+        notify("turn/started", ["turn": ["id": "background"]])
+        notify("thread/realtime/closed")
+        let before = session.messages.count
+        let result: [String: Any] = ["turnId": "background", "item": ["id": "result", "type": "agentMessage", "text": "Finished after the call"]]
+        notify("item/completed", result)
+        notify("item/completed", result)
+        assert(session.messages.count == before + 1 && session.messages.last?.text == "Finished after the call", "a result finishing after hangup was never heard, so it shows once")
+        notify("turn/completed", ["turn": ["id": "background", "status": "completed"]])
+
+        notify("turn/started", ["turn": ["id": "failing"]])
+        notify("turn/completed", ["turn": ["id": "failing", "status": "failed", "error": ["message": "fixture failure"]]])
+        assert(session.status == "fixture failure" && !session.thinking, "a failed turn says why")
+        notify("thread/status/changed", ["status": ["type": "active", "activeFlags": ["waitingOnApproval"]]])
+        assert(session.waitingOnYou, "a pending approval shows")
+        notify("thread/status/changed", ["status": ["type": "active", "activeFlags": [String]()]])
+        assert(!session.waitingOnYou)
+
+        notify("turn/started", ["turn": ["id": "fixture-turn"]])
+        notify("error", ["turnId": "fixture-turn", "error": ["message": "Reconnecting 1/5"], "willRetry": true])
+        assert(session.thinking && session.status == "Reconnecting 1/5", "a turn Codex is retrying keeps running")
+        notify("turn/completed", ["turn": ["id": "fixture-turn", "status": "completed"]])
+        assert(session.status == nil && !session.thinking, "a retry that succeeds clears its status")
+        notify("turn/started", ["turn": ["id": "fixture-turn"]])
+        notify("error", ["turnId": "fixture-turn", "error": ["message": "Reconnecting 1/5"], "willRetry": true])
+        let interrupts = lines(log).filter { $0 == "turn/interrupt" }.count
+        session.interrupt()
+        try await wait("Stop still interrupts a turn Codex is retrying") { !session.thinking && lines(log).filter { $0 == "turn/interrupt" }.count == interrupts + 1 }
+        notify("turn/started", ["turn": ["id": "final"]])
+        notify("error", ["turnId": "final", "error": ["message": "Out of retries"], "willRetry": false])
+        assert(!session.thinking && session.status == "Out of retries", "a final error ends the turn")
+
+        notify("turn/started", ["turn": ["id": "unknown-turn"]])   // the fake server rejects interrupting it
+        session.interrupt()
+        session.clear()
+        try await Task.sleep(for: .milliseconds(200))
+        assert(session.status == nil, "an old conversation's failed Stop never reports in the new one")
+        let threads = lines(log).filter { $0 == "thread" }.count
+        session.send("queued before New conversation")
+        session.clear()
+        try await Task.sleep(for: .milliseconds(200))
+        assert(lines(log).filter { $0 == "thread" }.count == threads && !session.thinking, "a send queued before New conversation creates no thread")
+        session.send("stopped early")
+        session.interrupt()
+        try await Task.sleep(for: .milliseconds(400))
+        assert(!lines(log).contains("turn/start:stopped early") && !session.thinking, "Stop before the turn reaches Codex sends nothing")
+
+        session.send("slow acknowledgement")
+        try await wait("the slow turn is requested") { lines(log).contains("turn/start:slow acknowledgement") }
+        session.interrupt()
+        session.send("after stop")
+        try await wait("the next turn starts") { lines(log).contains("turn/start:after stop") }
+        let order = Array(lines(log).filter { $0.hasPrefix("turn/") }.suffix(3))
+        assert(order == ["turn/start:slow acknowledgement", "turn/interrupt", "turn/start:after stop"],
+               "Stop while Codex accepts a turn interrupts it once its ID arrives, before the next turn starts (got \(order))")
+        notify("turn/completed", ["turn": ["id": "fixture-turn", "status": "completed"]])
+        try await wait("settled") { !session.thinking }
+
+        // Losing the server mid-request: the pending turn fails once, visibly, in the same conversation,
+        // and the next message reaches a new server. The dead process's callbacks never arrive.
+        session.send("slow acknowledgement")
+        try await wait("a turn is pending") { lines(log).filter { $0 == "turn/start:slow acknowledgement" }.count == 2 }
+        CodexAppServer.shared.stop()
+        try await wait("the pending turn fails visibly (\(session.status ?? "none"))") { !session.thinking && session.status != nil }
+        session.send("after the server came back")
+        try await wait("the next message reaches a new server") { lines(log).contains("turn/start:after the server came back") }
+        notify("turn/completed", ["turn": ["id": "fixture-turn", "status": "completed"]])
+        try await wait("settled again") { !session.thinking }
+        print("Lifecycle checks passed: delegated voice work, results after hangup, failures, retries, waiting state, stale work after New conversation, Stop before and during turn start, a lost server")
+    }
+
+    /// Calls never overlap: realtime notifications carry only the thread, so an ended call's late close
+    /// must not end the next one. An audio retry runs once, and New conversation cancels a pending one.
+    @MainActor
+    static func checkVoiceLifecycle(in dir: URL, server script: URL) async throws {
+        let fm = FileManager.default
+        let codex = dir.appendingPathComponent("bin/codex")   // beside the fake voice helper from checkNativeVoice
+        try fm.removeItem(at: codex)
+        try fm.copyItem(at: script, to: codex)
+        setenv("PULSE_CHECK_CODEX", codex.path, 1)
+        let log = dir.appendingPathComponent("voice-lifecycle.log")
+        setenv("PULSE_CHECK_LOG", log.path, 1)
+        CodexAppServer.shared.stop()
+        try await Task.sleep(for: .milliseconds(50))
+        func starts() -> Int { lines(log).filter { $0 == "realtime/start" }.count }
+        let session = CodexPetSession(workspace: dir.appendingPathComponent("pet-voice"))
+        session.playCue = { _ in }
+        session.muted = true   // the fake helper expects calls to open muted
+        var inCall: Bool { session.voiceState == .live || session.voiceState == .speaking }
+        session.startVoice()
+        try await wait("a call goes live (\(session.voiceState), \(session.status ?? "no status"))") { inCall }
+        session.stopVoice()
+        session.startVoice()
+        try await wait("the next call goes live") { inCall }
+        try await Task.sleep(for: .milliseconds(400))
+        assert(inCall, "an ended call's late close must not end the next call")
+        let calls = lines(log).filter { $0.hasPrefix("realtime/") }
+        assert(calls == ["realtime/start", "realtime/closed", "realtime/start"], "the next call starts after the ended one closed (got \(calls))")
+
+        session.stopVoice()
+        _ = try await CodexAppServer.shared.request("fixture/die-next", [:])
+        session.startVoice()
+        try await wait("a helper dying right after its devices open retries once") { starts() == 4 && inCall }
+        session.stopVoice()
+        _ = try await CodexAppServer.shared.request("fixture/die-next", [:])
+        session.startVoice()
+        try await wait("the dying call starts") { starts() == 5 }
+        try await wait("and fails") { session.voiceState == .off }
+        session.clear()
+        try await Task.sleep(for: .milliseconds(700))
+        assert(starts() == 5 && session.voiceState == .off, "New conversation cancels a pending audio retry")
+
+        _ = try await CodexAppServer.shared.request("fixture/reject-next", [:])
+        session.startVoice()
+        try await wait("a rejected start fails visibly") { session.voiceState == .off && session.status == "fixture rejection" }
+        let started = Date()
+        session.startVoice()
+        try await wait("a rejected start leaves no close to wait for") { inCall }
+        assert(Date().timeIntervalSince(started) < 2, "the next call did not wait on a close that cannot come")
+
+        session.stopVoice()
+        _ = try await CodexAppServer.shared.request("fixture/die-next", [:])
+        session.startVoice()
+        try await wait("another dying call starts") { starts() == 7 }
+        try await wait("and fails") { session.voiceState == .off }
+        CodexAppServer.shared.stop()   // losing the server must cancel the pending retry too
+        try await Task.sleep(for: .milliseconds(700))
+        assert(starts() == 7 && session.voiceState == .off, "a lost server cancels a pending audio retry")
+        print("Voice lifecycle checks passed: End then Start, stale close, one audio retry, retry cancelled by New conversation or a lost server, rejected start")
     }
 
     @MainActor

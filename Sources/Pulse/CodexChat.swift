@@ -6,7 +6,7 @@ import Combine
 //
 // The pet's chat, live voice, and activity all ride on Codex's own app-server, which signs in with
 // ~/.codex/auth.json: the same subscription the Codex app uses, no API key. The process is spawned
-// the first time the pet card opens and lives until Pulse quits (the usage rings never touch it).
+// by the first message or voice start and lives until Pulse quits (the usage rings never touch it).
 
 final class CodexAppServer: @unchecked Sendable {
     static let shared = CodexAppServer()
@@ -292,6 +292,7 @@ final class CodexPetSession: ObservableObject {
     var playCue: (String) -> Void = { NSSound(named: $0)?.play() }   // checks record instead of playing
     @Published var muted = false { didSet { VoiceBridge.shared.setMuted(muted) } }
     @Published private(set) var status: String?   // connection / error line under the composer
+    @Published private(set) var waitingOnYou = false   // Codex is paused on an approval or a question
 
     enum VoiceState { case off, connecting, live, speaking }
 
@@ -299,12 +300,25 @@ final class CodexPetSession: ObservableObject {
     private var threadId: String?
     private var threadTask: Task<String, Error>?   // the in-flight thread/start, shared by text and voice
     private var turnId: String?
+    private var interruptedTurn: String?   // one turn/interrupt per turn, from Stop or a stopped send
+    private var lastSend: Task<Void, Never>?   // turn/starts run one at a time
+    private var stops = 0                  // bumped by Stop; a send that began before it never starts its turn
+    private var sends = 0                  // the newest send, so an older one never clears its state
+    private var epoch = 0                  // bumped by New conversation: the old one's work stands down
+    private var retrying = false           // the status line shows a retry Codex is making on its own
     private var realtimeActive = false
-    private var voiceTurns: Set<String> = []
+    private var heardAgentItems: Set<String> = []   // finished while a call was live: the voice relayed them
     private var promotedAgentItems: Set<String> = []
     private var agentText: [String: String] = [:]
     private var voiceStartTask: Task<Void, Never>?
+    private var voiceRetry: Task<Void, Never>?
     private var voiceMayRetry = true
+    // Realtime notifications carry only the thread ID, not the call, so calls never overlap. Each
+    // thread/realtime/stop Codex accepts is answered by exactly one closed event with reason "requested"
+    // (core's handle_close); the next call starts only once those have arrived. A stop Codex rejects
+    // never ran, so it closes nothing. Elapsed time never counts as a close.
+    private var realtimeRequested = false   // this call sent thread/realtime/start
+    private var closesExpected = 0
     private let workspace: URL?
 
     init(workspace: URL? = nil) {
@@ -320,16 +334,30 @@ final class CodexPetSession: ObservableObject {
         messages.append(ChatMessage(role: .user, text: text))
         thinking = true
         status = nil
-        Task {
+        sends += 1
+        let previous = lastSend, stop = stops, conversation = epoch, mine = sends
+        lastSend = Task {
+            await previous?.value   // a stopped send finishes interrupting before the next turn starts
+            let current = { stop == self.stops && conversation == self.epoch }
+            // Stopped before reaching Codex: send nothing, create no thread, leave newer work alone.
+            let standDown = { if conversation == self.epoch && mine == self.sends && self.turnId == nil { self.thinking = false } }
+            guard current() else { return standDown() }
             do {
                 let tid = try await ensureThread()
-                _ = try await server.request("turn/start", [
+                guard current() else { return standDown() }
+                let r = try await server.request("turn/start", [
                     "threadId": tid,
                     "input": [["type": "text", "text": text, "text_elements": []]],
                 ])
+                // Stop while Codex was accepting the turn: interrupt it as soon as its ID is known.
+                if !current(), let accepted = (r["turn"] as? [String: Any])?["id"] as? String, accepted != interruptedTurn {
+                    if conversation == epoch { interruptedTurn = accepted }
+                    _ = try? await server.request("turn/interrupt", ["threadId": tid, "turnId": accepted])
+                }
             } catch is CancellationError {   // New conversation dropped the thread this was waiting for
             } catch {
-                thinking = false
+                guard current() else { return }
+                if mine == sends { thinking = false }
                 status = error.localizedDescription
             }
         }
@@ -337,21 +365,29 @@ final class CodexPetSession: ObservableObject {
 
     func interrupt() {
         PetApprovals.shared.cancelAll()
-        guard let tid = threadId, let turnId, thinking else { return }
+        stops += 1
+        guard let tid = threadId, let turnId, thinking, turnId != interruptedTurn else { return }
+        interruptedTurn = turnId
+        let conversation = epoch
         Task {
             do { _ = try await server.request("turn/interrupt", ["threadId": tid, "turnId": turnId]) }
-            catch { status = error.localizedDescription }
+            catch {
+                guard conversation == epoch else { return }   // a newer conversation is not this one's to report on
+                interruptedTurn = nil; status = error.localizedDescription
+            }
         }
     }
 
     func clear() {
         interrupt()
         stopVoice()
+        epoch += 1
         messages = []; activity = []; status = nil
-        realtimeActive = false; voiceTurns = []; promotedAgentItems = []; agentText = [:]
+        realtimeActive = false; heardAgentItems = []; promotedAgentItems = []; agentText = [:]
+        closesExpected = 0   // the old thread's closes no longer reach this conversation
         threadId = nil; threadTask = nil   // next message starts a fresh thread, even if one was being created
-        turnId = nil
-        thinking = false
+        turnId = nil; interruptedTurn = nil
+        thinking = false; waitingOnYou = false; retrying = false
     }
 
     // MARK: voice (client-owned WebRTC call negotiated through the app-server)
@@ -376,6 +412,8 @@ final class CodexPetSession: ObservableObject {
                 try Task.checkCancellation()
                 let offer = try await VoiceBridge.shared.createOffer(muted: muted)
                 try Task.checkCancellation()
+                try await previousCallClosed()
+                realtimeRequested = true
                 _ = try await server.request("thread/realtime/start", [
                     "threadId": tid,
                     "transport": ["type": "webrtc", "sdp": offer],
@@ -388,21 +426,47 @@ final class CodexPetSession: ObservableObject {
                 VoiceBridge.shared.mark("realtime/start acknowledged")   // the answer arrives as thread/realtime/sdp
             } catch {
                 guard !Task.isCancelled else { return }
-                voiceState = .off
-                VoiceBridge.shared.close()
+                // Only Codex rejecting the start proves no call opened. A timeout may still open one,
+                // so stopVoice tears it down through the close barrier like any ended call.
+                if case CodexAppServer.Failure.remote = error { realtimeRequested = false }
+                stopVoice()
                 status = error.localizedDescription
             }
         }
     }
 
     func stopVoice() {
+        cancelVoiceWork()   // even when already off: a pending audio retry must not restart a call
         guard voiceState != .off else { return }
-        voiceStartTask?.cancel()
-        voiceStartTask = nil
         voiceState = .off
+        realtimeActive = false   // results finishing from now on were never heard
         VoiceBridge.shared.close()
         finishLive()
-        if let tid = threadId { Task { _ = try? await server.request("thread/realtime/stop", ["threadId": tid]) } }
+        guard realtimeRequested, let tid = threadId else { return }   // tear down only a call that reached Codex
+        realtimeRequested = false
+        closesExpected += 1
+        let conversation = epoch
+        Task {
+            do { _ = try await server.request("thread/realtime/stop", ["threadId": tid]) }
+            catch CodexAppServer.Failure.remote(_) {   // Codex rejected the stop, so no close will come
+                if conversation == epoch, closesExpected > 0 { closesExpected -= 1 }
+            } catch {}   // no answer proves nothing: the close stays expected
+        }
+    }
+
+    private func cancelVoiceWork() {
+        voiceStartTask?.cancel(); voiceStartTask = nil
+        voiceRetry?.cancel(); voiceRetry = nil
+    }
+
+    /// Waits for the ended calls' closes, so none can end the call now starting. If they don't come,
+    /// this call fails visibly rather than overlap them.
+    private func previousCallClosed() async throws {
+        let deadline = Date.now.addingTimeInterval(3)
+        // ponytail: 20 ms poll, only while a just-ended call closes; a continuation if it ever matters
+        while closesExpected > 0 && Date.now < deadline && !Task.isCancelled { try? await Task.sleep(for: .milliseconds(20)) }
+        try Task.checkCancellation()
+        guard closesExpected == 0 else { throw CodexAppServer.Failure.remote("The last call is still closing. Try again in a moment.") }
     }
 
     // MARK: plumbing
@@ -454,7 +518,7 @@ final class CodexPetSession: ObservableObject {
         switch method {
         case "turn/started":
             turnId = (p["turn"] as? [String: Any])?["id"] as? String
-            if realtimeActive, let turnId { voiceTurns.insert(turnId) }
+            thinking = true   // also work the voice delegated, so Stop can interrupt it
         case "item/agentMessage/delta":
             guard let delta = p["delta"] as? String, let item = p["itemId"] as? String else { return }
             updateAgent(delta, item: item, params: p, completed: false)
@@ -468,20 +532,29 @@ final class CodexPetSession: ObservableObject {
                 updateAgent(text, item: id, params: p, completed: true)
             }
         case "turn/completed":
-            turnId = nil
+            turnId = nil; interruptedTurn = nil
             thinking = false
-            if let completed = (p["turn"] as? [String: Any])?["id"] as? String {
+            let turn = p["turn"] as? [String: Any]
+            if let completed = turn?["id"] as? String {
                 for i in messages.indices where messages[i].sourceID?.hasPrefix("agent:\(completed):") == true { messages[i].live = false }
             }
+            if turn?["status"] as? String == "failed" {
+                status = ((turn?["error"] as? [String: Any])?["message"] as? String) ?? "Codex couldn't finish that."
+            } else if retrying { status = nil }   // the retry worked
+            retrying = false
             activity = activity.filter { !$0.done }.suffix(6).map { $0 }
+        case "thread/status/changed":
+            let state = p["status"] as? [String: Any]
+            waitingOnYou = state?["type"] as? String == "active" && !(state?["activeFlags"] as? [String] ?? []).isEmpty
         case "error":
-            thinking = false
+            // A retried turn is still running, so Stop stays available; only a final error ends it.
+            retrying = p["willRetry"] as? Bool == true
+            if !retrying { thinking = false }
             status = ((p["error"] as? [String: Any])?["message"] as? String) ?? "Codex error"
-        case "thread/realtime/sdp":
-            if let sdp = p["sdp"] as? String { VoiceBridge.shared.mark("server answer"); VoiceBridge.shared.accept(answer: sdp) }
+        case "thread/realtime/sdp":   // only the current call's answer; an ended call's is late
+            if realtimeRequested, let sdp = p["sdp"] as? String { VoiceBridge.shared.mark("server answer"); VoiceBridge.shared.accept(answer: sdp) }
         case "thread/realtime/started":
-            realtimeActive = true
-            if let turnId { voiceTurns.insert(turnId) }
+            if closesExpected == 0 { realtimeActive = true }   // otherwise a call that was already ended
         case "thread/realtime/item/started", "thread/realtime/item/completed":
             guard let item = p["item"] as? [String: Any], let id = item["id"] as? String else { return }
             let completed = method == "thread/realtime/item/completed"
@@ -496,7 +569,6 @@ final class CodexPetSession: ObservableObject {
             } else if item["type"] as? String == "bemItemPromoted",
                       let turn = item["turnId"] as? String, let agent = item["itemId"] as? String {
                 let key = "agent:\(turn):\(agent)"
-                voiceTurns.insert(turn)
                 promotedAgentItems.insert(key)
                 if let text = agentText[key] { setMessage(text, role: .assistant, key: key, live: false) }
             }
@@ -506,18 +578,26 @@ final class CodexPetSession: ObservableObject {
             messages[i].text += delta
         // The legacy role-only transcript notifications mirror this canonical stream: ignore them.
         case "thread/realtime/error":
+            // Codex's errors name the thread; the native helper's own don't and always concern this call.
+            guard realtimeRequested || p["threadId"] == nil else { return }   // an ended call's last words
             realtimeActive = false
             // The native helper dying moments after its devices open means an audio device changed
             // under it, which one quiet retry usually survives.
             let retry = voiceMayRetry && voiceState != .off && VoiceBridge.shared.lastFailureWasEarlyDeath
             stopVoice()
-            guard !retry else {
-                Task { try? await Task.sleep(for: .milliseconds(300)); startVoice(retryOnAudioGlitch: false) }
+            guard !retry else {   // End call and New conversation cancel it through stopVoice
+                voiceRetry = Task {
+                    guard (try? await Task.sleep(for: .milliseconds(300))) != nil else { return }
+                    startVoice(retryOnAudioGlitch: false)
+                }
                 return
             }
             status = p["message"] as? String
         case "thread/realtime/closed":
             realtimeActive = false
+            if p["reason"] as? String == "requested", closesExpected > 0 { closesExpected -= 1; return }   // a call Pulse ended
+            guard realtimeRequested else { return }   // the server's end of a call already ended here
+            realtimeRequested = false
             finishLive()
             if voiceState != .off { voiceState = .off; VoiceBridge.shared.close() }
         case "pulse/note":   // a request Pulse cancelled or left unanswered because it cannot show it
@@ -534,10 +614,11 @@ final class CodexPetSession: ObservableObject {
             else { return }
             if voiceState != next { voiceState = next }
         case "pulse/closed":
-            realtimeActive = false
+            cancelVoiceWork()   // a queued start or audio retry must not reopen the microphone
+            realtimeActive = false; realtimeRequested = false; closesExpected = 0
             finishLive()
-            turnId = nil
-            thinking = false
+            turnId = nil; interruptedTurn = nil
+            thinking = false; waitingOnYou = false
             if voiceState != .off { voiceState = .off; VoiceBridge.shared.close() }
             threadId = nil
             status = "Codex app-server stopped"
@@ -549,8 +630,10 @@ final class CodexPetSession: ObservableObject {
         let turn = (params["turnId"] as? String) ?? turnId ?? ""
         let key = "agent:\(turn):\(item)"
         if completed { agentText[key] = text } else { agentText[key, default: ""] += text }
-        // Voice speaks the delegated result. Only explicitly promoted artifacts also belong in chat.
-        guard (!realtimeActive && !voiceTurns.contains(turn)) || promotedAgentItems.contains(key) else { return }
+        // A live call speaks delegated results, so only promoted ones also go in the chat. A result that
+        // finishes after the call ended was never heard, so it shows (once: later events update its bubble).
+        if realtimeActive && completed { heardAgentItems.insert(key) }
+        guard (!realtimeActive && !heardAgentItems.contains(key)) || promotedAgentItems.contains(key) else { return }
         setMessage(agentText[key] ?? "", role: .assistant, key: key, live: !completed)
     }
 
