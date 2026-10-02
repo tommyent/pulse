@@ -8,6 +8,8 @@ swiftc Sources/Pulse/DockGeometry.swift Sources/Pulse/Models.swift Checks/Overla
 "$OUT/overlay"
 swiftc Sources/Pulse/CodexPetSprite.swift Checks/CodexPetChecks.swift -o "$OUT/pet"
 "$OUT/pet"
+swiftc Sources/Pulse/HotKey.swift Checks/VoiceShortcutChecks.swift -o "$OUT/voice-shortcut"
+"$OUT/voice-shortcut"
 swiftc Sources/Pulse/Models.swift Sources/Pulse/Adapters.swift Sources/Pulse/GrokLogin.swift Sources/Pulse/HotKey.swift Checks/SecurityChecks.swift -o "$OUT/security"
 "$OUT/security"
 ./scripts/grok-check.sh --offline

@@ -75,32 +75,45 @@ final class OverlayController {
     private var localClickMonitor: Any?
     private var globalClickMonitor: Any?
     private var voiceKey: HotKey?
-    private var voiceKeyDown: Date?
-    private var voiceKeyStarted = false
+    private var voiceGesture = VoiceShortcutGesture()
 
-    /// Voice shortcut: press starts (opening the pet card) or ends the call; a hold of more than
-    /// half a second is push-to-talk and ends on release.
+    /// A held shortcut mutes only capture on release, so Codex can still answer aloud.
     private func bindVoiceKey(_ combo: HotKeyCombo) {
+        cancelVoiceKey()
+        voiceKey = nil   // unregister before registering its replacement
         voiceKey = HotKey(combo)
         voiceKey?.onPress = { [weak self] in
             guard let self else { return }
             let session = CodexPetSession.shared
-            voiceKeyDown = .now
-            if session.voiceState == .off {
+            let action = voiceGesture.keyDown(at: ProcessInfo.processInfo.systemUptime,
+                                               voiceActive: session.voiceState != .off, muted: session.muted)
+            applyVoiceKey(action)
+        }
+        voiceKey?.onRelease = { [weak self] in
+            guard let self else { return }
+            applyVoiceKey(voiceGesture.keyUp(at: ProcessInfo.processInfo.systemUptime))
+        }
+    }
+
+    private func applyVoiceKey(_ action: VoiceShortcutGesture.Action?) {
+        let session = CodexPetSession.shared
+        switch action {
+        case .start, .unmute:
+            session.muted = false
+            if action == .start {
                 state.cardVisible = false
                 state.petVisible = true
                 session.startVoice()
-                voiceKeyStarted = true
-            } else {
-                session.stopVoice()
-                voiceKeyStarted = false
             }
+        case .mute: session.muted = true
+        case .end: session.stopVoice()
+        case nil: break
         }
-        voiceKey?.onRelease = { [weak self] in
-            guard let self, voiceKeyStarted, let down = voiceKeyDown else { return }
-            voiceKeyStarted = false
-            if Date().timeIntervalSince(down) > 0.5 { CodexPetSession.shared.stopVoice() }   // held: push-to-talk
-        }
+    }
+
+    private func cancelVoiceKey() {
+        // If a held call fails and auto-retries, capture stays muted until a new explicit press.
+        if voiceGesture.cancel() { CodexPetSession.shared.muted = true }
     }
 
     private func mouseDown(_ event: NSEvent) {
@@ -228,6 +241,13 @@ final class OverlayController {
                     panel.resignKey()
                     NSApp.deactivate()   // hand focus back to whatever the user was in
                 }
+            }
+            .store(in: &cancellables)
+
+        CodexPetSession.shared.$voiceState
+            .removeDuplicates()
+            .sink { [weak self] voice in
+                if voice == .off { self?.cancelVoiceKey() }
             }
             .store(in: &cancellables)
 

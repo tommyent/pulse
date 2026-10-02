@@ -1,6 +1,32 @@
 import AppKit
 import Carbon
 
+/// A tap toggles continuous voice; a hold listens until release, leaving the speaker connected.
+struct VoiceShortcutGesture {
+    enum Action: Equatable { case start, unmute, mute, end }
+    private var press: (time: TimeInterval, endsOnTap: Bool)?
+
+    mutating func keyDown(at time: TimeInterval, voiceActive: Bool, muted: Bool) -> Action? {
+        guard press == nil else { return nil }   // repeated key-down events are still one gesture
+        press = (time, voiceActive && !muted)
+        return !voiceActive ? .start : muted ? .unmute : nil
+    }
+
+    mutating func keyUp(at time: TimeInterval) -> Action? {
+        guard let press else { return nil }
+        self.press = nil
+        if time - press.time > 0.5 { return .mute }
+        return press.endsOnTap ? .end : nil
+    }
+
+    /// An ended call or a rebound shortcut must not leave a release aimed at a different call.
+    @discardableResult mutating func cancel() -> Bool {
+        let wasPressed = press != nil
+        press = nil
+        return wasPressed
+    }
+}
+
 /// A system-wide key combination. Carbon's hotkey API needs no Accessibility grant and reports
 /// both press and release, which is what hold-to-talk needs.
 struct HotKeyCombo: Codable, Equatable {
