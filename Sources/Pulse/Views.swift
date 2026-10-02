@@ -358,7 +358,7 @@ struct PetCard: View {
         .padding(Edge.Set(tailEdge), BubbleShape.tailWidth)
         .frame(width: tailEdge == .trailing || tailEdge == .leading ? 340 + BubbleShape.tailWidth : 340)
         .glassCard(in: BubbleShape(edge: tailEdge))
-        .task { try? await Task.sleep(for: .milliseconds(200)); composing = true }   // after the panel is key
+        .task { session.reopen(); try? await Task.sleep(for: .milliseconds(200)); composing = true }   // after the panel is key
         .onExitCommand {
             // Escape: end the call and hand the keyboard back to whatever was in front
             session.stopVoice()
@@ -370,6 +370,10 @@ struct PetCard: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
+                    if session.canLoadEarlier {
+                        Button("Load earlier messages") { session.loadEarlier() }
+                            .buttonStyle(.plain).font(.caption).foregroundStyle(Ink.secondary(scheme))
+                    }
                     if session.messages.isEmpty {
                         Text(session.voiceState == .off ? "Type, or tap the waveform to talk. Same Codex sign-in, same threads."
                              : session.voiceState == .connecting ? "Starting microphone…" : "Listening…")

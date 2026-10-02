@@ -6,7 +6,8 @@ import Combine
 //
 // The pet's chat, live voice, and activity all ride on Codex's own app-server, which signs in with
 // ~/.codex/auth.json: the same subscription the Codex app uses, no API key. The process is spawned
-// by the first message or voice start and lives until Pulse quits (the usage rings never touch it).
+// by the first message or voice start, or by opening the pet when there is a saved conversation to
+// show, and lives until Pulse quits (the usage rings never touch it).
 
 final class CodexAppServer: @unchecked Sendable {
     static let shared = CodexAppServer()
@@ -298,7 +299,18 @@ final class CodexPetSession: ObservableObject {
 
     private let server = CodexAppServer.shared
     private var threadId: String?
-    private var threadTask: Task<String, Error>?   // the in-flight thread/start, shared by text and voice
+    private var threadTask: Task<Opened, Error>?   // the in-flight open, shared by text, voice and reopening
+    // The conversation continues across restarts: its ID is saved once Codex opened it, and only
+    // New conversation forgets it. A lost server leaves `resumeId` for the next message to reconnect.
+    private let defaults: UserDefaults
+    static let savedThreadKey = "petThreadId"
+    static let legacyCheckedKey = "petLegacyThreadChecked"   // looked once for a conversation from before saving
+    private var resumeId: String?
+    private var legacyCandidate: String?
+    private var lookup: Task<Void, Never>?
+    private var recoveryMessage: String?   // a reopening problem on the status line, cleared once it reopens
+    @Published private(set) var earlierCursor: String?   // older turns of a reopened conversation
+    var canLoadEarlier: Bool { earlierCursor != nil }
     private var turnId: String?
     private var interruptedTurn: String?   // one turn/interrupt per turn, from Stop or a stopped send
     private var lastSend: Task<Void, Never>?   // turn/starts run one at a time
@@ -321,9 +333,61 @@ final class CodexPetSession: ObservableObject {
     private var closesExpected = 0
     private let workspace: URL?
 
-    init(workspace: URL? = nil) {
+    init(workspace: URL? = nil, defaults: UserDefaults = .standard) {
         self.workspace = workspace
+        self.defaults = defaults
         server.onNotification = { [weak self] method, params in self?.handle(method, params) }
+    }
+
+    /// Opening the card shows the conversation to continue: it reopens it without starting a turn or
+    /// the microphone. With nothing saved (and the one-time look for an older one done) it starts nothing.
+    func reopen() {
+        guard threadId == nil, threadTask == nil, lookup == nil else { return }
+        guard resumeId ?? defaults.string(forKey: Self.savedThreadKey) != nil || !defaults.bool(forKey: Self.legacyCheckedKey) else { return }
+        let conversation = epoch
+        if resumeId ?? defaults.string(forKey: Self.savedThreadKey) == nil { lookUpOlderConversation() }
+        Task {
+            await lookup?.value
+            guard conversation == epoch, threadId == nil,
+                  resumeId ?? defaults.string(forKey: Self.savedThreadKey) ?? legacyCandidate != nil else { return }   // nothing to show
+            do { _ = try await ensureThread() }
+            catch is CancellationError {}
+            catch { if conversation == epoch { status = error.localizedDescription } }
+        }
+    }
+
+    /// The one-time look for this pet's newest conversation from before Pulse saved them. Card opens,
+    /// messages and calls all wait on the same look; New conversation cancels it.
+    private func lookUpOlderConversation() {
+        let conversation = epoch
+        lookup = Task {
+            defer { if conversation == epoch { lookup = nil } }
+            do {
+                try await server.start()
+                let found = try await newestPetThread(in: Self.petHome(at: workspace))
+                guard conversation == epoch, threadId == nil else { return }
+                if let found { legacyCandidate = found } else { defaults.set(true, forKey: Self.legacyCheckedKey) }
+            } catch is CancellationError {
+            } catch { if conversation == epoch { status = error.localizedDescription } }   // tried again by the next message
+        }
+    }
+
+    func loadEarlier() {
+        guard let cursor = earlierCursor else { return }
+        earlierCursor = nil   // one page at a time
+        let conversation = epoch
+        Task {
+            do {
+                let tid = try await ensureThread()
+                let r = try await server.request("thread/turns/list", ["threadId": tid, "cursor": cursor, "limit": 20, "itemsView": "full", "sortDirection": "desc"])
+                guard conversation == epoch, tid == threadId else { return }
+                messages.insert(contentsOf: Self.history((r["data"] as? [[String: Any]] ?? []).reversed()), at: 0)
+                earlierCursor = r["nextCursor"] as? String
+            } catch {
+                guard conversation == epoch else { return }
+                earlierCursor = cursor; status = error.localizedDescription
+            }
+        }
     }
 
     // MARK: text
@@ -385,7 +449,11 @@ final class CodexPetSession: ObservableObject {
         messages = []; activity = []; status = nil
         realtimeActive = false; heardAgentItems = []; promotedAgentItems = []; agentText = [:]
         closesExpected = 0   // the old thread's closes no longer reach this conversation
+        threadTask?.cancel(); lookup?.cancel(); lookup = nil
         threadId = nil; threadTask = nil   // next message starts a fresh thread, even if one was being created
+        resumeId = nil; legacyCandidate = nil; earlierCursor = nil; recoveryMessage = nil
+        defaults.removeObject(forKey: Self.savedThreadKey)
+        defaults.set(true, forKey: Self.legacyCheckedKey)   // a fresh start never reopens an older conversation
         turnId = nil; interruptedTurn = nil
         thinking = false; waitingOnYou = false; retrying = false
     }
@@ -486,31 +554,126 @@ final class CodexPetSession: ObservableObject {
         return dir
     }
 
-    /// Text and voice starting together share one thread/start. `clear()` drops an in-flight start,
-    /// so its thread never becomes the new conversation.
+    struct Opened { let id: String; let history: [ChatMessage]; let earlier: String?; let note: String?; var reconnected = false }
+
+    /// Text, voice and reopening share one open. `clear()` drops an in-flight one, so it never
+    /// becomes the new conversation, and only an open that is still current saves its ID.
     private func ensureThread() async throws -> String {
+        let conversation = epoch   // a caller from before New conversation never opens or joins the new one
+        if threadId == nil, let pending = lookup { await pending.value }
         try await server.start()
+        guard conversation == epoch else { throw CancellationError() }
         if let threadId { return threadId }
-        let task = threadTask ?? Task {
-            let r = try await server.request("thread/start", [
-                "cwd": Self.petHome(at: workspace).path,
-                "approvalPolicy": "on-request",
-                "approvalsReviewer": "user",
-                "sandbox": "workspace-write",
-            ])
-            guard let id = (r["thread"] as? [String: Any])?["id"] as? String else { throw CodexAppServer.Failure.remote("thread/start returned no id") }
-            return id
-        }
+        let task = threadTask ?? Task { try await self.openThread() }
         threadTask = task
         do {
-            let id = try await task.value
-            guard threadTask == task || threadId == id else { throw CancellationError() }
-            threadId = id; threadTask = nil
-            return id
+            let opened = try await task.value
+            guard conversation == epoch, threadTask == task || threadId == opened.id else { throw CancellationError() }
+            if threadId != opened.id {   // the first caller to finish applies it, once
+                threadId = opened.id; resumeId = nil; legacyCandidate = nil
+                defaults.set(opened.id, forKey: Self.savedThreadKey)
+                defaults.set(true, forKey: Self.legacyCheckedKey)
+                // History goes above anything typed while it loaded.
+                messages.insert(contentsOf: opened.history + (opened.note.map { [ChatMessage(role: .note, text: $0)] } ?? []), at: 0)
+                if !opened.reconnected { earlierCursor = opened.earlier }   // a reconnect keeps the history still to page
+                if let shown = recoveryMessage, status == shown { status = nil }   // that problem is over; a newer one stays
+                recoveryMessage = nil
+            }
+            threadTask = nil
+            return opened.id
         } catch {
             if threadTask == task { threadTask = nil }   // let the next call retry
             throw error
         }
+    }
+
+    /// Continues the pet's conversation (after a lost server, after a restart, or once, the newest
+    /// pet conversation from before Pulse saved them) or starts one when there is none. A
+    /// conversation that cannot be reopened stays saved and fails visibly: it never silently
+    /// becomes a new one.
+    private func openThread() async throws -> Opened {
+        let home = try Self.petHome(at: workspace)
+        var params: [String: Any] = ["cwd": home.path, "approvalPolicy": "on-request", "approvalsReviewer": "user", "sandbox": "workspace-write"]
+        let reconnecting = resumeId != nil   // its messages are still on screen
+        var id = resumeId ?? defaults.string(forKey: Self.savedThreadKey) ?? legacyCandidate
+        var legacy = id != nil && id == legacyCandidate
+        if id == nil && !defaults.bool(forKey: Self.legacyCheckedKey) {
+            id = try await newestPetThread(in: home)
+            legacy = id != nil
+        }
+        try Task.checkCancellation()   // New conversation cancels an open that hasn't reached Codex yet
+        guard let id else {
+            let r = try await server.request("thread/start", params)
+            guard let id = (r["thread"] as? [String: Any])?["id"] as? String else { throw CodexAppServer.Failure.remote("thread/start returned no id") }
+            return Opened(id: id, history: [], earlier: nil, note: nil)
+        }
+        params["threadId"] = id
+        if reconnecting { params["excludeTurns"] = true }
+        else { params["initialTurnsPage"] = ["limit": 20, "itemsView": "full", "sortDirection": "desc"] }
+        let r: [String: Any]
+        do { r = try await server.request("thread/resume", params) }
+        catch { throw recoveryFailure("Couldn't reopen your last conversation (\(error.localizedDescription)). Start a New conversation to continue.") }
+        guard (r["thread"] as? [String: Any])?["id"] as? String == id else {
+            throw recoveryFailure("Couldn't reopen your last conversation. Start a New conversation to continue.")
+        }
+        let page = r["initialTurnsPage"] as? [String: Any]
+        let history = Self.history((page?["data"] as? [[String: Any]] ?? []).reversed())
+        var notes = [String]()
+        if legacy { notes.append("Reopened your last pet conversation from before this update. Sites a tool blocked in it stay blocked here; start a New conversation to be asked again.") }
+        if !history.isEmpty { notes.append("Shown: typed messages, requests Codex acted on and its replies. The rest of a voice call isn't shown here.") }
+        return Opened(id: id, history: history, earlier: page?["nextCursor"] as? String, note: notes.isEmpty ? nil : notes.joined(separator: " "), reconnected: reconnecting)
+    }
+
+    /// The newest conversation this pet had before Pulse saved them: Pulse's own (originator "pulse")
+    /// in exactly this folder. The local server can't filter by originator, so every page of this
+    /// folder's threads is checked, newest first. A failed lookup is an error, never "nothing found".
+    private func newestPetThread(in home: URL) async throws -> String? {
+        let path = home.standardizedFileURL.path
+        var cursor: String?
+        repeat {
+            try Task.checkCancellation()
+            var params: [String: Any] = ["cwd": home.path, "limit": 20, "sortKey": "updated_at", "sortDirection": "desc"]
+            if let cursor { params["cursor"] = cursor }
+            let r: [String: Any]
+            do { r = try await server.request("thread/list", params) }
+            catch { throw recoveryFailure("Couldn't look for your last conversation (\(error.localizedDescription)). Try again, or start a New conversation.") }
+            let match = (r["data"] as? [[String: Any]] ?? []).first {
+                $0["originator"] as? String == "pulse" && ($0["cwd"] as? String).map { URL(fileURLWithPath: $0).standardizedFileURL.path } == path
+            }
+            if let id = match?["id"] as? String { return id }
+            cursor = r["nextCursor"] as? String
+        } while cursor != nil
+        return nil
+    }
+
+    private func recoveryFailure(_ message: String) -> Error {
+        recoveryMessage = message
+        return CodexAppServer.Failure.remote(message)
+    }
+
+    /// Chat bubbles for reopened turns, oldest first: typed and delegated requests and Codex's replies.
+    static func history<S: Sequence>(_ turns: S) -> [ChatMessage] where S.Element == [String: Any] {
+        turns.flatMap { turn in
+            (turn["items"] as? [[String: Any]] ?? []).compactMap { item -> ChatMessage? in
+                switch item["type"] as? String {
+                case "userMessage":
+                    let text = (item["content"] as? [[String: Any]] ?? []).compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }.joined(separator: "\n")
+                    let shown = spokenRequest(text)
+                    return shown.isEmpty ? nil : ChatMessage(role: .user, text: shown)
+                case "agentMessage":
+                    let text = item["text"] as? String ?? ""
+                    return text.isEmpty ? nil : ChatMessage(role: .assistant, text: text)
+                default: return nil
+                }
+            }
+        }
+    }
+
+    /// A request the voice delegated reads as what was said, not its wrapper.
+    static func spokenRequest(_ text: String) -> String {
+        guard text.hasPrefix("<realtime_delegation>"), let open = text.range(of: "<input>"),
+              let close = text.range(of: "</input>", range: open.upperBound..<text.endIndex) else { return text }
+        return String(text[open.upperBound..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func handle(_ method: String, _ p: [String: Any]) {
@@ -620,8 +783,10 @@ final class CodexPetSession: ObservableObject {
             turnId = nil; interruptedTurn = nil
             thinking = false; waitingOnYou = false
             if voiceState != .off { voiceState = .off; VoiceBridge.shared.close() }
+            resumeId = threadId ?? resumeId   // the next message reconnects to this same conversation
             threadId = nil
-            status = "Codex app-server stopped"
+            status = "Codex app-server stopped. Your next message reconnects to this conversation."
+            recoveryMessage = status
         default: break
         }
     }

@@ -36,10 +36,10 @@ enum CodexSessionChecks {
         const assert = require('node:assert/strict');
         const log = word => process.env.PULSE_CHECK_LOG && require('node:fs').appendFileSync(process.env.PULSE_CHECK_LOG, word + '\\n');
         log('spawn');
-        let dieNext = false, rejectNext = false;
+        let dieNext = false, rejectNext = false, listMode = 'empty';
         require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
           const m = JSON.parse(line);
-          if (m.method === 'initialize') send({ id: m.id, result: {} });
+          if (m.method === 'initialize') setTimeout(() => send({ id: m.id, result: {} }), process.env.PULSE_CHECK_SLOW_START ? 600 : 0);
           if (m.method === 'thread/start') {
             assert.equal(m.params.approvalPolicy, 'on-request');
             assert.equal(m.params.approvalsReviewer, 'user');
@@ -47,6 +47,35 @@ enum CodexSessionChecks {
             assert(!m.params.runtimeWorkspaceRoots, 'no extra folders are permanently granted');
             log('thread');
             send({ id: m.id, result: { thread: { id: 'fixture-thread' } } });
+          }
+          if (m.method === 'fixture/list') { listMode = m.params.mode; send({ id: m.id, result: {} }); }
+          if (m.method === 'thread/list') {
+            log('list' + (m.params.cursor ? ':' + m.params.cursor : ''));
+            const here = m.params.cwd, thread = (id, originator, cwd, updatedAt) => ({ id, originator, cwd, updatedAt });
+            if (listMode === 'fail') send({ id: m.id, error: { message: 'fixture list failure' } });
+            else if (listMode === 'legacy' && !m.params.cursor)   // page 1: only threads that must not be picked
+              send({ id: m.id, result: { data: [thread('newer-cli', 'codex-tui', here, 400), thread('pet-elsewhere', 'pulse', '/tmp/elsewhere', 350)], nextCursor: 'page-2' } });
+            else if (listMode === 'legacy')
+              send({ id: m.id, result: { data: [thread('legacy-pet', 'pulse', here + '/', 300), thread('older-pet', 'pulse', here, 100)], nextCursor: null } });
+            else send({ id: m.id, result: { data: [], nextCursor: null } });
+          }
+          if (m.method === 'thread/resume') {
+            for (const [k, v] of [['approvalPolicy', 'on-request'], ['approvalsReviewer', 'user'], ['sandbox', 'workspace-write']]) assert.equal(m.params[k], v);
+            log('resume:' + m.params.threadId + (m.params.excludeTurns ? ':reconnect' : ':history'));
+            if (m.params.threadId === 'missing-thread') send({ id: m.id, error: { message: 'no rollout found' } });
+            else if (m.params.threadId === 'tools-only')   // a page with nothing to show but more before it
+              send({ id: m.id, result: { thread: { id: 'tools-only' }, initialTurnsPage: { data: [{ id: 't9', status: 'completed', items: [{ type: 'commandExecution', id: 'c9' }] }], nextCursor: 'earlier' } } });
+            else {
+              const said = (text) => ({ type: 'userMessage', id: text, content: [{ type: 'text', text }] });
+              const reply = (text) => ({ type: 'agentMessage', id: 'r-' + text, text });
+              const newest = { id: 't2', status: 'completed', items: [said('<realtime_delegation>\\n  <input>Open my inbox</input>\\n  <transcript_delta>user: open my inbox</transcript_delta>\\n</realtime_delegation>'), { type: 'commandExecution', id: 'c' }, reply('Done.')] };
+              const older = { id: 't1', status: 'completed', items: [said("What's due today?"), reply('Two bills.')] };
+              send({ id: m.id, result: { thread: { id: m.params.threadId }, initialTurnsPage: m.params.excludeTurns ? null : { data: [newest, older], nextCursor: 'earlier' } } });
+            }
+          }
+          if (m.method === 'thread/turns/list') {
+            log('turns:' + m.params.cursor);
+            send({ id: m.id, result: { data: [{ id: 't0', status: 'completed', items: [{ type: 'userMessage', id: 'u0', content: [{ type: 'text', text: 'First thing today' }] }, { type: 'agentMessage', id: 'a0', text: 'Noted.' }] }], nextCursor: null } });
           }
           if (m.method === 'fixture/exit') process.exit(0);   // fixture/silent is never answered
           if (m.method === 'fixture/approvals') {
@@ -102,7 +131,7 @@ enum CodexSessionChecks {
             log('turn/start:' + text);
             const accept = () => {
               send({ id: m.id, result: { turn: { id: 'fixture-turn' } } });
-              send({ method: 'turn/started', params: { threadId: 'fixture-thread', turn: { id: 'fixture-turn' } } });
+              send({ method: 'turn/started', params: { threadId: m.params.threadId, turn: { id: 'fixture-turn' } } });
               send({ method: 'item/started', params: { threadId: 'fixture-thread', item: { id: 'fixture-item', type: 'reasoning' } } });
             };
             if (text === 'slow acknowledgement') setTimeout(accept, 300); else accept();
@@ -135,7 +164,8 @@ enum CodexSessionChecks {
         try script.write(to: cli, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
         setenv("PULSE_CHECK_CODEX", cli.path, 1)
-        let session = CodexPetSession(workspace: dir.appendingPathComponent("pet"))
+        checkDir = dir
+        let session = CodexPetSession(workspace: dir.appendingPathComponent("pet"), defaults: isolatedDefaults())
         defer { CodexAppServer.shared.stop() }
         session.send("offline fixture")
         var deadline = Date().addingTimeInterval(10)
@@ -154,6 +184,7 @@ enum CodexSessionChecks {
         try await checkApprovals()
         try await checkConsent()
         try await checkLifecycle(in: dir)
+        try await checkRecovery(in: dir)
         try await checkStartup(in: dir)
         try await checkNativeVoice(in: dir)
         try await checkVoiceLifecycle(in: dir, server: cli)
@@ -165,6 +196,12 @@ enum CodexSessionChecks {
         while !done() && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
         assert(done(), what())
     }
+
+    static var checkDir = FileManager.default.temporaryDirectory
+    /// A path suite keeps the plist in the checks' temporary folder, never in ~/Library/Preferences,
+    /// so no run (even one an assertion ends) leaves settings behind or touches the user's own.
+    static func isolatedSuite() -> String { checkDir.appendingPathComponent("defaults-" + UUID().uuidString).path }
+    static func isolatedDefaults() -> UserDefaults { UserDefaults(suiteName: isolatedSuite())! }
 
     static func lines(_ log: URL) -> [String] {
         ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
@@ -178,7 +215,7 @@ enum CodexSessionChecks {
         setenv("PULSE_CHECK_LOG", log.path, 1)
         CodexAppServer.shared.stop()   // respawn so the fake server logs here
         try await Task.sleep(for: .milliseconds(50))   // the old server's pulse/closed goes to the old session
-        let session = CodexPetSession(workspace: dir.appendingPathComponent("pet-lifecycle"))
+        let session = CodexPetSession(workspace: dir.appendingPathComponent("pet-lifecycle"), defaults: isolatedDefaults())
         func notify(_ method: String, _ fields: [String: Any] = [:]) {
             var p = fields; p["threadId"] = "fixture-thread"
             CodexAppServer.shared.onNotification?(method, p)
@@ -263,6 +300,119 @@ enum CodexSessionChecks {
         print("Lifecycle checks passed: delegated voice work, results after hangup, failures, retries, waiting state, stale work after New conversation, Stop before and during turn start, a lost server")
     }
 
+    /// The conversation continues across restarts and a lost server, and never silently becomes a new one.
+    @MainActor
+    static func checkRecovery(in dir: URL) async throws {
+        let log = dir.appendingPathComponent("recovery.log")
+        setenv("PULSE_CHECK_LOG", log.path, 1)
+        CodexAppServer.shared.stop()
+        try await Task.sleep(for: .milliseconds(50))
+        func count(_ prefix: String) -> Int { lines(log).filter { $0.hasPrefix(prefix) }.count }
+        let key = CodexPetSession.savedThreadKey, checked = CodexPetSession.legacyCheckedKey
+
+        // Nothing saved and the one-time look already done: opening the card starts nothing.
+        let quiet = isolatedDefaults(); quiet.set(true, forKey: checked)
+        CodexPetSession(workspace: dir.appendingPathComponent("pet-quiet"), defaults: quiet).reopen()
+        try await Task.sleep(for: .milliseconds(300))
+        assert(count("spawn") == 0, "opening the card with nothing to continue spawns no app-server")
+
+        // Opening the card shows the saved conversation without starting a turn or the microphone.
+        let saved = isolatedDefaults(); saved.set("saved-thread", forKey: key)
+        let session = CodexPetSession(workspace: dir.appendingPathComponent("pet-recovery"), defaults: saved)
+        session.reopen()
+        try await wait("the saved conversation reopens on card open") { session.messages.count == 5 }
+        assert(lines(log).contains("resume:saved-thread:history") && count("thread") == 0 && count("turn/") == 0 && session.voiceState == .off)
+        assert(session.messages.prefix(4).map(\.text) == ["What's due today?", "Two bills.", "Open my inbox", "Done."], "history oldest first, a spoken request without its wrapper (got \(session.messages.map(\.text)))")
+        assert(session.messages[4].role == .note && session.messages[4].text.contains("voice call"), "says the transcript isn't the whole voice call")
+        assert(session.canLoadEarlier)
+        session.send("continue")
+        try await wait("a message continues the conversation") { lines(log).contains("turn/start:continue") }
+        assert(session.messages.last?.text == "continue" && count("resume:") == 1, "the new message stays below history, which loads once")
+        CodexAppServer.shared.onNotification?("turn/completed", ["threadId": "saved-thread", "turn": ["id": "fixture-turn", "status": "completed"]])
+
+        // A lost server: the next message reconnects to the same conversation without repeating history.
+        let shown = session.messages.count
+        CodexAppServer.shared.stop()
+        try await wait("the stop is explained") { session.status?.contains("reconnects") == true }
+        session.send("after the server came back")
+        try await wait("the next message reconnects") { lines(log).contains("turn/start:after the server came back") }
+        assert(lines(log).contains("resume:saved-thread:reconnect") && count("thread") == 0, "a lost server reopens the same conversation, never a new one")
+        assert(session.messages.count == shown + 1 && saved.string(forKey: key) == "saved-thread")
+        CodexAppServer.shared.onNotification?("turn/completed", ["threadId": "saved-thread", "turn": ["id": "fixture-turn", "status": "completed"]])
+        assert(session.canLoadEarlier, "a reconnect keeps the older history still to load")
+        session.loadEarlier()
+        try await wait("load earlier adds older turns on top") { session.messages.first?.text == "First thing today" }
+        assert(lines(log).contains("turns:earlier") && !session.canLoadEarlier)
+
+        // A saved conversation Codex can't reopen stays saved and says so; only New conversation moves on.
+        let broken = isolatedDefaults(); broken.set("missing-thread", forKey: key)
+        let failing = CodexPetSession(workspace: dir.appendingPathComponent("pet-broken"), defaults: broken)
+        failing.send("hello")
+        try await wait("a failed reopen is visible") { failing.status?.hasPrefix("Couldn't reopen your last conversation") == true }
+        assert(count("thread") == 0 && broken.string(forKey: key) == "missing-thread" && !failing.thinking, "a failed reopen never starts a new conversation")
+        failing.clear()
+        assert(broken.string(forKey: key) == nil && broken.bool(forKey: checked), "New conversation forgets the saved one for good")
+        failing.send("fresh start")
+        try await wait("New conversation then starts one") { count("thread") == 1 && broken.string(forKey: key) == "fixture-thread" }
+
+        // Once, before anything was saved: the newest of this pet's own conversations, on any page.
+        let legacy = isolatedDefaults()
+        _ = try await CodexAppServer.shared.request("fixture/list", ["mode": "fail"])
+        let migrating = CodexPetSession(workspace: dir.appendingPathComponent("pet-legacy"), defaults: legacy)
+        migrating.reopen()
+        try await wait("a failed lookup is visible, not 'nothing found'") { migrating.status?.hasPrefix("Couldn't look for your last conversation") == true }
+        assert(!legacy.bool(forKey: checked) && count("thread") == 1, "a failed lookup is retried later and starts nothing")
+        _ = try await CodexAppServer.shared.request("fixture/list", ["mode": "legacy"])
+        let lists = count("list")
+        migrating.reopen(); migrating.reopen()   // one shared lookup
+        try await wait("the older pet conversation reopens") { lines(log).contains("resume:legacy-pet:history") }
+        assert(lines(log).contains("list:page-2"), "the lookup reads past a page without a match")
+        assert(count("list") == lists + 2 && count("resume:legacy-pet") == 1, "repeated card opens share one lookup and one reopen")
+        try await wait("the earlier lookup error clears once it reopens") { migrating.status == nil }
+        try await wait("its note shows") { migrating.messages.contains { $0.role == .note && $0.text.contains("before this update") } }
+        assert(legacy.string(forKey: key) == "legacy-pet" && legacy.bool(forKey: checked))
+        migrating.clear()
+
+        // New conversation while Codex is still starting: the old message opens and saves nothing.
+        setenv("PULSE_CHECK_SLOW_START", "1", 1)
+        CodexAppServer.shared.stop()
+        try await Task.sleep(for: .milliseconds(50))
+        let cold = isolatedDefaults(); cold.set(true, forKey: checked)
+        let starting = CodexPetSession(workspace: dir.appendingPathComponent("pet-cold"), defaults: cold)
+        let threadsBefore = count("thread")
+        starting.send("during startup")
+        try await Task.sleep(for: .milliseconds(150))
+        starting.clear()
+        try await Task.sleep(for: .milliseconds(900))
+        unsetenv("PULSE_CHECK_SLOW_START")
+        assert(cold.string(forKey: key) == nil && count("thread") == threadsBefore && !lines(log).contains("turn/start:during startup"),
+               "New conversation during a cold start leaves no thread opened or saved")
+
+        _ = try await CodexAppServer.shared.request("fixture/list", ["mode": "legacy"])   // the restarted fake forgot it
+        let sharing = CodexPetSession(workspace: dir.appendingPathComponent("pet-sharing"), defaults: isolatedDefaults())
+        let listsBefore = count("list"), reopensBefore = count("resume:legacy-pet")
+        sharing.reopen(); sharing.send("during the lookup")
+        try await wait("a message sent during the lookup follows the reopen") { lines(log).contains("turn/start:during the lookup") }
+        assert(count("list") == listsBefore + 2 && count("resume:legacy-pet") == reopensBefore + 1, "a message shares the card's lookup")
+        sharing.clear()
+
+        let toolsOnly = isolatedDefaults(); toolsOnly.set("tools-only", forKey: key)
+        let quietPage = CodexPetSession(workspace: dir.appendingPathComponent("pet-tools"), defaults: toolsOnly)
+        quietPage.reopen()
+        try await wait("a page with nothing to show still offers older history") { quietPage.canLoadEarlier }
+        quietPage.clear()
+
+        let reopensBeforeCut = count("resume:legacy-pet")
+        let interrupted = isolatedDefaults()
+        let cut = CodexPetSession(workspace: dir.appendingPathComponent("pet-cut"), defaults: interrupted)
+        cut.reopen(); cut.clear()   // New conversation while the lookup runs
+        try await Task.sleep(for: .milliseconds(400))
+        assert(count("resume:legacy-pet") == reopensBeforeCut && interrupted.string(forKey: key) == nil && cut.messages.isEmpty,
+               "a lookup New conversation cut off never reopens anything")
+        _ = try await CodexAppServer.shared.request("fixture/list", ["mode": "empty"])
+        print("Recovery checks passed: reopen on card open, history and load earlier, reconnect after a lost server, failed reopen stays saved, one-time lookup across pages")
+    }
+
     /// Calls never overlap: realtime notifications carry only the thread, so an ended call's late close
     /// must not end the next one. An audio retry runs once, and New conversation cancels a pending one.
     @MainActor
@@ -277,7 +427,7 @@ enum CodexSessionChecks {
         CodexAppServer.shared.stop()
         try await Task.sleep(for: .milliseconds(50))
         func starts() -> Int { lines(log).filter { $0 == "realtime/start" }.count }
-        let session = CodexPetSession(workspace: dir.appendingPathComponent("pet-voice"))
+        let session = CodexPetSession(workspace: dir.appendingPathComponent("pet-voice"), defaults: isolatedDefaults())
         session.playCue = { _ in }
         session.muted = true   // the fake helper expects calls to open muted
         var inCall: Bool { session.voiceState == .live || session.voiceState == .speaking }
@@ -400,9 +550,9 @@ enum CodexSessionChecks {
         var shown = [AnyHashable](), replied = [AnyHashable]()
         let originalPresenter = approvals.present
         let originalDefaults = approvals.defaults
-        let suite = "pulse-approval-check-" + UUID().uuidString
+        let suite = isolatedSuite()
         approvals.defaults = UserDefaults(suiteName: suite)!
-        defer { approvals.defaults.removePersistentDomain(forName: suite); approvals.defaults = originalDefaults }
+        defer { approvals.defaults = originalDefaults }
         defer { approvals.present = originalPresenter; approvals.cancelAll(reply: false) }
         approvals.present = { request in
             shown.append(request.id)
@@ -520,7 +670,7 @@ enum CodexSessionChecks {
         server.stop()
         // Text and voice starting together share one app-server and one thread. Voice then fails
         // at the missing native helper; only its thread start matters here.
-        let session = CodexPetSession(workspace: dir.appendingPathComponent("pet-startup"))
+        let session = CodexPetSession(workspace: dir.appendingPathComponent("pet-startup"), defaults: isolatedDefaults())
         session.send("first")
         session.startVoice()
         var deadline = Date().addingTimeInterval(5)
