@@ -293,7 +293,6 @@ struct UsageCard: View {
 struct PetCard: View {
     @Environment(\.colorScheme) private var scheme
     @ObservedObject private var session = CodexPetSession.shared
-    @State private var draft = ""
     @FocusState private var composing: Bool
     var tailEdge: Edge = .trailing
     var showUsage: () -> Void
@@ -302,12 +301,17 @@ struct PetCard: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 BrandIcon(account: .codex, size: 17)
-                Text("Codex").font(.headline)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Codex").font(.headline)
+                    if let detail = conversationDetail {
+                        Text(detail).font(.caption2).foregroundStyle(Ink.secondary(scheme)).lineLimit(1)
+                    }
+                }
                 Spacer()
                 Button("Usage", action: showUsage).buttonStyle(.plain).font(.caption)
                     .foregroundStyle(Ink.secondary(scheme))
                 Button { session.clear() } label: { Image(systemName: "square.and.pencil") }
-                    .buttonStyle(.plain).help("New conversation")
+                    .buttonStyle(.plain).help("New conversation").accessibilityLabel("New conversation")
             }
             .foregroundStyle(Ink.primary(scheme))
 
@@ -335,7 +339,7 @@ struct PetCard: View {
             }
 
             HStack(spacing: 8) {
-                TextField("Ask Codex…", text: $draft, axis: .vertical)
+                TextField("Ask Codex…", text: $session.draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...4)
                     .focused($composing)
@@ -344,10 +348,11 @@ struct PetCard: View {
                     .background(RoundedRectangle(cornerRadius: 10).fill(scheme == .dark ? Color(white: 0.14) : Color(white: 0.92)))
                 if session.thinking {
                     Button { session.interrupt() } label: { Image(systemName: "stop.circle.fill") }
-                        .buttonStyle(.plain).help("Stop")
+                        .buttonStyle(.plain).help("Stop").accessibilityLabel("Stop")
                 } else {
                     Button { submit() } label: { Image(systemName: "arrow.up.circle.fill") }
-                        .buttonStyle(.plain).disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .buttonStyle(.plain).help("Send").accessibilityLabel("Send")
+                        .disabled(session.draft.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 voiceButton
             }
@@ -408,6 +413,9 @@ struct PetCard: View {
             .onChange(of: session.messages.last?.text) { _, _ in
                 if let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
             }
+            .onAppear {   // reopening the card shows where the conversation is, not its oldest message
+                DispatchQueue.main.async { if let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) } }
+            }
         }
     }
 
@@ -417,7 +425,7 @@ struct PetCard: View {
                 Button { session.muted.toggle() } label: {
                     Image(systemName: session.muted ? "mic.slash.fill" : "mic.fill")
                 }
-                .buttonStyle(.plain).help(session.muted ? "Unmute" : "Mute")
+                .buttonStyle(.plain).help(session.muted ? "Unmute" : "Mute").accessibilityLabel(session.muted ? "Unmute" : "Mute")
             }
             Button { session.toggleVoice() } label: {
                 Image(systemName: session.voiceState == .off ? "waveform.circle" : "waveform.circle.fill")
@@ -426,13 +434,21 @@ struct PetCard: View {
             }
             .buttonStyle(.plain)
             .help(session.voiceState == .off ? "Start live voice" : "End live voice")
+            .accessibilityLabel(session.voiceState == .off ? "Start live voice" : "End live voice")
         }
     }
 
+    /// Model · folder · since when, as Codex reported them for the open conversation.
+    private var conversationDetail: String? {
+        let started = session.conversationStarted.map { "since " + $0.formatted(.dateTime.month(.abbreviated).day()) }
+        let parts = [session.model, session.folder, started].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     private func submit() {
-        guard !draft.trimmingCharacters(in: .whitespaces).isEmpty, !session.thinking else { return }
-        session.send(draft)
-        draft = ""
+        guard !session.draft.trimmingCharacters(in: .whitespaces).isEmpty, !session.thinking else { return }
+        session.send(session.draft)
+        session.draft = ""
     }
 }
 

@@ -294,6 +294,11 @@ final class CodexPetSession: ObservableObject {
     @Published var muted = false { didSet { VoiceBridge.shared.setMuted(muted) } }
     @Published private(set) var status: String?   // connection / error line under the composer
     @Published private(set) var waitingOnYou = false   // Codex is paused on an approval or a question
+    @Published var draft = ""   // unsent text survives closing the card
+    // What Codex reports for the open conversation: the model it actually runs, its folder, when it began.
+    @Published private(set) var model: String?
+    @Published private(set) var folder: String?
+    @Published private(set) var conversationStarted: Date?
 
     enum VoiceState { case off, connecting, live, speaking }
 
@@ -452,6 +457,7 @@ final class CodexPetSession: ObservableObject {
         threadTask?.cancel(); lookup?.cancel(); lookup = nil
         threadId = nil; threadTask = nil   // next message starts a fresh thread, even if one was being created
         resumeId = nil; legacyCandidate = nil; earlierCursor = nil; recoveryMessage = nil
+        model = nil; folder = nil; conversationStarted = nil   // the draft stays: it may be for the new conversation
         defaults.removeObject(forKey: Self.savedThreadKey)
         defaults.set(true, forKey: Self.legacyCheckedKey)   // a fresh start never reopens an older conversation
         turnId = nil; interruptedTurn = nil
@@ -554,7 +560,17 @@ final class CodexPetSession: ObservableObject {
         return dir
     }
 
-    struct Opened { let id: String; let history: [ChatMessage]; let earlier: String?; let note: String?; var reconnected = false }
+    struct Opened {
+        let id: String; let history: [ChatMessage]; let earlier: String?; let note: String?; var reconnected = false
+        var model: String?, folder: String?, started: Date?
+
+        /// The model, folder and start Codex reports when it starts or reopens a thread.
+        mutating func describe(_ r: [String: Any]) {
+            model = r["model"] as? String
+            folder = (r["cwd"] as? String).map { URL(fileURLWithPath: $0).lastPathComponent }
+            started = ((r["thread"] as? [String: Any])?["createdAt"] as? Int).map { Date(timeIntervalSince1970: TimeInterval($0)) }
+        }
+    }
 
     /// Text, voice and reopening share one open. `clear()` drops an in-flight one, so it never
     /// becomes the new conversation, and only an open that is still current saves its ID.
@@ -576,6 +592,7 @@ final class CodexPetSession: ObservableObject {
                 // History goes above anything typed while it loaded.
                 messages.insert(contentsOf: opened.history + (opened.note.map { [ChatMessage(role: .note, text: $0)] } ?? []), at: 0)
                 if !opened.reconnected { earlierCursor = opened.earlier }   // a reconnect keeps the history still to page
+                model = opened.model; folder = opened.folder; conversationStarted = opened.started
                 if let shown = recoveryMessage, status == shown { status = nil }   // that problem is over; a newer one stays
                 recoveryMessage = nil
             }
@@ -605,7 +622,9 @@ final class CodexPetSession: ObservableObject {
         guard let id else {
             let r = try await server.request("thread/start", params)
             guard let id = (r["thread"] as? [String: Any])?["id"] as? String else { throw CodexAppServer.Failure.remote("thread/start returned no id") }
-            return Opened(id: id, history: [], earlier: nil, note: nil)
+            var opened = Opened(id: id, history: [], earlier: nil, note: nil)
+            opened.describe(r)
+            return opened
         }
         params["threadId"] = id
         if reconnecting { params["excludeTurns"] = true }
@@ -621,7 +640,9 @@ final class CodexPetSession: ObservableObject {
         var notes = [String]()
         if legacy { notes.append("Reopened your last pet conversation from before this update. Sites a tool blocked in it stay blocked here; start a New conversation to be asked again.") }
         if !history.isEmpty { notes.append("Shown: typed messages, requests Codex acted on and its replies. The rest of a voice call isn't shown here.") }
-        return Opened(id: id, history: history, earlier: page?["nextCursor"] as? String, note: notes.isEmpty ? nil : notes.joined(separator: " "), reconnected: reconnecting)
+        var opened = Opened(id: id, history: history, earlier: page?["nextCursor"] as? String, note: notes.isEmpty ? nil : notes.joined(separator: " "), reconnected: reconnecting)
+        opened.describe(r)
+        return opened
     }
 
     /// The newest conversation this pet had before Pulse saved them: Pulse's own (originator "pulse")

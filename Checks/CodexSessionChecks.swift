@@ -46,7 +46,7 @@ enum CodexSessionChecks {
             assert.equal(m.params.sandbox, 'workspace-write');
             assert(!m.params.runtimeWorkspaceRoots, 'no extra folders are permanently granted');
             log('thread');
-            send({ id: m.id, result: { thread: { id: 'fixture-thread' } } });
+            send({ id: m.id, result: { thread: { id: 'fixture-thread', createdAt: 1790000000 }, model: 'fixture-model', cwd: m.params.cwd } });
           }
           if (m.method === 'fixture/list') { listMode = m.params.mode; send({ id: m.id, result: {} }); }
           if (m.method === 'thread/list') {
@@ -70,7 +70,7 @@ enum CodexSessionChecks {
               const reply = (text) => ({ type: 'agentMessage', id: 'r-' + text, text });
               const newest = { id: 't2', status: 'completed', items: [said('<realtime_delegation>\\n  <input>Open my inbox</input>\\n  <transcript_delta>user: open my inbox</transcript_delta>\\n</realtime_delegation>'), { type: 'commandExecution', id: 'c' }, reply('Done.')] };
               const older = { id: 't1', status: 'completed', items: [said("What's due today?"), reply('Two bills.')] };
-              send({ id: m.id, result: { thread: { id: m.params.threadId }, initialTurnsPage: m.params.excludeTurns ? null : { data: [newest, older], nextCursor: 'earlier' } } });
+              send({ id: m.id, result: { thread: { id: m.params.threadId, createdAt: 1790000000 }, model: 'resumed-model', cwd: m.params.cwd, initialTurnsPage: m.params.excludeTurns ? null : { data: [newest, older], nextCursor: 'earlier' } } });
             }
           }
           if (m.method === 'thread/turns/list') {
@@ -324,6 +324,8 @@ enum CodexSessionChecks {
         assert(lines(log).contains("resume:saved-thread:history") && count("thread") == 0 && count("turn/") == 0 && session.voiceState == .off)
         assert(session.messages.prefix(4).map(\.text) == ["What's due today?", "Two bills.", "Open my inbox", "Done."], "history oldest first, a spoken request without its wrapper (got \(session.messages.map(\.text)))")
         assert(session.messages[4].role == .note && session.messages[4].text.contains("voice call"), "says the transcript isn't the whole voice call")
+        assert(session.model == "resumed-model" && session.folder == "pet-recovery" && session.conversationStarted == Date(timeIntervalSince1970: 1790000000),
+               "the header shows what Codex reports for the reopened conversation")
         assert(session.canLoadEarlier)
         session.send("continue")
         try await wait("a message continues the conversation") { lines(log).contains("turn/start:continue") }
@@ -350,10 +352,13 @@ enum CodexSessionChecks {
         failing.send("hello")
         try await wait("a failed reopen is visible") { failing.status?.hasPrefix("Couldn't reopen your last conversation") == true }
         assert(count("thread") == 0 && broken.string(forKey: key) == "missing-thread" && !failing.thinking, "a failed reopen never starts a new conversation")
+        failing.draft = "not sent yet"
         failing.clear()
         assert(broken.string(forKey: key) == nil && broken.bool(forKey: checked), "New conversation forgets the saved one for good")
+        assert(failing.draft == "not sent yet" && failing.model == nil, "New conversation keeps unsent text and drops the old conversation's details")
         failing.send("fresh start")
         try await wait("New conversation then starts one") { count("thread") == 1 && broken.string(forKey: key) == "fixture-thread" }
+        assert(failing.model == "fixture-model" && failing.folder == "pet-broken", "a started conversation shows the model Codex runs")
 
         // Once, before anything was saved: the newest of this pet's own conversations, on any page.
         let legacy = isolatedDefaults()
