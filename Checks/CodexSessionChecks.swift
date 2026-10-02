@@ -58,11 +58,41 @@ enum CodexSessionChecks {
             send({id:'stale',method:'item/commandExecution/requestApproval',params:{...p,command:'should never run'}});
             send({id:m.id,result:{}});
           }
+          if (m.method === 'fixture/consent') {
+            // Browser Use's site-access request, as built by its plugin; turnId may be null.
+            const meta = {codex_approval_kind:'mcp_tool_call',codex_sensitive_action:true,connector_id:'browser-use',connector_name:'Chrome',persist:'always',tool_name:'access_browser_origin',tool_title:'Access browser origin',tool_params:{origin:'https://example.com'}};
+            const ask = (id, extra = {}) => send({id, method:'mcpServer/elicitation/request', params:{threadId:'fixture-thread',turnId:null,serverName:'cua_repl',mode:'form',message:'Allow Chrome to access https://example.com?',requestedSchema:{type:'object',properties:{}},_meta:meta,...extra}});
+            ask('site-deny'); ask('site-allow'); ask('site-dismiss');
+            ask('otp', {_meta:{...meta,codex_approval_kind:'browser_email_otp',codex_requires_user_input:true},requestedSchema:{type:'object',properties:{approved:{type:'boolean'}},required:['approved']}});
+            ask('strict', {_meta:{...meta,codex_strict_auto_review:true}});
+            send({id:'verify', method:'mcpServer/elicitation/request', params:{threadId:'fixture-thread',serverName:'cua_repl',mode:'openai/userVerification',title:'Verify',description:'Device check',challenge:'abc'}});
+            send({id:'link', method:'mcpServer/elicitation/request', params:{threadId:'fixture-thread',serverName:'cua_repl',mode:'url',message:'Sign in',url:'https://example.com/login',elicitationId:'e1'}});
+            ask('loose-schema', {requestedSchema:{properties:{}}});
+            ask('required-schema', {requestedSchema:{type:'object',properties:{},required:['approved']}});
+            const q = {threadId:'fixture-thread',turnId:'fixture-turn',isBlocking:true};
+            const retry = {id:'q1',header:'Gmail',question:'Retry Gmail?',options:[{label:'Yes',description:'Try again'},{label:'No',description:'Leave it'}]};
+            const ask2 = (id, questions) => send({id, method:'item/tool/requestUserInput', params:{...q,itemId:id,questions}});
+            ask2('question', [retry, {id:'q4',header:'Browser',question:'Which browser?',options:[{label:'Chrome',description:''},{label:'Safari',description:''}]}]);
+            ask2('question-mixed', [retry, {id:'q2',header:'Code',question:'Enter the code',isSecret:true,options:[{label:'123',description:''}]}]);
+            ask2('question-free', [{id:'q3',header:'Name',question:'What should the file be called?'}]);
+            ask2('question-dup', [retry, {...retry,question:'Same id again?'}]);
+            ask2('question-other', [{...retry,id:'q5',isOther:true}]);
+            send({id:'stop-command', method:'item/commandExecution/requestApproval', params:{threadId:'fixture-thread',turnId:'fixture-turn',itemId:'x',command:'echo hi',cwd:'/tmp'}});
+            ask('stop-site');
+            send({id:m.id,result:{}});
+          }
           if (!m.method) {
             if (m.id === 900 || m.id === 'repeat') assert.deepEqual(m.result,{decision:'accept'});
             else if (m.id === 'file') assert.deepEqual(m.result,{decision:'decline'});
             else if (m.id === 'permissions') assert.deepEqual(m.result,{permissions:{fileSystem:{read:null,write:['/Users/example/Projects']}},scope:'turn'});
             else if (m.id === 'unsupported') assert(m.error);
+            // Exact objects: a decline must never carry persist, and nothing unshowable may be declined or errored.
+            else if (m.id === 'site-deny') assert.deepEqual(m.result,{action:'decline'});
+            else if (m.id === 'site-allow') assert.deepEqual(m.result,{action:'accept'});
+            else if (['site-dismiss','otp','strict','verify','link','loose-schema','required-schema','stop-site'].includes(m.id)) assert.deepEqual(m.result,{action:'cancel'});
+            else if (m.id === 'stop-command') assert.deepEqual(m.result,{decision:'cancel'});
+            else if (m.id === 'question') assert.deepEqual(m.result,{answers:{q1:{answers:['Yes']}}});
+            else if (['question-mixed','question-free','question-dup','question-other'].includes(m.id)) assert.deepEqual(m.result,{answers:{}});
             else throw new Error('unexpected or stale approval reply');
             send({method:'fixture/approved',params:{id:m.id}});
           }
@@ -101,6 +131,7 @@ enum CodexSessionChecks {
         checkRecording(session)
         checkTranscripts(session)
         try await checkApprovals()
+        try await checkConsent()
         try await checkStartup(in: dir)
         try await checkNativeVoice(in: dir)
     }
@@ -236,6 +267,59 @@ enum CodexSessionChecks {
         assert(updated.hasPrefix("Custom note\n") && updated.contains("request permission") && !updated.contains("#needs-agent"))
         assert(updatedPetInstructions(updated) == updated, "migration must be idempotent")
         print("Approval checks passed: once/turn/always scope, persistence and reset, deny, child requests, stale resolution, unsupported requests and instruction migration")
+    }
+
+    /// Browser Use remembers a decline for the whole conversation and treats cancel as no decision,
+    /// so only an explicit Deny may decline; everything else Pulse cannot or did not decide cancels.
+    @MainActor
+    static func checkConsent() async throws {
+        let approvals = PetApprovals.shared
+        var shown = [String](), replied = [AnyHashable](), notes = [String]()
+        let originalPresenter = approvals.present
+        defer { approvals.present = originalPresenter; approvals.cancelAll(reply: false) }
+        approvals.present = { request in
+            let id = request.id.base as! String
+            shown.append(id)
+            if request.consent || !request.questions.isEmpty {
+                assert(request.rememberKey == nil, "Pulse never remembers consent or answers; the tool keeps its own decisions")
+            }
+            switch id {
+            case "site-deny":
+                assert(request.consent && request.title == "Allow Chrome to access https://example.com?")
+                assert(request.detail.contains("https://example.com") && request.detail.contains("rest of this conversation"))
+                return .deny
+            case "site-dismiss": return .dismiss
+            case "question":
+                assert(request.questions.map(\.id) == ["q1", "q4"])
+                request.picks.answers["q1"] = "Yes"   // q4 skipped: only answered questions are sent
+                return .allow
+            case "stop-command": approvals.cancelAll(); return .allow   // Stop while a prompt is open; the late answer is dropped
+            default: return .allow
+            }
+        }
+        CodexAppServer.shared.onNotification = { method, params in
+            if method == "fixture/approved", let id = params["id"] as? AnyHashable { replied.append(id) }
+            if method == "pulse/note", let text = params["text"] as? String { notes.append(text) }
+        }
+        _ = try await CodexAppServer.shared.request("fixture/consent", [:])
+        let expected: Set<AnyHashable> = ["site-deny", "site-allow", "site-dismiss", "otp", "strict", "verify", "link", "loose-schema",
+                                          "required-schema", "question", "question-mixed", "question-free", "question-dup", "question-other",
+                                          "stop-command", "stop-site"]
+        let deadline = Date().addingTimeInterval(5)
+        while replied.count < expected.count && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        try await Task.sleep(for: .milliseconds(200))   // a duplicate reply would arrive by now
+        assert(shown == ["site-deny", "site-allow", "site-dismiss", "question", "stop-command"], "only plain consent and choices are shown, never forms, links, verification or strict review (shown \(shown))")
+        assert(replied.count == expected.count && Set(replied) == expected, "every request gets exactly one reply (got \(replied))")
+        assert(notes.count == 10 && notes.contains { $0.contains("“Sign in”") } && notes.contains { $0.contains("What should the file be called?") },
+               "every request Pulse cannot show explains itself in the chat (got \(notes))")
+        assert(notes.filter { $0.contains("secret") }.count == 1 && !notes.contains { $0.contains("secret") && $0.contains("Reply in this chat") },
+               "a secret question is never invited into ordinary chat")
+        var outsideTurn: [String: Any] = ["threadId": "t", "mode": "form", "message": "Allow?", "_meta": ["codex_approval_kind": "mcp_tool_call"],
+                                          "requestedSchema": ["type": "object", "properties": [String: Any](), "required": NSNull()]]
+        assert(PetApproval(id: 1, method: "mcpServer/elicitation/request", params: outsideTurn, item: nil) != nil, "consent without a turn is still shown")
+        outsideTurn["requestedSchema"] = ["type": "object", "properties": ["note": ["type": "string"]]]
+        assert(PetApproval(id: 1, method: "mcpServer/elicitation/request", params: outsideTurn, item: nil) == nil, "a form with fields is never accepted empty")
+        print("Consent checks passed: allow, deny without persist, Esc and Stop cancel, strict schemas, choices without secrets, unshowable requests cancel with a note, one reply each")
     }
 
     @MainActor

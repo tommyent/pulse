@@ -37,13 +37,15 @@ Audio capture and playback use the native voice helper from your installed Codex
 
 The pet starts in `~/Documents/codex-pet`. Ask it to work in another folder, such as `~/Projects` or `~/Downloads`, and approve the requested access in Pulse's permission dialog. The dialog shows the command, file changes, or requested paths. **Allow once** approves one action; **Allow for this task** grants the requested access until the current Codex turn ends. **Always allow** remembers matching requests across restarts: the exact command and working folder, the same requested access, or the same file paths and operation types. A broader or different request still asks. **Deny** grants nothing. Use **Settings → Codex voice → Reset remembered approvals** to ask again for future requests; existing task grants expire when the task ends.
 
+Codex tools can also ask for consent, such as Browser Use asking to open a website. **Allow** and **Deny** are remembered by that tool, not by Pulse: Browser Use keeps site decisions for the rest of the conversation, so start a **New conversation** to be asked again. **Not now** (Esc) decides nothing. Multiple-choice questions from Codex appear as a dialog. Requests Pulse can't show faithfully, such as sign-ins, links, verification codes, secrets or free-text questions, are cancelled or left unanswered, never answered for you, and a note in the chat says what happened.
+
 ## Privacy
 
 - Pulse reads the current user's own CLI credentials: Claude Code's Keychain item (through Apple's `security` tool, so it never prompts) or `~/.claude/.credentials.json`, `~/.codex/auth.json`, and `~/.grok/auth.json`. Grok's file is refreshed in place with an atomic, owner-only write.
 - Web sign-ins made through **Connect** live in macOS WebKit storage; Grok's saved cookie header uses the Keychain service `app.pulse.auth`. Preferences and usage snapshots live in `~/Library/Application Support/Pulse`. The voice helper's error output goes to `pulse-voice.err` in your temporary folder, for diagnosing failed calls.
 - Antigravity usage comes from the CLI's own report: Pulse runs `agy -p /usage --output-format json` in a private temporary folder on each refresh and never reads the Google sign-in. The report is a local command, so it sends no prompt and uses no quota; agy writes its usual log file for each run.
 - Usage requests go straight to each provider over HTTPS. Authenticated responses are not cached to disk and redirects are refused, so a token is never forwarded off-host.
-- Pet chat and audio go through Codex and OpenAI under your Codex account, which may retain threads. The pet thread starts in `~/Documents/codex-pet` with workspace-write sandboxing and user-reviewed, on-request approvals. Pulse creates the folder and seeds an `AGENTS.md` there on first open; existing files have only the original inbox-only restrictions updated, preserving other instructions. The instructions require permission before working outside the inbox; the sandbox enforces write restrictions, while normal read access follows Codex's workspace-write policy. Supported approval requests from the pet and its delegated agents are shown for review; unsupported requests are rejected. Your own Codex configuration and tools apply.
+- Pet chat and audio go through Codex and OpenAI under your Codex account, which may retain threads. The pet thread starts in `~/Documents/codex-pet` with workspace-write sandboxing and user-reviewed, on-request approvals. Pulse creates the folder and seeds an `AGENTS.md` there on first open; existing files have only the original inbox-only restrictions updated, preserving other instructions. The instructions require permission before working outside the inbox; the sandbox enforces write restrictions, while normal read access follows Codex's workspace-write policy. Supported approval, consent and question requests from the pet and its delegated agents are shown for review. Requests Pulse can't show are cancelled or left unanswered with a note in the chat, so they are never recorded as your refusal; other unknown requests are rejected. Your own Codex configuration and tools apply.
 
 ## Checks
 
@@ -62,7 +64,7 @@ Live checks that use your accounts: `./scripts/grok-check.sh` may refresh Grok c
 | `Adapters.swift` | usage fetch for Claude, Codex, Grok and Antigravity; credential reads and Grok token refresh |
 | `CodexChat.swift` | Codex app-server client and pet session |
 | `VoiceBridge.swift` | installed Codex native voice helper, audio controls and lifecycle |
-| `PetApprovals.swift` | native approval prompts, scoped replies and cancellation |
+| `PetApprovals.swift` | native approval, consent and question prompts, scoped replies and cancellation |
 | `HotKey.swift` | global shortcut registration and the Settings recorder |
 | `Views.swift` | rail, rings, usage cards, pet card, Settings |
 | `PulseApp.swift` | app entry, overlay panel, shortcut binding |

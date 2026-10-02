@@ -520,6 +520,8 @@ final class CodexPetSession: ObservableObject {
             realtimeActive = false
             finishLive()
             if voiceState != .off { voiceState = .off; VoiceBridge.shared.close() }
+        case "pulse/note":   // a request Pulse cancelled or left unanswered because it cannot show it
+            if let text = p["text"] as? String { messages.append(ChatMessage(role: .note, text: text)) }
         case "pulse/voiceReady":
             if voiceState == .connecting { voiceState = .live }
         case "pulse/voice":
