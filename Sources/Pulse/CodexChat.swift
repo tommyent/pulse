@@ -6,8 +6,8 @@ import Combine
 //
 // The pet's chat, live voice, and activity all ride on Codex's own app-server, which signs in with
 // ~/.codex/auth.json: the same subscription the Codex app uses, no API key. The process is spawned
-// by the first message or voice start, or by opening the pet when there is a saved conversation to
-// show, and lives until Pulse quits (the usage rings never touch it).
+// when the pet card opens (to show the saved conversation and the work models) or by the first message
+// or voice start, and lives until Pulse quits (the usage rings never touch it).
 
 final class CodexAppServer: @unchecked Sendable {
     static let shared = CodexAppServer()
@@ -252,7 +252,7 @@ otherwise request command approval. Work only within the approved action or task
 - `inbox/` raw dumps that have not been sorted yet (one file per item, `YYYY-MM-DD-slug.md`)
 - `todos.md` open tasks, one `- [ ]` line each, newest at the bottom; tick instead of deleting
 - `reminders.md` dated items, one line each: `YYYY-MM-DD HH:MM  what`
-- `bills.md` what is due, when, how much, and whether it is paid; never pay anything
+- `bills.md` what is due, when, how much, and whether it is paid; pay only when the owner explicitly asks for that payment
 - `ideas.md` one heading per idea, notes under it
 - `research/` longer write-ups as `.md` or `.html`, one file per topic
 - `archive/` anything done or stale; move, do not delete
@@ -262,8 +262,9 @@ otherwise request command approval. Work only within the approved action or task
 - Capture first, ask later. When something comes in by chat or voice, write it down immediately in
   the right file, or in `inbox/` if unsure. Keep it short and date-stamp it.
 - When asked to organize, sweep `inbox/` into the files above and report what moved.
-- Tracking only: note bills, deadlines, and follow-ups. Do not send email, pay, book, or contact
-  anyone. For work in other folders, request permission
+- Note bills, deadlines, and follow-ups. Don't send email, pay, book, or contact anyone on your own:
+  do that only when the owner explicitly asks for that specific action, and let Pulse's permission
+  prompts confirm it. For work in other folders, request permission
   and carry out the requested task after approval, including through available agents and tools.
 - Never delete the owner's words; rewrite for brevity only when asked.
 - On every open, if `reminders.md` has anything due today or overdue, say so first.
@@ -271,10 +272,14 @@ otherwise request command approval. Work only within the approved action or task
 
 /// Replace only the original restrictions; preserve the owner's other instructions and notes.
 func updatedPetInstructions(_ text: String) -> String {
+    // Oldest first: each step expects the text the one before it leaves.
     text.replacingOccurrences(of: "You can only read and write\ninside this folder.", with:
         "This is your default working\nfolder. When asked to work elsewhere (commonly ~/Projects or ~/Downloads), request permission\nfor the needed paths before accessing them. Use the permission request tool when available;\notherwise request command approval. Work only within the approved action or task scope.")
         .replacingOccurrences(of: "anyone. If an item needs action outside this folder, add it to `todos.md` tagged `#needs-agent`.", with:
         "anyone. For work in other folders, request permission\n  and carry out the requested task after approval, including through available agents and tools.")
+        .replacingOccurrences(of: "whether it is paid; never pay anything", with: "whether it is paid; pay only when the owner explicitly asks for that payment")
+        .replacingOccurrences(of: "- Tracking only: note bills, deadlines, and follow-ups. Do not send email, pay, book, or contact\n  anyone.", with:
+        "- Note bills, deadlines, and follow-ups. Don't send email, pay, book, or contact anyone on your own:\n  do that only when the owner explicitly asks for that specific action, and let Pulse's permission\n  prompts confirm it.")
 }
 
 @MainActor
@@ -302,6 +307,22 @@ final class CodexPetSession: ObservableObject {
     @Published private(set) var model: String?
     @Published private(set) var folder: String?
     @Published private(set) var conversationStarted: Date?
+    @Published private(set) var effort: String?
+    /// The models Codex offers for the work (`model/list`). The voice that talks is a separate realtime
+    /// model; choosing here never changes it.
+    struct WorkModel: Identifiable { let id, name: String; let efforts: [String] }
+    @Published private(set) var workModels: [WorkModel] = []
+    @Published private(set) var choosingWork = false   // one switch at a time; the menu waits for it
+    // Saved only once Codex accepted it (or, with no conversation yet, once it matched what Codex offers):
+    // new conversations start with it.
+    @Published private(set) var preferredModel: String?
+    @Published private(set) var preferredEffort: String?
+    static let workModelKey = "petWorkModel", workEffortKey = "petWorkEffort"
+    /// The header's model and effort: the open conversation's, else the saved choice. Nothing otherwise:
+    /// model/list's default isn't what Codex's own settings give a new conversation.
+    var shownModel: String? { model ?? preferredModel }
+    var shownEffort: String? { model != nil ? effort : preferredEffort }
+    private var switchError: String?   // shown only until a switch succeeds
 
     enum VoiceState { case off, connecting, live, speaking }
 
@@ -345,7 +366,19 @@ final class CodexPetSession: ObservableObject {
     init(workspace: URL? = nil, defaults: UserDefaults = .standard) {
         self.workspace = workspace
         self.defaults = defaults
+        preferredModel = defaults.string(forKey: Self.workModelKey)
+        preferredEffort = defaults.string(forKey: Self.workEffortKey)
         server.onNotification = { [weak self] method, params in self?.handle(method, params) }
+        PetApprovals.shared.onPromptOpened = { [weak self] request in self?.promptOpened(request) }
+    }
+
+    /// Mid-call, a prompt is a window the user may not be looking at: a sound, and the voice says so.
+    /// Answering stays a click in that window; nothing said in the call answers it.
+    private func promptOpened(_ request: PetApproval) {
+        guard voiceState == .live || voiceState == .speaking, realtimeRequested, let tid = threadId else { return }
+        playCue("Glass")
+        let what = request.questions.isEmpty ? "is asking for your OK" : "has a question for you"
+        Task { _ = try? await server.request("thread/realtime/appendSpeech", ["threadId": tid, "text": "Codex \(what) in a window on your screen."]) }
     }
 
     /// Opening the card shows the conversation to continue: it reopens it without starting a turn or
@@ -363,6 +396,68 @@ final class CodexPetSession: ObservableObject {
             catch is CancellationError {}
             catch { if conversation == epoch { status = error.localizedDescription } }
         }
+    }
+
+    /// Loads the models Codex offers for the work. Called when the card opens, which starts Codex if needed.
+    func loadWorkModels() {
+        guard workModels.isEmpty, !loadingWorkModels else { return }
+        loadingWorkModels = true
+        Task {
+            defer { loadingWorkModels = false }
+            do {
+                try await server.start()
+                var found = [WorkModel](), cursor: String?
+                repeat {
+                    var params: [String: Any] = ["limit": 50]
+                    if let cursor { params["cursor"] = cursor }
+                    let r = try await server.request("model/list", params)
+                    for m in r["data"] as? [[String: Any]] ?? [] where m["hidden"] as? Bool != true {
+                        guard let id = m["model"] as? String else { continue }
+                        let efforts = (m["supportedReasoningEfforts"] as? [[String: Any]] ?? []).compactMap { $0["reasoningEffort"] as? String }
+                        found.append(WorkModel(id: id, name: m["displayName"] as? String ?? id, efforts: efforts))
+                    }
+                    cursor = r["nextCursor"] as? String
+                } while cursor != nil
+                workModels = found
+            } catch {}   // the menu just stays a label; chat reports a missing Codex itself
+        }
+    }
+    private var loadingWorkModels = false
+
+    /// Switches the work model and effort. With a conversation to continue it is reopened if needed and
+    /// switched there first; the choice is kept for new conversations only once Codex accepted it.
+    func chooseWork(model chosen: String, effort level: String) {
+        guard !choosingWork, workModels.first(where: { $0.id == chosen })?.efforts.contains(level) == true else { return }
+        choosingWork = true
+        let conversation = epoch
+        Task {
+            defer { choosingWork = false }
+            if let pending = lookup { await pending.value }   // it may yet find a conversation to continue
+            guard conversation == epoch else { return }       // New conversation meanwhile: this choice was for the old one
+            // One already being opened (a first message's thread/start still unanswered) counts too.
+            guard threadId != nil || threadTask != nil || resumeId != nil || defaults.string(forKey: Self.savedThreadKey) != nil || legacyCandidate != nil else {
+                savePreference(chosen, level)   // nothing to continue: the next conversation starts with it
+                return
+            }
+            do {
+                let tid = try await ensureThread()
+                _ = try await server.request("thread/settings/update", ["threadId": tid, "model": chosen, "effort": level])
+                guard conversation == epoch, tid == threadId else { return }
+                savePreference(chosen, level)   // the header follows Codex's own thread/settings/updated
+                if let shown = switchError, status == shown { status = nil }
+                switchError = nil
+            } catch {
+                guard conversation == epoch else { return }
+                switchError = "Couldn't switch the work model (\(error.localizedDescription))."
+                status = switchError
+            }
+        }
+    }
+
+    private func savePreference(_ chosen: String, _ level: String) {
+        preferredModel = chosen; preferredEffort = level
+        defaults.set(chosen, forKey: Self.workModelKey)
+        defaults.set(level, forKey: Self.workEffortKey)
     }
 
     /// The one-time look for this pet's newest conversation from before Pulse saved them. Card opens,
@@ -461,7 +556,7 @@ final class CodexPetSession: ObservableObject {
         threadTask?.cancel(); lookup?.cancel(); lookup = nil
         threadId = nil; threadTask = nil   // next message starts a fresh thread, even if one was being created
         resumeId = nil; legacyCandidate = nil; earlierCursor = nil; recoveryMessage = nil
-        model = nil; folder = nil; conversationStarted = nil   // the draft stays: it may be for the new conversation
+        model = nil; effort = nil; folder = nil; conversationStarted = nil   // the draft stays: it may be for the new conversation
         defaults.removeObject(forKey: Self.savedThreadKey)
         defaults.set(true, forKey: Self.legacyCheckedKey)   // a fresh start never reopens an older conversation
         turnId = nil; interruptedTurn = nil
@@ -568,11 +663,12 @@ final class CodexPetSession: ObservableObject {
 
     struct Opened {
         let id: String; let history: [ChatMessage]; let earlier: String?; let note: String?; var reconnected = false
-        var model: String?, folder: String?, started: Date?
+        var model: String?, effort: String?, folder: String?, started: Date?
 
         /// The model, folder and start Codex reports when it starts or reopens a thread.
         mutating func describe(_ r: [String: Any]) {
             model = r["model"] as? String
+            effort = r["reasoningEffort"] as? String
             folder = (r["cwd"] as? String).map { URL(fileURLWithPath: $0).lastPathComponent }
             started = ((r["thread"] as? [String: Any])?["createdAt"] as? Int).map { Date(timeIntervalSince1970: TimeInterval($0)) }
         }
@@ -598,7 +694,7 @@ final class CodexPetSession: ObservableObject {
                 // History goes above anything typed while it loaded.
                 messages.insert(contentsOf: opened.history + (opened.note.map { [ChatMessage(role: .note, text: $0)] } ?? []), at: 0)
                 if !opened.reconnected { earlierCursor = opened.earlier }   // a reconnect keeps the history still to page
-                model = opened.model; folder = opened.folder; conversationStarted = opened.started
+                model = opened.model; effort = opened.effort; folder = opened.folder; conversationStarted = opened.started
                 if let shown = recoveryMessage, status == shown { status = nil }   // that problem is over; a newer one stays
                 recoveryMessage = nil
             }
@@ -626,6 +722,8 @@ final class CodexPetSession: ObservableObject {
         }
         try Task.checkCancellation()   // New conversation cancels an open that hasn't reached Codex yet
         guard let id else {
+            if let chosen = preferredModel { params["model"] = chosen }
+            if let chosen = preferredEffort { params["config"] = ["model_reasoning_effort": chosen] }   // set with the thread, atomically
             let r = try await server.request("thread/start", params)
             guard let id = (r["thread"] as? [String: Any])?["id"] as? String else { throw CodexAppServer.Failure.remote("thread/start returned no id") }
             var opened = Opened(id: id, history: [], earlier: nil, note: nil)
@@ -744,6 +842,13 @@ final class CodexPetSession: ObservableObject {
             } else if retrying { status = nil }   // the retry worked
             retrying = false
             activity = activity.filter { !$0.done }.suffix(6).map { $0 }
+        case "thread/settings/updated":   // Codex's own word on the model and effort now in use
+            guard let settings = p["threadSettings"] as? [String: Any] else { return }
+            if let current = settings["model"] as? String { model = current }
+            effort = settings["effort"] as? String
+        case "model/rerouted":
+            guard let from = p["fromModel"] as? String, let to = p["toModel"] as? String else { return }
+            messages.append(ChatMessage(role: .note, text: "Codex used \(to) instead of \(from) for this request."))
         case "thread/status/changed":
             let state = p["status"] as? [String: Any]
             waitingOnYou = state?["type"] as? String == "active" && !(state?["activeFlags"] as? [String] ?? []).isEmpty

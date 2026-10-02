@@ -301,15 +301,21 @@ struct PetCard: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 BrandIcon(account: .codex, size: 17)
+                // Takes only the width left over, so the details truncate instead of squeezing the buttons.
                 VStack(alignment: .leading, spacing: 0) {
                     Text("Codex").font(.headline)
-                    if let detail = conversationDetail {
-                        Text(detail).font(.caption2).foregroundStyle(Ink.secondary(scheme)).lineLimit(1)
+                    if !session.workModels.isEmpty {
+                        workModelMenu(workDetail ?? "Choose a work model")
+                    } else if let work = workDetail {
+                        Text(work).font(.caption2).foregroundStyle(Ink.secondary(scheme)).lineLimit(1)
+                    }
+                    if let place = placeDetail {
+                        Text(place).font(.caption2).foregroundStyle(Ink.secondary(scheme)).lineLimit(1).truncationMode(.middle)
                     }
                 }
-                Spacer()
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Button("Usage", action: showUsage).buttonStyle(.plain).font(.caption)
-                    .foregroundStyle(Ink.secondary(scheme))
+                    .foregroundStyle(Ink.secondary(scheme)).fixedSize()
                 Button { session.clear() } label: { Image(systemName: "square.and.pencil") }
                     .buttonStyle(.plain).help("New conversation").accessibilityLabel("New conversation")
             }
@@ -363,7 +369,7 @@ struct PetCard: View {
         .padding(Edge.Set(tailEdge), BubbleShape.tailWidth)
         .frame(width: tailEdge == .trailing || tailEdge == .leading ? 340 + BubbleShape.tailWidth : 340)
         .glassCard(in: BubbleShape(edge: tailEdge))
-        .task { session.reopen(); try? await Task.sleep(for: .milliseconds(200)); composing = true }   // after the panel is key
+        .task { session.reopen(); session.loadWorkModels(); try? await Task.sleep(for: .milliseconds(200)); composing = true }   // after the panel is key
         .onExitCommand {
             // Escape: end the call and hand the keyboard back to whatever was in front
             session.stopVoice()
@@ -446,10 +452,41 @@ struct PetCard: View {
     }
 
     /// Model · folder · since when, as Codex reported them for the open conversation.
-    private var conversationDetail: String? {
-        let started = session.conversationStarted.map { "since " + $0.formatted(.dateTime.month(.abbreviated).day()) }
-        let parts = [session.model, session.folder, started].compactMap { $0 }
+    /// Model · effort, as Codex reported them (or the saved choice before a conversation).
+    private var workDetail: String? {
+        let parts = [session.shownModel, session.shownEffort].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// Folder · since when, for the open conversation.
+    private var placeDetail: String? {
+        let started = session.conversationStarted.map { "since " + $0.formatted(.dateTime.month(.abbreviated).day()) }
+        let parts = [session.folder, started].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// The header detail doubles as the work-model menu: the model doing Codex's work and its effort,
+    /// never the voice's own realtime model.
+    private func workModelMenu(_ detail: String) -> some View {
+        Menu {
+            Section("Work model · the voice stays the same") {
+                ForEach(session.workModels) { work in
+                    Menu(work.id == session.shownModel ? "✓ " + work.name : work.name) {
+                        ForEach(work.efforts, id: \.self) { level in
+                            Button(work.id == session.shownModel && level == session.shownEffort ? "✓ " + level : level) {
+                                session.chooseWork(model: work.id, effort: level)
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            Text(detail).font(.caption2).foregroundStyle(Ink.secondary(scheme)).lineLimit(1).truncationMode(.tail)
+        }
+        .menuStyle(.borderlessButton)
+        .disabled(session.choosingWork)
+        .help("Work model: \(detail). Choose the model and effort Codex works with; the voice doesn't change.")
+        .accessibilityLabel("Work model: \(detail)")
     }
 
     private func submit() {
@@ -769,7 +806,7 @@ struct SettingsView: View {
             }
             Section("Codex voice") {
                 LabeledContent("Shortcut") { HotKeyRecorder(combo: state.voiceHotKeyBinding) }
-                Text("Press once to open the pet and start talking; press again to end the call. Hold it to talk only while it is down. Escape ends the call and closes the card.")
+                Text("Tap to open the pet and start a call; tap again to end it. Hold it to talk: letting go mutes only the microphone while the reply keeps playing, and the next press unmutes. Escape ends the call and closes the card.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Reset remembered approvals") { PetApprovals.shared.resetRemembered() }
                     .help("Ask again for future command and folder-access requests. Current task grants expire when that task ends.")

@@ -36,7 +36,7 @@ enum CodexSessionChecks {
         const assert = require('node:assert/strict');
         const log = word => process.env.PULSE_CHECK_LOG && require('node:fs').appendFileSync(process.env.PULSE_CHECK_LOG, word + '\\n');
         log('spawn');
-        let dieNext = false, rejectNext = false, listMode = 'empty';
+        let dieNext = false, rejectNext = false, slowThread = false, listMode = 'empty';
         require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
           const m = JSON.parse(line);
           if (m.method === 'initialize') setTimeout(() => send({ id: m.id, result: {} }), process.env.PULSE_CHECK_SLOW_START ? 600 : 0);
@@ -46,9 +46,27 @@ enum CodexSessionChecks {
             assert.equal(m.params.sandbox, 'workspace-write');
             assert(!m.params.runtimeWorkspaceRoots, 'no extra folders are permanently granted');
             log('thread');
-            send({ id: m.id, result: { thread: { id: 'fixture-thread', createdAt: 1790000000 }, model: 'fixture-model', cwd: m.params.cwd } });
+            const startEffort = (m.params.config || {}).model_reasoning_effort;
+            log('start-model:' + (m.params.model || '') + ':' + (startEffort || ''));
+            if (startEffort === 'refused') { send({ id: m.id, error: { message: 'fixture refusal' } }); return; }
+            const started = () => send({ id: m.id, result: { thread: { id: 'fixture-thread', createdAt: 1790000000 }, model: m.params.model || 'fixture-model', reasoningEffort: startEffort || 'medium', cwd: m.params.cwd } });
+            if (slowThread) { slowThread = false; setTimeout(started, 400); } else started();
           }
           if (m.method === 'fixture/list') { listMode = m.params.mode; send({ id: m.id, result: {} }); }
+          if (m.method === 'model/list') {
+            const model = (id, name, hidden) => ({ id, model: id, displayName: name, hidden, isDefault: false, description: '', defaultReasoningEffort: 'low',
+              supportedReasoningEfforts: [{ reasoningEffort: 'low', description: '' }, { reasoningEffort: 'high', description: '' }] });
+            send({ id: m.id, result: { data: [{ ...model('fixture-model', 'Fixture', false), isDefault: true }, model('fast-model', 'Fast', false), model('secret-model', 'Hidden', true)], nextCursor: null } });
+          }
+          if (m.method === 'thread/settings/update') {
+            log('settings:' + (m.params.model || '') + ':' + (m.params.effort || ''));
+            if (m.params.effort === 'refused' || (m.params.model === 'fixture-model' && m.params.effort === 'low')) {
+              send({ id: m.id, error: { message: 'fixture refusal' } }); return;
+            }
+            send({ id: m.id, result: {} });
+            send({ method: 'thread/settings/updated', params: { threadId: m.params.threadId, threadSettings: { model: m.params.model || 'fixture-model', effort: m.params.effort } } });
+          }
+          if (m.method === 'thread/realtime/appendSpeech') { log('speech:' + m.params.text); send({ id: m.id, result: {} }); }
           if (m.method === 'thread/list') {
             log('list' + (m.params.cursor ? ':' + m.params.cursor : ''));
             const here = m.params.cwd, thread = (id, originator, cwd, updatedAt) => ({ id, originator, cwd, updatedAt });
@@ -138,6 +156,7 @@ enum CodexSessionChecks {
             if (text === 'slow acknowledgement') setTimeout(accept, 300); else accept();
           }
           if (m.method === 'fixture/die-next') { dieNext = true; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/slow-thread') { slowThread = true; send({ id: m.id, result: {} }); }
           if (m.method === 'fixture/reject-next') { rejectNext = true; send({ id: m.id, result: {} }); }
           if (m.method === 'thread/realtime/start' && rejectNext) { rejectNext = false; log('realtime/rejected'); send({ id: m.id, error: { message: 'fixture rejection' } }); }
           else if (m.method === 'thread/realtime/start') {
@@ -186,6 +205,7 @@ enum CodexSessionChecks {
         try await checkConsent()
         try await checkLifecycle(in: dir)
         try await checkRecovery(in: dir)
+        try await checkWorkModel(in: dir)
         try await checkStartup(in: dir)
         try await checkNativeVoice(in: dir)
         try await checkVoiceLifecycle(in: dir, server: cli)
@@ -224,6 +244,7 @@ enum CodexSessionChecks {
         session.send("first")
         try await wait("a text turn starts (status \(session.status ?? "none"), thinking \(session.thinking), log \(lines(log)))") { session.thinking && lines(log).contains("turn/start:first") }
         notify("turn/completed", ["turn": ["id": "fixture-turn", "status": "completed"]])
+
 
         notify("thread/realtime/started")
         notify("turn/started", ["turn": ["id": "fixture-turn"]])
@@ -459,6 +480,107 @@ enum CodexSessionChecks {
         print("Recovery checks passed: reopen on card open, history and load earlier, reconnect after a lost server, failed reopen stays saved, one-time lookup across pages")
     }
 
+    /// The work model: chosen only from what Codex offers, one switch at a time, kept only once accepted,
+    /// and applied to the conversation there is to continue or, when there's none, to the next one.
+    @MainActor
+    static func checkWorkModel(in dir: URL) async throws {
+        let log = dir.appendingPathComponent("work-model.log")
+        setenv("PULSE_CHECK_LOG", log.path, 1)
+        CodexAppServer.shared.stop()
+        try await Task.sleep(for: .milliseconds(50))
+        func count(_ line: String) -> Int { lines(log).filter { $0 == line }.count }
+        func switches() -> [String] { lines(log).filter { $0.hasPrefix("settings:") } }
+        let key = CodexPetSession.workModelKey, effortKey = CodexPetSession.workEffortKey
+
+        // Before any conversation the header claims nothing (model/list's default isn't Codex's settings),
+        // and a choice waits for the first conversation.
+        let fresh = isolatedDefaults(); fresh.set(true, forKey: CodexPetSession.legacyCheckedKey)
+        let early = CodexPetSession(workspace: dir.appendingPathComponent("pet-early"), defaults: fresh)
+        early.loadWorkModels()
+        try await wait("work models load when the card opens") { early.workModels.map(\.id) == ["fixture-model", "fast-model"] }
+        assert(early.shownModel == nil && early.shownEffort == nil && count("thread") == 0, "no made-up default, and no conversation started")
+        early.chooseWork(model: "fast-model", effort: "high")
+        try await wait("with nothing to continue, an offered choice is kept for the first conversation") {
+            fresh.string(forKey: key) == "fast-model" && fresh.string(forKey: effortKey) == "high" && early.shownModel == "fast-model" && !early.choosingWork
+        }
+        assert(switches().isEmpty)
+        early.send("first task")
+        try await wait("the first conversation starts with it, in one step") { count("start-model:fast-model:high") == 1 && early.model == "fast-model" && early.effort == "high" }
+        CodexAppServer.shared.onNotification?("turn/completed", ["threadId": "fixture-thread", "turn": ["id": "fixture-turn", "status": "completed"]])
+
+        // With a conversation open: offered choices only, one at a time, kept once Codex accepted them.
+        early.chooseWork(model: "secret-model", effort: "low")
+        early.chooseWork(model: "fast-model", effort: "medium")   // not an effort Codex offers for it
+        early.chooseWork(model: "fixture-model", effort: "high")
+        early.chooseWork(model: "fast-model", effort: "low")      // a second choice while the first is in flight
+        try await wait("the switch lands") { early.model == "fixture-model" && early.effort == "high" && !early.choosingWork }
+        assert(switches() == ["settings:fixture-model:high"], "hidden, unoffered and overlapping choices never reach Codex")
+        assert(fresh.string(forKey: key) == "fixture-model" && fresh.string(forKey: effortKey) == "high")
+        early.chooseWork(model: "fixture-model", effort: "low")   // Codex refuses this one
+        try await wait("a refusal is said") { early.status?.hasPrefix("Couldn't switch the work model") == true && !early.choosingWork }
+        assert(fresh.string(forKey: key) == "fixture-model" && fresh.string(forKey: effortKey) == "high" && early.effort == "high", "a refused choice is never kept")
+        early.chooseWork(model: "fast-model", effort: "high")
+        try await wait("a later switch clears that refusal") { early.status == nil && early.model == "fast-model" && !early.choosingWork }
+        CodexAppServer.shared.onNotification?("model/rerouted", ["threadId": "fixture-thread", "turnId": "fixture-turn", "fromModel": "fast-model", "toModel": "backup-model", "reason": "highRiskCyberActivity"])
+        assert(early.messages.last?.role == .note && early.messages.last?.text.contains("backup-model") == true, "a reroute is said, not hidden")
+
+        // After a lost server, a choice reconnects to the same conversation first.
+        CodexAppServer.shared.stop()
+        try await wait("the stop is explained") { early.status?.contains("reconnects") == true }
+        early.chooseWork(model: "fixture-model", effort: "high")
+        try await wait("the conversation is reopened, then switched") {
+            lines(log).contains("resume:fixture-thread:reconnect") && switches().last == "settings:fixture-model:high" && !early.choosingWork
+        }
+        assert(count("thread") == 1, "never a new conversation")
+
+        // A choice right before New conversation belongs to the old one: nothing opens or switches after it.
+        let before = switches().count, starts = lines(log).filter { $0.hasPrefix("start-model:") }.count
+        early.chooseWork(model: "fast-model", effort: "low")
+        early.clear()
+        try await Task.sleep(for: .milliseconds(300))
+        assert(switches().count == before && lines(log).filter { $0.hasPrefix("start-model:") }.count == starts && !early.choosingWork,
+               "a choice cut off by New conversation neither opens nor switches a conversation")
+        assert(fresh.string(forKey: key) == "fixture-model" && fresh.string(forKey: effortKey) == "high",
+               "and isn't kept for the next one either: it was made for the conversation that ended")
+
+        // A choice made while the one-time lookup runs applies to the conversation it finds.
+        _ = try await CodexAppServer.shared.request("fixture/list", ["mode": "legacy"])
+        let looking = isolatedDefaults()
+        let finder = CodexPetSession(workspace: dir.appendingPathComponent("pet-finder"), defaults: looking)
+        finder.loadWorkModels()
+        try await wait("models") { !finder.workModels.isEmpty }
+        finder.reopen()
+        finder.chooseWork(model: "fast-model", effort: "high")
+        try await wait("the found conversation is reopened and switched") {
+            lines(log).contains("resume:legacy-pet:history") && switches().last == "settings:fast-model:high" && looking.string(forKey: key) == "fast-model"
+        }
+        finder.clear()
+        _ = try await CodexAppServer.shared.request("fixture/list", ["mode": "empty"])
+
+        // A choice while the first conversation is still being created waits for it and switches it.
+        let creating = isolatedDefaults(); creating.set(true, forKey: CodexPetSession.legacyCheckedKey)
+        let slow = CodexPetSession(workspace: dir.appendingPathComponent("pet-slow"), defaults: creating)
+        slow.loadWorkModels()
+        try await wait("models") { !slow.workModels.isEmpty }
+        _ = try await CodexAppServer.shared.request("fixture/slow-thread", [:])
+        slow.send("first")
+        try await Task.sleep(for: .milliseconds(100))   // thread/start sent, its answer still 300 ms away
+        slow.chooseWork(model: "fast-model", effort: "high")
+        try await wait("the conversation being created gets the choice") {
+            switches().last == "settings:fast-model:high" && slow.model == "fast-model" && creating.string(forKey: key) == "fast-model"
+        }
+        slow.clear()
+
+        // A saved choice Codex refuses at start: nothing is created half-way, and the chat says why.
+        let refused = isolatedDefaults(); refused.set(true, forKey: CodexPetSession.legacyCheckedKey)
+        refused.set("fast-model", forKey: key); refused.set("refused", forKey: effortKey)
+        let stubborn = CodexPetSession(workspace: dir.appendingPathComponent("pet-refused"), defaults: refused)
+        stubborn.send("go")
+        try await wait("a refused start is visible") { stubborn.status == "fixture refusal" && !stubborn.thinking }
+        assert(refused.string(forKey: CodexPetSession.savedThreadKey) == nil, "no conversation is saved from a refused start")
+        print("Work model checks passed: no made-up default, offered choices only, one at a time, kept once accepted, refusals cleared by success, reconnect, New conversation, lookup, a conversation being created, atomic start, reroutes")
+    }
+
     /// Calls never overlap: realtime notifications carry only the thread, so an ended call's late close
     /// must not end the next one. An audio retry runs once, and New conversation cancels a pending one.
     @MainActor
@@ -484,10 +606,20 @@ enum CodexSessionChecks {
         try await wait("the next call goes live") { inCall }
         try await Task.sleep(for: .milliseconds(400))
         assert(inCall, "an ended call's late close must not end the next call")
+        var cues: [String] = []
+        session.playCue = { cues.append($0) }
+        let prompt = PetApproval(id: "cue", method: "item/commandExecution/requestApproval", params: ["threadId": "t", "turnId": "u", "command": "ls"], item: nil)!
+        PetApprovals.shared.onPromptOpened(prompt)
+        try await wait("mid-call, a prompt is announced") { lines(log).contains("speech:Codex is asking for your OK in a window on your screen.") }
+        assert(cues == ["Glass"], "and a sound plays")
         let calls = lines(log).filter { $0.hasPrefix("realtime/") }
         assert(calls == ["realtime/start", "realtime/closed", "realtime/start"], "the next call starts after the ended one closed (got \(calls))")
 
         session.stopVoice()
+        let spoken = lines(log).filter { $0.hasPrefix("speech:") }.count
+        PetApprovals.shared.onPromptOpened(prompt)   // the conversation is still open, the call is not
+        try await Task.sleep(for: .milliseconds(200))
+        assert(lines(log).filter { $0.hasPrefix("speech:") }.count == spoken && cues.filter { $0 == "Glass" }.count == 1, "with no call, a prompt is only the window")
         _ = try await CodexAppServer.shared.request("fixture/die-next", [:])
         session.startVoice()
         try await wait("a helper dying right after its devices open retries once") { starts() == 4 && inCall }
@@ -499,6 +631,7 @@ enum CodexSessionChecks {
         session.clear()
         try await Task.sleep(for: .milliseconds(700))
         assert(starts() == 5 && session.voiceState == .off, "New conversation cancels a pending audio retry")
+
 
         _ = try await CodexAppServer.shared.request("fixture/reject-next", [:])
         session.startVoice()
@@ -516,7 +649,7 @@ enum CodexSessionChecks {
         CodexAppServer.shared.stop()   // losing the server must cancel the pending retry too
         try await Task.sleep(for: .milliseconds(700))
         assert(starts() == 7 && session.voiceState == .off, "a lost server cancels a pending audio retry")
-        print("Voice lifecycle checks passed: End then Start, stale close, one audio retry, retry cancelled by New conversation or a lost server, rejected start")
+        print("Voice lifecycle checks passed: prompt announced mid-call, End then Start, stale close, one audio retry, retry cancelled by New conversation or a lost server, rejected start")
     }
 
     @MainActor
@@ -649,6 +782,16 @@ enum CodexSessionChecks {
         let updated = updatedPetInstructions(legacy)
         assert(updated.hasPrefix("Custom note\n") && updated.contains("request permission") && !updated.contains("#needs-agent"))
         assert(updatedPetInstructions(updated) == updated, "migration must be idempotent")
+        // The original seed, as the first Pulse wrote it, plus a line of the owner's own.
+        let original = "My own line\nYou can only read and write\ninside this folder.\n\n- `bills.md` what is due, when, how much, and whether it is paid; never pay anything\n\n"
+            + "- Tracking only: note bills, deadlines, and follow-ups. Do not send email, pay, book, or contact\n  anyone. If an item needs action outside this folder, add it to `todos.md` tagged `#needs-agent`.\n"
+        let loosened = updatedPetInstructions(original)
+        assert(loosened.hasPrefix("My own line\nThis is your default working\nfolder.") && loosened.contains("pay only when the owner explicitly asks for that payment")
+               && loosened.contains("contact anyone on your own:\n  do that only when the owner explicitly asks for that specific action, and let Pulse's permission\n  prompts confirm it. For work in other folders, request permission")
+               && !loosened.contains("#needs-agent") && !loosened.contains("Tracking only") && !loosened.contains("never pay"),
+               "every older seed reaches today's rules: permission for other folders, and sending, paying or booking only on an explicit request (got \(loosened))")
+        assert(updatedPetInstructions(loosened) == loosened && updatedPetInstructions("Do not pay. My rules.") == "Do not pay. My rules.",
+               "only the original sentences change; the owner's own wording stays")
         print("Approval checks passed: once/turn/always scope, persistence and reset, deny, child requests, stale resolution, unsupported requests and instruction migration")
     }
 
