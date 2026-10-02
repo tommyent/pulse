@@ -226,6 +226,9 @@ struct ChatMessage: Identifiable {
     var text: String
     var live = false   // still streaming
     var sourceID: String?
+    /// Set on results of work a call started, so they never read as spoken replies: "After the call" when
+    /// it finished once the call was over, "Work result" when reopened (history can't tell when it was heard).
+    var caption: String?
 }
 
 struct ActivityPill: Identifiable {
@@ -325,6 +328,7 @@ final class CodexPetSession: ObservableObject {
     private var retrying = false           // the status line shows a retry Codex is making on its own
     private var realtimeActive = false
     private var heardAgentItems: Set<String> = []   // finished while a call was live: the voice relayed them
+    private var voiceTurns: Set<String> = []   // work a call started, including the transcript flush after it
     private var promotedAgentItems: Set<String> = []
     private var agentText: [String: String] = [:]
     private var voiceStartTask: Task<Void, Never>?
@@ -452,7 +456,7 @@ final class CodexPetSession: ObservableObject {
         stopVoice()
         epoch += 1
         messages = []; activity = []; status = nil
-        realtimeActive = false; heardAgentItems = []; promotedAgentItems = []; agentText = [:]
+        realtimeActive = false; heardAgentItems = []; voiceTurns = []; promotedAgentItems = []; agentText = [:]
         closesExpected = 0   // the old thread's closes no longer reach this conversation
         threadTask?.cancel(); lookup?.cancel(); lookup = nil
         threadId = nil; threadTask = nil   // next message starts a fresh thread, even if one was being created
@@ -468,8 +472,10 @@ final class CodexPetSession: ObservableObject {
 
     var isRecording: Bool { (voiceState == .live || voiceState == .speaking) && !muted }
 
+    /// The waveform button. Starting a call here always listens, even if push-to-talk last left it muted;
+    /// `startVoice` itself keeps whatever mute the caller set.
     func toggleVoice() {
-        if voiceState == .off { startVoice() } else { stopVoice() }
+        if voiceState == .off { muted = false; startVoice() } else { stopVoice() }
     }
 
     /// `retryOnAudioGlitch` is false only for the one automatic retry below, so it can never loop.
@@ -675,15 +681,22 @@ final class CodexPetSession: ObservableObject {
     /// Chat bubbles for reopened turns, oldest first: typed and delegated requests and Codex's replies.
     static func history<S: Sequence>(_ turns: S) -> [ChatMessage] where S.Element == [String: Any] {
         turns.flatMap { turn in
-            (turn["items"] as? [[String: Any]] ?? []).compactMap { item -> ChatMessage? in
+            let items = turn["items"] as? [[String: Any]] ?? []
+            let asked = items.first { $0["type"] as? String == "userMessage" }.map(text(of:)) ?? ""
+            // Work the voice handed over: its progress notes stay out and its replies are marked. Typed
+            // turns read as they did live.
+            let caption: String? = isTranscriptFlush(asked) ? "After the call" : isDelegation(asked) ? "Work result" : nil
+            return items.compactMap { item -> ChatMessage? in
                 switch item["type"] as? String {
                 case "userMessage":
-                    let text = (item["content"] as? [[String: Any]] ?? []).compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }.joined(separator: "\n")
+                    let text = Self.text(of: item)
+                    guard !isTranscriptFlush(text) else { return nil }   // core's end-of-call handoff, not something said
                     let shown = spokenRequest(text)
                     return shown.isEmpty ? nil : ChatMessage(role: .user, text: shown)
                 case "agentMessage":
                     let text = item["text"] as? String ?? ""
-                    return text.isEmpty ? nil : ChatMessage(role: .assistant, text: text)
+                    if text.isEmpty || (caption != nil && item["phase"] as? String == "commentary") { return nil }
+                    return ChatMessage(role: .assistant, text: text, caption: caption)
                 default: return nil
                 }
             }
@@ -703,17 +716,21 @@ final class CodexPetSession: ObservableObject {
         case "turn/started":
             turnId = (p["turn"] as? [String: Any])?["id"] as? String
             thinking = true   // also work the voice delegated, so Stop can interrupt it
+            if realtimeActive, let turnId { voiceTurns.insert(turnId) }
         case "item/agentMessage/delta":
             guard let delta = p["delta"] as? String, let item = p["itemId"] as? String else { return }
             updateAgent(delta, item: item, params: p, completed: false)
         case "item/started":
             guard let item = p["item"] as? [String: Any], let type = item["type"] as? String, let id = item["id"] as? String else { return }
             if let label = activityLabel(type, item) { activity.append(ActivityPill(id: id, label: label)) }
+            if type == "userMessage", Self.isDelegation(Self.text(of: item)), let turn = (p["turnId"] as? String) ?? turnId {
+                voiceTurns.insert(turn)   // the voice handed this to Codex, even if the call has since ended
+            }
         case "item/completed":
             guard let item = p["item"] as? [String: Any], let id = item["id"] as? String else { return }
             if let i = activity.firstIndex(where: { $0.id == id }) { activity[i].done = true }
             if item["type"] as? String == "agentMessage", let text = item["text"] as? String {
-                updateAgent(text, item: id, params: p, completed: true)
+                updateAgent(text, item: id, params: p, completed: true, phase: item["phase"] as? String)
             }
         case "turn/completed":
             turnId = nil; interruptedTurn = nil
@@ -812,23 +829,43 @@ final class CodexPetSession: ObservableObject {
         }
     }
 
-    private func updateAgent(_ text: String, item: String, params: [String: Any], completed: Bool) {
+    private func updateAgent(_ text: String, item: String, params: [String: Any], completed: Bool, phase: String? = nil) {
         let turn = (params["turnId"] as? String) ?? turnId ?? ""
         let key = "agent:\(turn):\(item)"
         if completed { agentText[key] = text } else { agentText[key, default: ""] += text }
-        // A live call speaks delegated results, so only promoted ones also go in the chat. A result that
-        // finishes after the call ended was never heard, so it shows (once: later events update its bubble).
+        // A live call speaks delegated results, so only promoted ones also go in the chat. Work a call
+        // started that finishes after it was never heard: its final result shows once, marked as coming
+        // after the call; its progress notes stay out (an unknown phase counts as final).
         if realtimeActive && completed { heardAgentItems.insert(key) }
-        guard (!realtimeActive && !heardAgentItems.contains(key)) || promotedAgentItems.contains(key) else { return }
+        if !promotedAgentItems.contains(key) {
+            guard !realtimeActive, !heardAgentItems.contains(key) else { return }
+            if voiceTurns.contains(turn) {
+                guard completed, phase != "commentary" else { return }
+                setMessage(agentText[key] ?? "", role: .assistant, key: key, live: false, caption: "After the call")
+                return
+            }
+        }
         setMessage(agentText[key] ?? "", role: .assistant, key: key, live: !completed)
     }
 
-    private func setMessage(_ text: String, role: ChatMessage.Role, key: String, live: Bool) {
+    /// A request the voice handed to Codex (core wraps it in <realtime_delegation>).
+    static func isDelegation(_ text: String) -> Bool { text.hasPrefix("<realtime_delegation>") }
+
+    /// Core's handoff of a call's last words: a delegation whose source is the transcript tail flush.
+    static func isTranscriptFlush(_ text: String) -> Bool {
+        isDelegation(text) && text.contains("<source>transcript_tail_flush</source>")
+    }
+
+    static func text(of item: [String: Any]) -> String {
+        (item["content"] as? [[String: Any]] ?? []).compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }.joined(separator: "\n")
+    }
+
+    private func setMessage(_ text: String, role: ChatMessage.Role, key: String, live: Bool, caption: String? = nil) {
         if let i = messages.firstIndex(where: { $0.sourceID == key }) {
             messages[i].text = text
             messages[i].live = live
         } else {
-            messages.append(ChatMessage(role: role, text: text, live: live, sourceID: key))
+            messages.append(ChatMessage(role: role, text: text, live: live, sourceID: key, caption: caption))
         }
     }
 

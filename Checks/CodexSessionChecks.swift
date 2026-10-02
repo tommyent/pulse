@@ -68,9 +68,10 @@ enum CodexSessionChecks {
             else {
               const said = (text) => ({ type: 'userMessage', id: text, content: [{ type: 'text', text }] });
               const reply = (text) => ({ type: 'agentMessage', id: 'r-' + text, text });
-              const newest = { id: 't2', status: 'completed', items: [said('<realtime_delegation>\\n  <input>Open my inbox</input>\\n  <transcript_delta>user: open my inbox</transcript_delta>\\n</realtime_delegation>'), { type: 'commandExecution', id: 'c' }, reply('Done.')] };
-              const older = { id: 't1', status: 'completed', items: [said("What's due today?"), reply('Two bills.')] };
-              send({ id: m.id, result: { thread: { id: m.params.threadId, createdAt: 1790000000 }, model: 'resumed-model', cwd: m.params.cwd, initialTurnsPage: m.params.excludeTurns ? null : { data: [newest, older], nextCursor: 'earlier' } } });
+              const newest = { id: 't2', status: 'completed', items: [said('<realtime_delegation>\\n  <input>Open my inbox</input>\\n  <transcript_delta>user: open my inbox</transcript_delta>\\n</realtime_delegation>'), { type: 'commandExecution', id: 'c' }, { ...reply('Opening it now'), phase: 'commentary' }, reply('Done.')] };
+              const flush = { id: 't1b', status: 'completed', items: [said('<realtime_delegation>\\n  <source>transcript_tail_flush</source>\\n  <input>The user just ended their realtime session.</input>\\n</realtime_delegation>'), reply('Talk soon.')] };
+              const older = { id: 't1', status: 'completed', items: [said("What's due today?"), { ...reply('Let me look'), phase: 'commentary' }, reply('Two bills.')] };
+              send({ id: m.id, result: { thread: { id: m.params.threadId, createdAt: 1790000000 }, model: 'resumed-model', cwd: m.params.cwd, initialTurnsPage: m.params.excludeTurns ? null : { data: [newest, flush, older], nextCursor: 'earlier' } } });
             }
           }
           if (m.method === 'thread/turns/list') {
@@ -236,8 +237,45 @@ enum CodexSessionChecks {
         let result: [String: Any] = ["turnId": "background", "item": ["id": "result", "type": "agentMessage", "text": "Finished after the call"]]
         notify("item/completed", result)
         notify("item/completed", result)
-        assert(session.messages.count == before + 1 && session.messages.last?.text == "Finished after the call", "a result finishing after hangup was never heard, so it shows once")
+        assert(session.messages.count == before + 1 && session.messages.last?.text == "Finished after the call" && session.messages.last?.caption == "After the call",
+               "a result finishing after hangup was never heard, so it shows once, marked after the call")
         notify("turn/completed", ["turn": ["id": "background", "status": "completed"]])
+
+        // Work a call started that finishes after it: no progress notes, the result once and marked, even
+        // after a newer typed turn; core's end-of-call handoff counts as such work; typed turns stay normal.
+        notify("thread/realtime/started")
+        notify("turn/started", ["turn": ["id": "tabs"]])
+        notify("thread/realtime/closed")
+        let beforeTabs = session.messages.count
+        notify("item/agentMessage/delta", ["turnId": "tabs", "itemId": "progress", "delta": "I found both flight tabs"])
+        notify("item/completed", ["turnId": "tabs", "item": ["id": "progress", "type": "agentMessage", "text": "I found both flight tabs; bringing Frontier forward.", "phase": "commentary"]])
+        assert(session.messages.count == beforeTabs, "a call's progress notes stay out after it")
+        notify("turn/started", ["turn": ["id": "typed"]])
+        notify("item/agentMessage/delta", ["turnId": "typed", "itemId": "t1", "delta": "Typed answer"])
+        assert(session.messages.last?.text == "Typed answer" && session.messages.last?.live == true && session.messages.last?.caption == nil, "a typed turn after the call streams as usual")
+        let tabsResult: [String: Any] = ["turnId": "tabs", "item": ["id": "done", "type": "agentMessage", "text": "Frontier is in front.", "phase": "final_answer"]]
+        notify("item/completed", tabsResult); notify("item/completed", tabsResult)
+        assert(session.messages.filter { $0.text == "Frontier is in front." }.count == 1 && session.messages.last { $0.text == "Frontier is in front." }?.caption == "After the call",
+               "the call's result shows once, marked after the call")
+        notify("item/completed", ["turnId": "typed", "item": ["id": "t1", "type": "agentMessage", "text": "Typed answer, complete"]])
+        assert(session.messages.contains { $0.text == "Typed answer, complete" && $0.caption == nil }, "the typed answer keeps its own bubble")
+        notify("turn/started", ["turn": ["id": "flush"]])
+        notify("item/started", ["turnId": "flush", "item": ["id": "u-flush", "type": "userMessage", "content": [["type": "text",
+               "text": "<realtime_delegation>\n  <source>transcript_tail_flush</source>\n  <input>The user just ended their realtime session.</input>\n</realtime_delegation>"]]]])
+        notify("item/agentMessage/delta", ["turnId": "flush", "itemId": "bye", "delta": "You're"])
+        notify("item/completed", ["turnId": "flush", "item": ["id": "bye", "type": "agentMessage", "text": "You're welcome.", "phase": NSNull()]])
+        assert(session.messages.last?.text == "You're welcome." && session.messages.last?.caption == "After the call",
+               "a reply to the end-of-call handoff is kept, marked, and an unknown phase counts as final")
+        notify("turn/completed", ["turn": ["id": "flush", "status": "completed"]])
+        // A request the voice handed over just before hanging up can start after the call: still voice work.
+        notify("turn/started", ["turn": ["id": "late"]])
+        notify("item/started", ["turnId": "late", "item": ["id": "u-late", "type": "userMessage", "content": [["type": "text",
+               "text": "<realtime_delegation>\n  <input>Book the Frontier flight</input>\n</realtime_delegation>"]]]])
+        notify("item/completed", ["turnId": "late", "item": ["id": "late-progress", "type": "agentMessage", "text": "Opening the booking page", "phase": "commentary"]])
+        notify("item/completed", ["turnId": "late", "item": ["id": "late-done", "type": "agentMessage", "text": "It's ready for you to confirm.", "phase": "final_answer"]])
+        assert(!session.messages.contains { $0.text == "Opening the booking page" } && session.messages.last?.text == "It's ready for you to confirm."
+               && session.messages.last?.caption == "After the call", "a delegation that starts after the call is voice work too")
+        notify("turn/completed", ["turn": ["id": "late", "status": "completed"]])
 
         notify("turn/started", ["turn": ["id": "failing"]])
         notify("turn/completed", ["turn": ["id": "failing", "status": "failed", "error": ["message": "fixture failure"]]])
@@ -320,10 +358,13 @@ enum CodexSessionChecks {
         let saved = isolatedDefaults(); saved.set("saved-thread", forKey: key)
         let session = CodexPetSession(workspace: dir.appendingPathComponent("pet-recovery"), defaults: saved)
         session.reopen()
-        try await wait("the saved conversation reopens on card open") { session.messages.count == 5 }
+        try await wait("the saved conversation reopens on card open") { session.messages.count == 7 }
         assert(lines(log).contains("resume:saved-thread:history") && count("thread") == 0 && count("turn/") == 0 && session.voiceState == .off)
-        assert(session.messages.prefix(4).map(\.text) == ["What's due today?", "Two bills.", "Open my inbox", "Done."], "history oldest first, a spoken request without its wrapper (got \(session.messages.map(\.text)))")
-        assert(session.messages[4].role == .note && session.messages[4].text.contains("voice call"), "says the transcript isn't the whole voice call")
+        assert(session.messages.prefix(6).map(\.text) == ["What's due today?", "Let me look", "Two bills.", "Talk soon.", "Open my inbox", "Done."],
+               "history oldest first: typed turns as they were, voice work without progress notes or the end-of-call handoff (got \(session.messages.map(\.text)))")
+        assert(session.messages.prefix(6).map(\.caption) == [nil, nil, nil, "After the call", nil, "Work result"],
+               "voice work reads as such after a reopen, without claiming when it was heard")
+        assert(session.messages[6].role == .note && session.messages[6].text.contains("voice call"), "says the transcript isn't the whole voice call")
         assert(session.model == "resumed-model" && session.folder == "pet-recovery" && session.conversationStarted == Date(timeIntervalSince1970: 1790000000),
                "the header shows what Codex reports for the reopened conversation")
         assert(session.canLoadEarlier)
@@ -482,9 +523,9 @@ enum CodexSessionChecks {
     static func checkRecording(_ session: CodexPetSession) {
         var cues: [String] = []
         session.playCue = { cues.append($0) }
-        session.muted = false
+        session.muted = true   // as push-to-talk leaves it after a release
         session.toggleVoice()
-        assert(session.voiceState == .connecting && !session.isRecording)
+        assert(session.voiceState == .connecting && !session.isRecording && !session.muted, "the waveform button always starts listening")
         session.toggleVoice()
         assert(session.voiceState == .off && !session.isRecording, "second activation cancels connection")
         session.toggleVoice()

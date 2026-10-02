@@ -387,13 +387,20 @@ struct PetCard: View {
                     ForEach(session.messages) { m in
                         HStack {
                             if m.role == .user { Spacer(minLength: 40) }
-                            Text(m.text)
-                                .font(.callout)
-                                .textSelection(.enabled)
-                                .padding(.horizontal, 10).padding(.vertical, 6)
-                                .background(RoundedRectangle(cornerRadius: 12)
-                                    .fill(m.role == .user ? AccountID.codex.accent.opacity(0.35)
-                                                          : (scheme == .dark ? Color(white: 0.16) : Color(white: 0.9))))
+                            VStack(alignment: .leading, spacing: 2) {
+                                // Results of work a call started: never one of the spoken replies.
+                                if let caption = m.caption { Text(caption).font(.caption2).foregroundStyle(Ink.secondary(scheme)) }
+                                Text(m.text)
+                                    .font(.callout)
+                                    .textSelection(.enabled)
+                                    .padding(.horizontal, 10).padding(.vertical, 6)
+                                    .background(RoundedRectangle(cornerRadius: 12)
+                                        .fill(m.role == .user ? AccountID.codex.accent.opacity(0.35)
+                                                              : m.caption != nil ? Color.clear
+                                                              : (scheme == .dark ? Color(white: 0.16) : Color(white: 0.9))))
+                                    .overlay { if m.caption != nil { RoundedRectangle(cornerRadius: 12).strokeBorder(Ink.secondary(scheme).opacity(0.5)) } }
+                            }
+                            .accessibilityElement(children: .combine)
                             if m.role != .user { Spacer(minLength: 40) }
                         }
                         .id(m.id)
