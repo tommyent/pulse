@@ -211,6 +211,7 @@ struct PetApproval {
 final class PetApprovals {
     static let shared = PetApprovals()
     var present: (PetApproval) -> PetApproval.Decision = { $0.show() }
+    var onPromptOpened: (PetApproval) -> Void = { _ in }
     var defaults = UserDefaults.standard
     private let savedKey = "petRememberedApprovals"
     private var queue: [PetApproval] = []
@@ -240,7 +241,14 @@ final class PetApprovals {
             return
         }
         queue.append(approval)
-        DispatchQueue.main.async { self.showNext() }
+        schedule()
+    }
+
+    /// Enter the modal from a run-loop callout: a GCD block would hold the serial main queue,
+    /// delaying microphone mute, voice cues and withdrawn requests until the user answers.
+    /// Default mode keeps the next prompt outside the current modal's nested event loop.
+    private func schedule() {
+        RunLoop.main.perform(inModes: [.default]) { MainActor.assumeIsolated { self.showNext() } }
     }
 
     private func showNext() {
@@ -248,7 +256,9 @@ final class PetApprovals {
         showing = true
         let request = queue.removeFirst()
         active = request
-        let decision: PetApproval.Decision = isRemembered(request) ? .allow : present(request)
+        let remembered = isRemembered(request)
+        if !remembered { onPromptOpened(request) }
+        let decision: PetApproval.Decision = remembered ? .allow : present(request)
         // A completed turn, cancellation or disconnected server invalidates an open prompt.
         if active?.id == request.id {
             if decision == .always { remember(request) }
@@ -257,7 +267,7 @@ final class PetApprovals {
             active = nil
         }
         showing = false
-        if !queue.isEmpty { DispatchQueue.main.async { self.showNext() } }
+        if !queue.isEmpty { schedule() }
     }
 
     func isRemembered(_ request: PetApproval) -> Bool {
