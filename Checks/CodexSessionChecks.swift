@@ -2675,7 +2675,7 @@ enum CodexSessionChecks {
         let speaker = dir.appendingPathComponent("codex-resources/voice/speaker-peak")
         defer { try? "1000".write(to: speaker, atomically: true, encoding: .utf8) }
         let barriers = ["stop", "typed", "call", "new", "lost"]
-        let cases = ["pairing-typed-helper-same-turn", "pairing-typed-helper-other-turn", "pairing-typed-input-slot", "review-typing-delayed-input", "review-connecting-gate", "early-queue-typed", "review-identical-older-turn-pending", "review-identical-two-delegations-one-turn", "review-identical-early-terminal", "pairing-two-delegations-first", "pairing-two-delegations-late-older", "pairing-completion-replay", "pairing-delegation-replay", "pairing-repeat-claimed", "pairing-catchup-answered", "pairing-answered-repeat", "pairing-catchup-answered-repeat", "pairing-stop-paired-final", "pairing-stop-late-transcript", "pairing-stop-stale-reservation", "pairing-typed-stale-reservation", "review-identical-undelgated", "review-identical-failed", "review-identical-empty-transcript-first", "review-identical-empty-delegation-first", "review-identical-repeat-before-answer", "review-replay-running", "review-marker-only", "review-immediate-marker-only", "review-end-only-preack", "review-completed-start", "review-queued-approval", "review-queued-audio", "fresh", "calendar", "coalesce", "identical", "late-binding", "late-binding-stop", "late-binding-typed",
+        let cases = ["review-away-catchup", "pairing-typed-helper-same-turn", "pairing-typed-helper-other-turn", "pairing-typed-input-slot", "review-typing-delayed-input", "review-connecting-gate", "early-queue-typed", "review-identical-older-turn-pending", "review-identical-two-delegations-one-turn", "review-identical-early-terminal", "pairing-two-delegations-first", "pairing-two-delegations-late-older", "pairing-completion-replay", "pairing-delegation-replay", "pairing-repeat-claimed", "pairing-catchup-answered", "pairing-answered-repeat", "pairing-catchup-answered-repeat", "pairing-stop-paired-final", "pairing-stop-late-transcript", "pairing-stop-stale-reservation", "pairing-typed-stale-reservation", "review-identical-undelgated", "review-identical-failed", "review-identical-empty-transcript-first", "review-identical-empty-delegation-first", "review-identical-repeat-before-answer", "review-replay-running", "review-marker-only", "review-immediate-marker-only", "review-end-only-preack", "review-completed-start", "review-queued-approval", "review-queued-audio", "fresh", "calendar", "coalesce", "identical", "late-binding", "late-binding-stop", "late-binding-typed",
                      "late-binding-stop-no-slot", "late-binding-typed-no-slot", "repeated-delegation-stop", "repeated-delegation-typed", "unmatched", "source-empty",
                      "source-failed", "source-interrupted", "recovery-failed", "recovery-interrupted", "recovery-empty",
                      "early", "input-before-send", "input-before-ack", "input-running", "late-delegation", "speaker-floor", "noisy-playback", "blocker-speaking", "quoted-words", "idle-audio", "idle-clear",
@@ -3321,13 +3321,30 @@ enum CodexSessionChecks {
                 try await wait("fresh final submitted") { spoken() == ["Fresh final."] }
                 end("fresh", [final("fresh", "Fresh final.")]); audio(false); try await quietWindow()
                 assert(spoken() == ["Fresh final."] && recoveries() == 0, "fresh: zero added turns, once")
-            case "calendar", "immutable", "pointer", "speech-refused":
+            case "calendar", "immutable", "pointer", "speech-refused", "review-away-catchup":
                 audio(true); seed(); try await quietWindow()
                 assert(spoken() == ["Authoritative status calendar."] && recoveries() == 0, "the fresh status speaks; the older request waits")
                 if name == "immutable" { item("source-calendar", final("status-calendar", "LATE MUTATED FACT")) }
                 audio(false); try await recovery(1)
                 assert(pending().contains("Read my calendar for tomorrow [calendar].") && !pending().contains("What is the helper doing [calendar]?"), "calendar: only the unanswered request is pending")
                 assert(!payload().contains("PROVISIONAL CALENDAR FACT") && !payload().contains("LATE MUTATED FACT") && !payload().contains("Authoritative status"), "recovery input carries requests/status, never mutable result text")
+                if name == "review-away-catchup" {
+                    // A visible Catch-up item proves its acknowledgement was applied; don't infer it from elapsed time.
+                    item("recovery-1", final("ack-control", "The accepted catch-up marker."))
+                    try await wait("the accepted catch-up's acknowledgement is applied") {
+                        session.messages.contains { $0.text == "The accepted catch-up marker." && $0.caption == "Catch-up" }
+                    }
+                    session.stopVoice()   // the catch-up was already acknowledged: hang up before it completes
+                    let late = "Late accepted catch-up result should not open the next call."
+                    end("recovery-1", [final("catchup-late", late)])
+                    session.startVoice()
+                    try await wait("next call starts after the acknowledged catch-up completes") { session.voiceState == .live || session.voiceState == .speaking }
+                    let row = lines(log).last { $0.hasPrefix("away:") } ?? "away:\"\""
+                    let note = (try? JSONSerialization.jsonObject(with: Data(row.dropFirst(5).utf8), options: .fragmentsAllowed) as? String) ?? ""
+                    assert(!note.contains(late), "an acknowledged catch-up ending after hang-up is not news for the next call (got \(note))")
+                    session.stopVoice()
+                    continue
+                }
                 item("recovery-1", final("catchup", "PROVISIONAL RECOVERY ANSWER")); try await settle()
                 assert(spoken() == ["Authoritative status calendar."], "recovery item completion is not speech authority")
                 let text = name == "speech-refused" ? "Refuse this." : "Verified calendar catch-up."

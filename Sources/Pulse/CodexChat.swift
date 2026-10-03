@@ -1241,8 +1241,8 @@ final class CodexPetSession: ObservableObject {
 
     /// A completed turn's result that no call heard waits for the next call's opening line, once per turn in this
     /// conversation, so a repeated or replayed completion is never news twice. One that completed during a call was
-    /// that call's to speak or catch up, so it never is, even replayed later. An end-of-call handoff never counts; a
-    /// catch-up couldn't (ending a call cancels it), and is excluded in case that changes.
+    /// that call's to speak or catch up, so it never is, even replayed later. An end-of-call handoff never counts, nor
+    /// does a catch-up: one Codex already accepted still completes after a hang-up, and it only restates earlier requests.
     private func noteAway(_ turn: String) {
         guard awaySeen.insert(turn).inserted, !realtimeActive, !flushTurns.contains(turn), !catchUpTurns.contains(turn),
               let key = voiceResults[turn]?.key, let text = agentText[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
