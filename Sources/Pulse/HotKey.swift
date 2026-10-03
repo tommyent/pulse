@@ -107,6 +107,7 @@ struct HotKeyRecorder: View {
     @Binding var combo: HotKeyCombo
     @State private var recording = false
     @State private var monitor: Any?
+    @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         HStack(spacing: 8) {
@@ -117,6 +118,7 @@ struct HotKeyRecorder: View {
             }
         }
         .onDisappear { stop() }
+        .onChange(of: isEnabled) { _, enabled in if !enabled { stop() } }   // disabled mid-recording: stop swallowing keys
     }
 
     private func start() {

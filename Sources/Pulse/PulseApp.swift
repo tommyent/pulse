@@ -91,7 +91,7 @@ final class OverlayController {
             // Enter outside GCD's serial main queue so a modal cannot delay microphone mute.
             RunLoop.main.perform(inModes: [.default]) { [weak self] in
                 MainActor.assumeIsolated {
-                    guard let self, self.voiceKey == nil, self.state.voiceHotKey == combo else { return }
+                    guard let self, self.voiceKey == nil, self.state.voiceHotKey == combo, self.state.showsPet else { return }
                     let alert = NSAlert()
                     alert.messageText = "Voice shortcut unavailable"
                     alert.informativeText = "Pulse couldn't register \(combo.label). Choose another shortcut in Settings → Codex voice. You can still use the waveform button to start or end a call."
