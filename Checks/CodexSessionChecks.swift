@@ -955,13 +955,18 @@ enum CodexSessionChecks {
             on("item/started", ["turnId": turn, "item": ["id": "u-" + turn, "type": "userMessage", "content": [["type": "text",
                "text": "<realtime_delegation>\n" + (flush ? "  <source>transcript_tail_flush</source>\n" : "") + "  <input>" + text + "</input>\n</realtime_delegation>"]]]])
         }
+        func finalItem(_ id: String, _ text: String) -> [String: Any] { ["id": id, "type": "agentMessage", "text": text, "phase": "final_answer"] }
         delegation("away-work", "Build the harbor page")
-        on("item/completed", ["turnId": "away-work", "item": ["id": "away-done", "type": "agentMessage", "text": "A helper finished harbor.html.", "phase": "final_answer"]])
-        on("item/completed", ["turnId": "away-work", "item": ["id": "away-done", "type": "agentMessage", "text": "A helper finished harbor.html.", "phase": "final_answer"]])   // repeated
-        on("turn/completed", ["turn": ["id": "away-work", "status": "completed"]])
+        on("item/completed", ["turnId": "away-work", "item": finalItem("away-early", "Still building the harbor page.")])   // the turn's final replaces it
+        delegation("away-running", "Check the weather")
+        on("item/completed", ["turnId": "away-running", "item": finalItem("running-done", "It's sunny.")])   // its turn hasn't ended
+        let harbor: [String: Any] = ["turn": ["id": "away-work", "status": "completed", "items": [finalItem("away-done", "A helper finished harbor.html.")]]]
+        on("turn/completed", harbor); on("turn/completed", harbor)   // repeated
+        delegation("away-failed", "Book a table")
+        on("turn/completed", ["turn": ["id": "away-failed", "status": "failed", "items": [finalItem("failed-done", "Couldn't book.")], "error": ["message": "fixture failure"]]])
         delegation("away-flush", "The user just ended their realtime session.", flush: true)
-        on("item/completed", ["turnId": "away-flush", "item": ["id": "flush-done", "type": "agentMessage", "text": "Handoff received.", "phase": "final_answer"]])
-        on("turn/completed", ["turn": ["id": "away-flush", "status": "completed"]])
+        on("turn/completed", ["turn": ["id": "away-flush", "status": "completed", "items": [finalItem("flush-done", "Handoff received.")]]])
+        session.startVoice(); session.stopVoice()   // cancelled before its start is sent: the results wait
         _ = try await CodexAppServer.shared.request("fixture/reject-next", [:])
         session.startVoice()
         try await wait("a second rejected start fails too") { session.voiceState == .off && session.status == "fixture rejection" }
@@ -970,15 +975,19 @@ enum CodexSessionChecks {
         try await wait("a rejected start leaves no close to wait for") { inCall }
         assert(Date().timeIntervalSince(started) < 2, "the next call did not wait on a close that cannot come")
         let away = aways().last ?? ""
-        assert(away.contains("While the owner was away") && away.contains(#"- "A helper finished harbor.html.""#) && !away.contains("Handoff received")
-               && away.components(separatedBy: "harbor.html").count == 2,
-               "the call that starts hears what finished, kept through a rejected start, without the handoff reply (got \(away))")
+        assert(away.contains("While the owner was away") && away.contains(#"- "A helper finished harbor.html.""#) && away.components(separatedBy: "harbor.html").count == 2
+               && !away.contains("Still building") && !away.contains("It's sunny") && !away.contains("Couldn't book") && !away.contains("Handoff received"),
+               "the call that starts hears each finished turn once, kept through a cancelled and a rejected start; not unfinished, failed or handoff work (got \(away))")
 
+        delegation("live-work", "Open my calendar")
+        let live: [String: Any] = ["turn": ["id": "live-work", "status": "completed", "items": [finalItem("live-done", "Your calendar is open.")]]]
+        on("turn/completed", live)   // completed during the call: that call's to speak, never news later
         session.stopVoice()
+        on("turn/completed", harbor); on("turn/completed", live)   // replays after delivery and after the call
         _ = try await CodexAppServer.shared.request("fixture/die-next", [:])
         session.startVoice()
         try await wait("another dying call starts") { starts() == 7 }
-        assert(aways().last == "", "what finished while away opens one call only")
+        assert(aways().last == "", "what finished while away opens one call only, even when its completion is replayed")
         try await wait("and fails") { session.voiceState == .off }
         CodexAppServer.shared.stop()   // losing the server must cancel the pending retry too
         try await Task.sleep(for: .milliseconds(700))

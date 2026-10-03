@@ -1,22 +1,19 @@
 import AppKit
 import Carbon
 
-/// A tap toggles the microphone; a hold listens until release. Neither ends the call.
+/// A tap toggles the microphone; a hold listens until release. A quick second tap, released as a tap, ends the call.
 struct VoiceShortcutGesture {
     enum Action: Equatable { case start, unmute, mute, end }
-    private var press: (time: TimeInterval, mutesOnTap: Bool, mayDouble: Bool)?
+    private var press: (time: TimeInterval, mutesOnTap: Bool, mayDouble: Bool, second: Bool)?
     private var lastTap: TimeInterval?   // a tap on a running call: a quick second tap ends the call
     static let doubleTap: TimeInterval = 0.4
 
     mutating func keyDown(at time: TimeInterval, voiceActive: Bool, muted: Bool) -> Action? {
         guard press == nil else { return nil }   // repeated key-down events are still one gesture
-        if voiceActive, let last = lastTap, time - last <= Self.doubleTap {
-            lastTap = nil
-            press = (time, false, false)
-            return .end
-        }
+        // A quick second press is only a candidate: held, it's push-to-talk as usual, so its release decides.
+        let second = voiceActive && lastTap.map { time - $0 <= Self.doubleTap } == true
         lastTap = nil
-        press = (time, voiceActive && !muted, voiceActive)   // a tap that starts a call never counts toward ending it
+        press = (time, voiceActive && !muted, voiceActive, second)   // a tap that starts a call never counts toward ending it
         return !voiceActive ? .start : muted ? .unmute : nil
     }
 
@@ -24,6 +21,7 @@ struct VoiceShortcutGesture {
         guard let press else { return nil }
         self.press = nil
         if time - press.time > 0.5 { return .mute }
+        if press.second { return .end }
         if press.mayDouble { lastTap = time }
         return press.mutesOnTap ? .mute : nil
     }

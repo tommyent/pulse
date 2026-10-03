@@ -440,6 +440,7 @@ final class CodexPetSession: ObservableObject {
     private var settledVoiceTurns: Set<String> = []              // voice work that completed: its requests can be caught up
     private var flushTurns: Set<String> = []     // replies to core's end-of-call handoff: never news
     private var awayResults: [String] = []       // results that landed with no call live, for the next call's opening line
+    private var awaySeen: Set<String> = []       // turns already queued for it in this conversation: each one once
     private var catchUpTurns: Set<String> = []
     private var catchUpTriedAt: Int?          // the input the last catch-up ran at: one try per new input
     private var catchUpTimer: Task<Void, Never>?
@@ -745,7 +746,7 @@ final class CodexPetSession: ObservableObject {
         stopVoice()
         epoch += 1
         messages = []; activity = []; status = nil
-        realtimeActive = false; voiceTurns = []; flushTurns = []; awayResults = []; askedAt = [:]; askedVia = [:]; voiceResults = [:]; spokenTurns = []; agentText = [:]
+        realtimeActive = false; voiceTurns = []; flushTurns = []; awayResults = []; awaySeen = []; askedAt = [:]; askedVia = [:]; voiceResults = [:]; spokenTurns = []; agentText = [:]
         // Running helpers were just asked to stop: keep them until their own end confirms it. A helper the old
         // conversation's work starts later is stopped on sight, never adopted by the new one.
         helpers = helpers.filter { $0.value.isWorking }; unclaimed = [:]
@@ -787,9 +788,8 @@ final class CodexPetSession: ObservableObject {
         voiceState = .connecting
         status = nil
         VoiceBridge.shared.warmupStart = .now
-        let away = awayResults.suffix(5)   // handed to this call; back in line if it never starts
-        awayResults = []
         voiceStartTask = Task {
+            var away: [String] = []
             do {
                 let tid = try await ensureThread()
                 VoiceBridge.shared.mark("thread ready")
@@ -798,6 +798,8 @@ final class CodexPetSession: ObservableObject {
                 try Task.checkCancellation()
                 try await previousCallClosed()
                 realtimeRequested = true
+                // Taken only as the start is sent: a call cancelled or failing before this leaves them waiting.
+                away = Array(awayResults.suffix(5)); awayResults = []
                 _ = try await server.request("thread/realtime/start", [
                     "threadId": tid,
                     "transport": ["type": "webrtc", "sdp": offer],
@@ -812,14 +814,15 @@ final class CodexPetSession: ObservableObject {
                     "flushTranscriptTailOnSessionEnd": false,
                     // Added to Codex's own voice instructions, which otherwise name the owner from the Mac account.
                     "initialItems": [["role": "developer", "text": Self.voiceNote]]
-                        + (away.isEmpty ? [] : [["role": "developer", "text": Self.awayNote(Array(away))]]),
+                        + (away.isEmpty ? [] : [["role": "developer", "text": Self.awayNote(away)]]),
                 ])
                 VoiceBridge.shared.mark("realtime/start acknowledged")   // the answer arrives as thread/realtime/sdp
             } catch {
                 guard !Task.isCancelled else { return }
                 // Only Codex rejecting the start proves no call opened. A timeout may still open one,
                 // so stopVoice tears it down through the close barrier like any ended call.
-                if case CodexAppServer.Failure.remote = error { realtimeRequested = false; awayResults = Array(away) + awayResults }
+                // Back in line only when Codex refused the start; a timeout may have opened a call that heard them.
+                if case CodexAppServer.Failure.remote = error { realtimeRequested = false; awayResults = away + awayResults }
                 stopVoice()
                 status = error.localizedDescription
             }
@@ -1232,8 +1235,19 @@ final class CodexPetSession: ObservableObject {
         // Its requests can be caught up only if it completed; failed or stopped work never is.
         if voiceTurns.contains(done), turn["status"] as? String == "completed" { settledVoiceTurns.insert(done) }
         voiceLog.notice("turn \(done, privacy: .public) \(turn["status"] as? String ?? "?", privacy: .public): \((turn["items"] as? [Any])?.count ?? 0) items, result \(final?["id"] as? String ?? "none", privacy: .public)\(self.voiceResults[done]?.asks == true ? " (a question)" : "", privacy: .public)")
-        if turn["status"] as? String == "completed" { speakResult(of: done) }
+        if turn["status"] as? String == "completed" { speakResult(of: done); noteAway(done) }
         if report?.turn == done { reportEnded(turn) }
+    }
+
+    /// A completed turn's result that no call heard waits for the next call's opening line, once per turn in this
+    /// conversation, so a repeated or replayed completion is never news twice. One that completed during a call was
+    /// that call's to speak or catch up, so it never is, even replayed later. An end-of-call handoff never counts; a
+    /// catch-up couldn't (ending a call cancels it), and is excluded in case that changes.
+    private func noteAway(_ turn: String) {
+        guard awaySeen.insert(turn).inserted, !realtimeActive, !flushTurns.contains(turn), !catchUpTurns.contains(turn),
+              let key = voiceResults[turn]?.key, let text = agentText[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else { return }
+        awayResults.append(text)
     }
 
     private func updateAgent(_ text: String, item: String, params: [String: Any], completed: Bool, phase: String? = nil, asks: Bool = false) {
@@ -1255,7 +1269,6 @@ final class CodexPetSession: ObservableObject {
             voiceResults[turn] = (key, asks)
             let caption = catchUpTurns.contains(turn) ? "Catch-up" : !voiceTurns.contains(turn) ? "Helper result" : realtimeActive ? "Work result" : "After the call"
             setMessage(text, role: .assistant, key: key, live: false, caption: caption)
-            if !realtimeActive, !flushTurns.contains(turn), caption == "After the call" || caption == "Helper result", !awayResults.contains(text) { awayResults.append(text) }   // a repeated completion once
             return
         }
         setMessage(agentText[key] ?? "", role: .assistant, key: key, live: !completed)
