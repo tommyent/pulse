@@ -315,9 +315,12 @@ struct PetCard: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Text("Codex").font(.headline)
                     if !session.workModels.isEmpty {
-                        workModelMenu(workDetail ?? "Choose a work model")
-                    } else if let work = workDetail {
-                        Text(work).font(.caption2).foregroundStyle(Ink.secondary(scheme)).lineLimit(1)
+                        workModelMenu(workDetail ?? "Choose a work model", label: modelLine ?? "Choose a work model")
+                    } else if let model = modelLine {
+                        Text(model).font(.caption2).foregroundStyle(Ink.secondary(scheme)).lineLimit(1)
+                    }
+                    if let split = splitLine {   // its own line: a menu label never wraps, so it would cut this off
+                        Text(split).font(.caption2).foregroundStyle(Ink.secondary(scheme)).lineLimit(2)
                     }
                     if let place = placeDetail {
                         Text(place).font(.caption2).foregroundStyle(Ink.secondary(scheme)).lineLimit(1).truncationMode(.middle)
@@ -485,10 +488,23 @@ struct PetCard: View {
     /// Model · folder · since when, as Codex reported them for the open conversation.
     /// Model · effort, as Codex reported them (or the saved choice before a conversation).
     private var workDetail: String? {
+        let parts = [modelLine, splitLine].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// The model, with its effort when the pet and helpers share it.
+    private var modelLine: String? {
+        let split = session.nextSplit != nil || session.helperEffort != nil
+        let parts = [session.shownModel, split ? nil : session.shownEffort].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// The pet's and helpers' efforts when they differ, and what changes from the next open.
+    private var splitLine: String? {
         // Before a conversation opens, the split it will get previews from the pick.
         let next = session.nextSplit
-        let parts = [session.shownModel, next.map { "talks at \($0.talk)" } ?? session.shownEffort.map { session.helperEffort != nil ? "talks at \($0)" : $0 },
-                     next.map { "helpers at \($0.helpers)" } ?? session.helperEffort.map { "helpers at \($0)" },
+        let talk = next.map { "talks at \($0.talk)" } ?? (session.helperEffort != nil ? session.shownEffort.map { "talks at \($0)" } : nil)
+        let parts = [talk, next.map { "helpers at \($0.helpers)" } ?? session.helperEffort.map { "helpers at \($0)" },
                      session.pendingModel.map { "switches to \($0) from the next open" },
                      session.pendingHelperEffort.map { "helpers at \($0) from the next open" }].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
@@ -503,7 +519,7 @@ struct PetCard: View {
 
     /// The header detail doubles as the work-model menu: the model doing Codex's work and its effort,
     /// never the voice's own realtime model.
-    private func workModelMenu(_ detail: String) -> some View {
+    private func workModelMenu(_ detail: String, label: String) -> some View {
         let planned = session.nextSplit != nil ? " (for the next conversation)" : ""
         return Menu {
             Section("Work model · the voice stays the same") {
@@ -518,9 +534,14 @@ struct PetCard: View {
                 }
             }
         } label: {
-            Text(detail).font(.caption2).foregroundStyle(Ink.secondary(scheme)).lineLimit(1).truncationMode(.tail)
+            HStack(spacing: 3) {
+                Text(label).lineLimit(1).truncationMode(.tail)
+                Image(systemName: "chevron.down").font(.system(size: 7, weight: .semibold))
+            }
+            .font(.caption2).foregroundStyle(Ink.secondary(scheme))
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button).buttonStyle(.plain)   // a plain label lines up with the lines around it
+        .fixedSize()
         .disabled(session.choosingWork)
         .help("Work model: \(detail)\(planned). Choose the model and effort Codex works with; the voice doesn't change. With helpers and an effort above medium, the pet talks at medium and helpers work at the effort you pick; a new helper effort, or a model that can't run the helpers' current effort, applies from the next conversation or Pulse restart.")
         .accessibilityLabel("Work model: \(detail)\(planned)")
