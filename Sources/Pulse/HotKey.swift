@@ -3,12 +3,20 @@ import Carbon
 
 /// A tap toggles the microphone; a hold listens until release. Neither ends the call.
 struct VoiceShortcutGesture {
-    enum Action: Equatable { case start, unmute, mute }
-    private var press: (time: TimeInterval, mutesOnTap: Bool)?
+    enum Action: Equatable { case start, unmute, mute, end }
+    private var press: (time: TimeInterval, mutesOnTap: Bool, mayDouble: Bool)?
+    private var lastTap: TimeInterval?   // a tap on a running call: a quick second tap ends the call
+    static let doubleTap: TimeInterval = 0.4
 
     mutating func keyDown(at time: TimeInterval, voiceActive: Bool, muted: Bool) -> Action? {
         guard press == nil else { return nil }   // repeated key-down events are still one gesture
-        press = (time, voiceActive && !muted)
+        if voiceActive, let last = lastTap, time - last <= Self.doubleTap {
+            lastTap = nil
+            press = (time, false, false)
+            return .end
+        }
+        lastTap = nil
+        press = (time, voiceActive && !muted, voiceActive)   // a tap that starts a call never counts toward ending it
         return !voiceActive ? .start : muted ? .unmute : nil
     }
 
@@ -16,6 +24,7 @@ struct VoiceShortcutGesture {
         guard let press else { return nil }
         self.press = nil
         if time - press.time > 0.5 { return .mute }
+        if press.mayDouble { lastTap = time }
         return press.mutesOnTap ? .mute : nil
     }
 
@@ -23,6 +32,7 @@ struct VoiceShortcutGesture {
     @discardableResult mutating func cancel() -> Bool {
         let wasPressed = press != nil
         press = nil
+        lastTap = nil
         return wasPressed
     }
 }

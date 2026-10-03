@@ -125,6 +125,7 @@ final class OverlayController {
                 session.startVoice()
             }
         case .mute: session.muted = true
+        case .end: session.stopVoice()
         case nil: break
         }
     }

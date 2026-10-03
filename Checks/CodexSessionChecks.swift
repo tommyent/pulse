@@ -355,13 +355,14 @@ enum CodexSessionChecks {
           if (m.method === 'thread/realtime/start' && rejectNext) { rejectNext = false; log('realtime/rejected'); send({ id: m.id, error: { message: 'fixture rejection' } }); }
           else if (m.method === 'thread/realtime/start') {
             assert.equal(m.params.clientManagedHandoffs, true, 'Pulse, not Codex, hands the voice its results');
-            assert.equal(m.params.initialItems?.length, 1, 'one additive voice instruction');
+            assert(m.params.initialItems?.length === 1 || m.params.initialItems?.length === 2, 'the voice note, and what finished while the owner was away');
             const voiceNote = m.params.initialItems[0];
+            log('away:' + JSON.stringify(m.params.initialItems[1]?.text ?? ''));
             assert.equal(voiceNote.role, 'developer');
             assert(voiceNote.text.includes('Never address the owner by an account name or username') && voiceNote.text.includes('say a helper did it'), 'voice itself receives name and attribution rules');
-            assert(voiceNote.text.includes("When a call starts, don't repeat earlier backend messages unless the owner asks about them"), 'a new call does not replay old backend lines');
+            assert(voiceNote.text.includes("Open a call with a brief greeting only: don't repeat earlier backend messages"), 'a new call does not replay old backend lines');
             assert(!('prompt' in m.params), 'the narrow additive note preserves the native voice prompt');
-            assert.equal(m.params.includeStartupContext, true); assert.equal(m.params.flushTranscriptTailOnSessionEnd, true);
+            assert.equal(m.params.includeStartupContext, true); assert.equal(m.params.flushTranscriptTailOnSessionEnd, false);
             log('realtime/start');
             send({ id: m.id, result: {} });
             send({ method: 'thread/realtime/started', params: { threadId: m.params.threadId } });
@@ -946,15 +947,38 @@ enum CodexSessionChecks {
         _ = try await CodexAppServer.shared.request("fixture/reject-next", [:])
         session.startVoice()
         try await wait("a rejected start fails visibly") { session.voiceState == .off && session.status == "fixture rejection" }
+        // Work that finished with no call live opens the next call that starts, once; a reply to core's end-of-call handoff is no news.
+        func aways() -> [String] { lines(log).filter { $0.hasPrefix("away:") }.compactMap { try? JSONSerialization.jsonObject(with: Data($0.dropFirst(5).utf8), options: .fragmentsAllowed) as? String } }
+        func on(_ method: String, _ fields: [String: Any]) { var p = fields; p["threadId"] = "fixture-thread"; CodexAppServer.shared.onNotification?(method, p) }
+        func delegation(_ turn: String, _ text: String, flush: Bool = false) {
+            on("turn/started", ["turn": ["id": turn]])
+            on("item/started", ["turnId": turn, "item": ["id": "u-" + turn, "type": "userMessage", "content": [["type": "text",
+               "text": "<realtime_delegation>\n" + (flush ? "  <source>transcript_tail_flush</source>\n" : "") + "  <input>" + text + "</input>\n</realtime_delegation>"]]]])
+        }
+        delegation("away-work", "Build the harbor page")
+        on("item/completed", ["turnId": "away-work", "item": ["id": "away-done", "type": "agentMessage", "text": "A helper finished harbor.html.", "phase": "final_answer"]])
+        on("item/completed", ["turnId": "away-work", "item": ["id": "away-done", "type": "agentMessage", "text": "A helper finished harbor.html.", "phase": "final_answer"]])   // repeated
+        on("turn/completed", ["turn": ["id": "away-work", "status": "completed"]])
+        delegation("away-flush", "The user just ended their realtime session.", flush: true)
+        on("item/completed", ["turnId": "away-flush", "item": ["id": "flush-done", "type": "agentMessage", "text": "Handoff received.", "phase": "final_answer"]])
+        on("turn/completed", ["turn": ["id": "away-flush", "status": "completed"]])
+        _ = try await CodexAppServer.shared.request("fixture/reject-next", [:])
+        session.startVoice()
+        try await wait("a second rejected start fails too") { session.voiceState == .off && session.status == "fixture rejection" }
         let started = Date()
         session.startVoice()
         try await wait("a rejected start leaves no close to wait for") { inCall }
         assert(Date().timeIntervalSince(started) < 2, "the next call did not wait on a close that cannot come")
+        let away = aways().last ?? ""
+        assert(away.contains("While the owner was away") && away.contains(#"- "A helper finished harbor.html.""#) && !away.contains("Handoff received")
+               && away.components(separatedBy: "harbor.html").count == 2,
+               "the call that starts hears what finished, kept through a rejected start, without the handoff reply (got \(away))")
 
         session.stopVoice()
         _ = try await CodexAppServer.shared.request("fixture/die-next", [:])
         session.startVoice()
         try await wait("another dying call starts") { starts() == 7 }
+        assert(aways().last == "", "what finished while away opens one call only")
         try await wait("and fails") { session.voiceState == .off }
         CodexAppServer.shared.stop()   // losing the server must cancel the pending retry too
         try await Task.sleep(for: .milliseconds(700))

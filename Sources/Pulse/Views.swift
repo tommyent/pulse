@@ -320,7 +320,7 @@ struct PetCard: View {
                         Text(model).font(.caption2).foregroundStyle(Ink.secondary(scheme)).lineLimit(1)
                     }
                     if let split = splitLine {   // its own line: a menu label never wraps, so it would cut this off
-                        Text(split).font(.caption2).foregroundStyle(Ink.secondary(scheme)).lineLimit(2)
+                        Text(split).font(.caption2).foregroundStyle(Ink.secondary(scheme))   // wraps fully: pending notices can be long
                     }
                     if let place = placeDetail {
                         Text(place).font(.caption2).foregroundStyle(Ink.secondary(scheme)).lineLimit(1).truncationMode(.middle)
@@ -867,7 +867,7 @@ struct SettingsView: View {
                 Toggle("Show the Codex pet", isOn: state.showPetBinding)
                     .help("Chat and live voice with Codex, separate from the Codex usage ring. Off hides the pet, ends a call and frees the shortcut.")
                 LabeledContent("Shortcut") { HotKeyRecorder(combo: state.voiceHotKeyBinding) }.disabled(!state.showsPet)
-                Text("Tap to start hands-free voice; tap again to pause or resume the microphone. Hold to talk; letting go pauses the microphone while replies keep playing. The shortcut never ends a call: Escape ends it and closes the card.")
+                Text("Tap to start hands-free voice; tap again to pause or resume the microphone. Hold to talk; letting go pauses the microphone while replies keep playing. Double-tap to end the call; Escape also ends it and closes the card.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Reset remembered approvals") { PetApprovals.shared.resetRemembered() }
                     .help("Ask again for future command and folder-access requests. Current task grants expire when that task ends.")
