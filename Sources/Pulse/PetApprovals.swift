@@ -6,7 +6,7 @@ private let log = Logger(subsystem: "app.pulse", category: "approvals")
 
 struct PetApproval {
     /// `dismiss` decides nothing; for a consent request `deny` is a decision the server remembers.
-    enum Decision: String { case deny, allow, always, dismiss }
+    enum Decision: String { case deny, allow, always, dismiss, session }   // session: Codex remembers it for this conversation
     let id: AnyHashable
     let thread: String
     let title: String
@@ -24,6 +24,13 @@ struct PetApproval {
     /// Set when a helper the pet started is asking: it can use existing remembered approvals, never create one.
     var helper: String?
     var canRemember: Bool { rememberKey != nil && helper == nil }
+    var offersSession = false   // a tool's consent request Codex can remember for this conversation (`_meta.persist`)
+    /// The buttons, safest first (Esc picks it). A consent request adds "Allow for this conversation" only when Codex says
+    /// it can keep that itself; it never offers "Always".
+    var choices: [(String, Decision)] {
+        consent ? [("Not now", .dismiss), ("Deny", .deny), ("Allow", .allow)] + (offersSession ? [("Allow for this conversation", .session)] : [])
+            : [("Deny", .deny), (taskScope ? "Allow for this task" : "Allow once", .allow)] + (canRemember ? [("Always allow", .always)] : [])
+    }
     let picks = Picks()
 
     init?(id: AnyHashable, method: String, params p: [String: Any], item: [String: Any]?) {
@@ -93,6 +100,8 @@ struct PetApproval {
             }
             allowed = ["action": "accept"]; denied = ["action": "decline"]; cancelled = ["action": "cancel"]
             taskScope = false; consent = true
+            let persist = meta["persist"]
+            offersSession = persist as? String == "session" || (persist as? [String])?.contains("session") == true
         case "item/tool/requestUserInput":
             // Multiple choice only, all questions or none: a partial answer would silently drop some.
             // Secret questions never come through Pulse.
@@ -137,6 +146,7 @@ struct PetApproval {
         case .deny: denied
         case .dismiss: cancelled
         case .allow, .always: questions.isEmpty ? allowed : ["answers": picks.answers.mapValues { ["answers": [$0]] }]
+        case .session: offersSession ? allowed.merging(["_meta": ["persist": "session"]]) { $1 } : allowed   // only what Codex offered
         }
     }
 
@@ -168,9 +178,7 @@ struct PetApproval {
         alert.informativeText = helper.map { "A helper Codex started (\($0)) is asking for your permission. Helpers can't create remembered approvals." }
             ?? "Codex in Pulse is asking for your permission."
         // Esc picks the first button: a consent tool remembers Deny, so Esc there must decide nothing.
-        let choices: [(String, Decision)] = consent
-            ? [("Not now", .dismiss), ("Deny", .deny), ("Allow", .allow)]
-            : [("Deny", .deny), (taskScope ? "Allow for this task" : "Allow once", .allow)] + (canRemember ? [("Always allow", .always)] : [])
+        let choices = self.choices
         for (title, _) in choices { alert.addButton(withTitle: title) }
         alert.buttons[0].keyEquivalent = "\u{1b}"
         for button in alert.buttons.dropFirst() { button.keyEquivalent = "" } // Enter while typing must not approve an unexpected prompt.

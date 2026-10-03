@@ -37,9 +37,14 @@ process.stdin.on('data', chunk => {
     } else if (m.type === 'setAudioControls') {
       assert.equal(stage, 'controls');
       if (controls++ === 0) assert.equal(m.controls.microphoneMuted, true);
-      assert.equal(m.controls.speakerSuppressed, false); send({type:'audioControlsApplied'});
+      assert.equal(m.controls.speakerSuppressed, false);
+      const hold = require('node:fs').existsSync(require('node:path').join(__dirname, '..', 'hold-controls'));
+      if (hold) setTimeout(() => send({type:'audioControlsApplied'}), 2500);
+      else send({type:'audioControlsApplied'});
     } else if (m.type === 'inspectAudio') {
-      assert(controls > 0); send({type:'audioState', state:{microphonePeak:0, speakerPeak:100}});
+      const fs = require('node:fs'), speaker = require('node:path').join(__dirname, '..', 'speaker-peak');
+      const peak = fs.existsSync(speaker) ? Number(fs.readFileSync(speaker, 'utf8')) : 100;
+      assert(controls > 0); send({type:'audioState', state:{microphonePeak:0, speakerPeak:peak}});
     } else { throw new Error('unexpected message'); }
   }
 });

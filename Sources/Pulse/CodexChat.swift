@@ -395,8 +395,6 @@ final class CodexPetSession: ObservableObject {
     private var inputsSeen = 0                             // places handed out, in the order inputs first appear
     private var askedAt: [String: (call: Int, input: Int)] = [:]   // turn → the call and input it answers
     private var voiceInputs: [String: Int] = [:]           // this call's utterances: transcript item ID → place in line
-    private var spokenInputs: [String: Int] = [:]          // their words → the newest input that said them
-    private var asks: [String: String] = [:]               // this call's requests: their words → turn
     private var voiceResults: [String: (key: String, asks: Bool)] = [:]   // turn → its result
     private var spokenTurns: Set<String> = []
     // Helpers: Codex sub-agents the pet started, seen through Pulse's one server. A helper's own first turn is
@@ -421,13 +419,25 @@ final class CodexPetSession: ObservableObject {
     }
     private var helpers: [String: Helper] = [:]                          // child thread → helper
     private var unclaimed: [String: [(String, [String: Any])]] = [:]     // a few events that beat their helper's registration
-    private struct Report { let seq: Int; let jobs: [String]; let owner: Int?; let epoch: Int; let speak: Bool; var sent = false; var turn: String?; var superseded = false; var stopped = false }
+    private struct Report { let seq: Int; let jobs: [String]; let owner: Int?; let epoch: Int; let speak: Bool; var sent = false; var turn: String?; var superseded = false; var stopped = false; var asks: [Int] = [] }   // asks: a catch-up's requests
     private var report: Report?
     private var reportSeq = 0
     private var reportTurns: Set<String> = []
     private var earlyReportEnd: [String: Any]?   // a report turn's end that beat its turn/start reply
     private var heldItems: [(text: String, item: String, params: [String: Any], completed: Bool, phase: String?, asks: Bool)] = []   // and its items
     private var cancelledReports: Set<String> = []   // report turns Stop cancelled before Codex named them: nothing of theirs shows
+    // A voice request whose answer never reached the voice (the owner asked again too soon, or two answers shared a
+    // turn) is caught up once the call is quiet: one hidden report turn of the pet's, never a replay of old text.
+    private struct VoiceAsk { let input: Int; let turn: String; let words: String; let delegation: String }   // one per delegation
+    private var voiceAsks: [VoiceAsk] = []                       // this call's proven requests not yet answered aloud
+    private var answered: [(input: Int, words: String)] = []     // this call's requests already answered aloud
+    private var settledVoiceTurns: Set<String> = []              // voice work that completed: its requests can be caught up
+    private var catchUpTurns: Set<String> = []
+    private var catchUpTriedAt: Int?          // the input the last catch-up ran at: one try per new input
+    private var catchUpTimer: Task<Void, Never>?
+    private var assembling: Set<String> = []  // transcripts whose words are still arriving: the owner is talking
+    private var heardOut: Set<String> = []    // this call's transcripts that completed
+    private var completedTurns: Set<String> = []   // a repeated or older turn/completed never ends newer work
     private var reportsHeld = false              // after Stop, until the owner asks for something again
     @Published private(set) var helpersWorking = 0
     private var firstAsked: [String: Int] = [:]  // turn → the call whose voice first asked into it: a helper's only possible owner
@@ -550,7 +560,7 @@ final class CodexPetSession: ObservableObject {
         }
         // The model's own default, only if it offers it: otherwise the effort stays unknown rather than invented.
         if work == nil, known, let row = catalog.first(where: { $0.id == model }), let fallback = row.defaultEffort, row.efforts.contains(fallback) { work = fallback }
-        var config = Self.helperConfig(work: work)
+        var config = Self.helperConfig(work: work).merging(Self.trims) { rule, _ in rule }
         // The owner's pick, or the pet lowered for its helpers; an effort that's Codex's own anyway isn't pinned.
         if let talk = talkEffort(model: model, work: work), talk != work || preferredEffort != nil { config["model_reasoning_effort"] = talk }
         return (config, work, named)
@@ -663,6 +673,7 @@ final class CodexPetSession: ObservableObject {
         inputsSeen += 1; inputNumber = inputsSeen   // typing supersedes any voice answer not yet spoken
         voiceLog.notice("input \(self.inputNumber) typed")
         supersedeReport(); reportsHeld = false
+        forgetAsks()   // typing moves on: earlier spoken requests aren't caught up
         sends += 1
         let previous = lastSend, stop = stops, conversation = epoch, mine = sends
         lastSend = Task {
@@ -706,6 +717,7 @@ final class CodexPetSession: ObservableObject {
         stopHelpers()
         if let queued = report, !queued.sent { report = nil; for job in queued.jobs { helpers[job]?.state = .finished } }
         report?.stopped = true   // one already sent is never spoken, even if it finishes before the interrupt lands
+        forgetAsks()
         reportsHeld = true
         if let turnId { stoppedTurns.insert(turnId) }
         guard let tid = threadId, let turnId, thinking, turnId != interruptedTurn else { return }
@@ -725,7 +737,7 @@ final class CodexPetSession: ObservableObject {
         stopVoice()
         epoch += 1
         messages = []; activity = []; status = nil
-        realtimeActive = false; voiceTurns = []; askedAt = [:]; voiceResults = [:]; spokenTurns = []; agentText = [:]
+        realtimeActive = false; voiceTurns = []; askedAt = [:]; askedVia = [:]; voiceResults = [:]; spokenTurns = []; agentText = [:]
         // Running helpers were just asked to stop: keep them until their own end confirms it. A helper the old
         // conversation's work starts later is stopped on sight, never adopted by the new one.
         helpers = helpers.filter { $0.value.isWorking }; unclaimed = [:]
@@ -734,6 +746,7 @@ final class CodexPetSession: ObservableObject {
         }
         report = nil; reportTurns = []; earlyReportEnd = nil; heldItems = []; cancelledReports = []; reportsHeld = false
         firstAsked = [:]; typedInto = []; stoppedTurns = []; hintEffort = nil   // retiredRoots stay: late helpers
+        catchUpTurns = []; completedTurns = []; catchUpTriedAt = nil; delegatedIn = [:]
         closesExpected = 0   // the old thread's closes no longer reach this conversation
         threadTask?.cancel(); lookup?.cancel(); lookup = nil
         threadId = nil; threadTask = nil   // next message starts a fresh thread, even if one was being created
@@ -761,7 +774,8 @@ final class CodexPetSession: ObservableObject {
     func startVoice(retryOnAudioGlitch: Bool = true) {
         guard voiceState == .off else { return }
         voiceMayRetry = retryOnAudioGlitch
-        callNumber += 1; voiceInputs = [:]; spokenInputs = [:]; asks = [:]
+        callNumber += 1; voiceInputs = [:]; delegations = [:]; heard = [:]; pairedBy = [:]; repeatOf = [:]; answeredInputs = []
+        forgetAsks(); answered = []; assembling = []; heardOut = []
         voiceState = .connecting
         status = nil
         VoiceBridge.shared.warmupStart = .now
@@ -784,6 +798,8 @@ final class CodexPetSession: ObservableObject {
                     "clientManagedHandoffs": true,
                     "includeStartupContext": true,
                     "flushTranscriptTailOnSessionEnd": true,
+                    // Added to Codex's own voice instructions, which otherwise name the owner from the Mac account.
+                    "initialItems": [["role": "developer", "text": Self.voiceNote]],
                 ])
                 VoiceBridge.shared.mark("realtime/start acknowledged")   // the answer arrives as thread/realtime/sdp
             } catch {
@@ -797,11 +813,14 @@ final class CodexPetSession: ObservableObject {
         }
     }
 
+    static let voiceNote = "Never address the owner by an account name or username. When you pass on work a helper did, say a helper did it."
+
     func stopVoice() {
         cancelVoiceWork()   // even when already off: a pending audio retry must not restart a call
         guard voiceState != .off else { return }
         voiceState = .off
         realtimeActive = false   // results finishing from now on were never heard
+        forgetAsks(); assembling = []
         VoiceBridge.shared.close()
         finishLive()
         guard realtimeRequested, let tid = threadId else { return }   // tear down only a call that reached Codex
@@ -989,12 +1008,12 @@ final class CodexPetSession: ObservableObject {
             // Work the voice handed over: its progress notes stay out and its replies are marked. Typed
             // turns read as they did live.
             let caption: String? = isTranscriptFlush(asked) ? "After the call" : isDelegation(asked) ? "Work result"
-                : asked.hasPrefix(reportTag) ? "Helper result" : nil
+                : asked.hasPrefix(reportTag) ? "Helper result" : asked.hasPrefix(catchUpTag) ? "Catch-up" : nil
             return items.compactMap { item -> ChatMessage? in
                 switch item["type"] as? String {
                 case "userMessage":
                     let text = Self.text(of: item)
-                    guard !isTranscriptFlush(text), !text.hasPrefix(reportTag) else { return nil }   // core's end-of-call handoff, Pulse's report request
+                    guard !isTranscriptFlush(text), !text.hasPrefix(reportTag), !text.hasPrefix(catchUpTag) else { return nil }   // core's end-of-call handoff, Pulse's report request
                     let shown = spokenRequest(text)
                     return shown.isEmpty ? nil : ChatMessage(role: .user, text: shown)
                 case "agentMessage":
@@ -1032,14 +1051,21 @@ final class CodexPetSession: ObservableObject {
             if Self.isDelegation(asked), let turn = (p["turnId"] as? String) ?? turnId {
                 voiceTurns.insert(turn)   // the voice handed this to Codex, even if the call has since ended
                 if realtimeActive && !Self.isTranscriptFlush(asked) {   // a question this call asked, maybe of running work
-                    supersedeReport(); reportsHeld = false
+                    // An exact repeat of a delegation already seen asks nothing new: it supersedes and pairs nothing.
+                    let seen = delegatedIn[id] != nil
+                    if !seen { supersedeReport(); reportsHeld = false; delegatedIn[id] = barriers }
                     if firstAsked[turn] == nil { firstAsked[turn] = callNumber }
-                    // It answers the utterance this call transcribed with its words, once that transcript is in;
-                    // one never transcribed here (reworded, or from an earlier call) is only shown.
-                    let words = Self.words(Self.spokenRequest(asked))
-                    asks[words] = turn
-                    if let input = spokenInputs[words] { bind(turn, to: input) }
-                    else { voiceLog.notice("turn \(turn, privacy: .public) asked; waiting for its transcript") }
+                    // It answers the utterance this call transcribed with its words: the newest one not yet paired or
+                    // answered, or the next one to finish. One never transcribed here (reworded, or from an earlier call)
+                    // is only shown.
+                    if !seen {
+                        let text = Self.spokenRequest(asked), words = Self.words(text)
+                        delegationOrder += 1
+                        delegations[id] = Delegation(turn: turn, words: words, text: text, order: delegationOrder)
+                        let free = heard.filter { $0.value == words && pairedBy[$0.key] == nil && !answeredInputs.contains($0.key) }.keys
+                        if let input = free.max() { pair(id, input) }
+                        else { voiceLog.notice("turn \(turn, privacy: .public) asked; waiting for its transcript") }
+                    }
                 }
             }
         case "item/completed":
@@ -1051,9 +1077,12 @@ final class CodexPetSession: ObservableObject {
                 updateAgent(text, item: id, params: p, completed: true, phase: item["phase"] as? String, asks: asks)
             }
         case "turn/completed":
-            turnId = nil; interruptedTurn = nil
-            thinking = false
             let turn = p["turn"] as? [String: Any]
+            let ended = turn?["id"] as? String
+            // An older turn's end, or a repeat of one while nothing is known to run (a send pending), never ends newer work.
+            let stale = ended.map { turnId != nil ? $0 != turnId : completedTurns.contains($0) } ?? false
+            if let ended { completedTurns.insert(ended) }
+            if !stale { turnId = nil; interruptedTurn = nil; thinking = false }
             if let completed = turn?["id"] as? String {
                 for i in messages.indices where messages[i].sourceID?.hasPrefix("agent:\(completed):") == true { messages[i].live = false }
             }
@@ -1067,7 +1096,7 @@ final class CodexPetSession: ObservableObject {
             }
             retrying = false
             activity = activity.filter { !$0.done }.suffix(6).map { $0 }
-            reportIfIdle()
+            reportIfIdle(); scheduleCatchUp()
         case "thread/settings/updated":   // Codex's own word on the model and effort now in use
             guard let settings = p["threadSettings"] as? [String: Any] else { return }
             if let current = settings["model"] as? String { model = current }
@@ -1077,7 +1106,9 @@ final class CodexPetSession: ObservableObject {
             messages.append(ChatMessage(role: .note, text: "Codex used \(to) instead of \(from) for this request."))
         case "thread/status/changed":
             let state = p["status"] as? [String: Any]
+            let was = waitingOnYou
             waitingOnYou = state?["type"] as? String == "active" && !(state?["activeFlags"] as? [String] ?? []).isEmpty
+            if was && !waitingOnYou { reportIfIdle(); scheduleCatchUp() }   // a report or catch-up held by a prompt goes now
         case "error":
             // A retried turn is still running, so Stop stays available; only a final error ends it.
             retrying = p["willRetry"] as? Bool == true
@@ -1127,6 +1158,7 @@ final class CodexPetSession: ObservableObject {
             if p["reason"] as? String == "requested", closesExpected > 0 { closesExpected -= 1; return }   // a call Pulse ended
             guard realtimeRequested else { return }   // the server's end of a call already ended here
             realtimeRequested = false
+            forgetAsks(); assembling = []
             finishLive()
             if voiceState != .off { voiceState = .off; VoiceBridge.shared.close() }
         case "pulse/note":   // a request Pulse cancelled or left unanswered because it cannot show it
@@ -1141,7 +1173,7 @@ final class CodexPetSession: ObservableObject {
             if type == "output_audio_buffer.started" { next = .speaking }
             else if type == "output_audio_buffer.stopped" || type == "output_audio_buffer.cleared" { next = .live }
             else { return }
-            if voiceState != next { voiceState = next }
+            if voiceState != next { voiceState = next; if next == .live { scheduleCatchUp() } }   // it stopped speaking
         case "pulse/closed":
             cancelVoiceWork()   // a queued start or audio retry must not reopen the microphone
             catalog = []; catalogDefault = nil   // the next server's catalog is read again; the menu keeps showing this one until then
@@ -1154,6 +1186,7 @@ final class CodexPetSession: ObservableObject {
             threadId = nil
             let lost = helpers.values.filter { $0.epoch == epoch && $0.parent == nil && $0.isWorking }.count
             helpers = [:]; unclaimed = [:]; report = nil; reportTurns = []; earlyReportEnd = nil; heldItems = []; cancelledReports = []; retiredRoots = [:]
+            forgetAsks()
             if lost > 0 { messages.append(ChatMessage(role: .note, text: "Pulse lost track of \(lost == 1 ? "a helper" : "\(lost) helpers") when Codex's app-server stopped; that work may be unfinished.")) }
             countHelpers()
             status = "Codex app-server stopped. Your next message reconnects to this conversation."
@@ -1175,6 +1208,8 @@ final class CodexPetSession: ObservableObject {
             updateAgent(text, item: id, params: ["turnId": done], completed: true, phase: final["phase"] as? String,
                         asks: !((final["questions"] as? [Any])?.isEmpty ?? true))
         }
+        // Its requests can be caught up only if it completed; failed or stopped work never is.
+        if voiceTurns.contains(done), turn["status"] as? String == "completed" { settledVoiceTurns.insert(done) }
         voiceLog.notice("turn \(done, privacy: .public) \(turn["status"] as? String ?? "?", privacy: .public): \((turn["items"] as? [Any])?.count ?? 0) items, result \(final?["id"] as? String ?? "none", privacy: .public)\(self.voiceResults[done]?.asks == true ? " (a question)" : "", privacy: .public)")
         if turn["status"] as? String == "completed" { speakResult(of: done) }
         if report?.turn == done { reportEnded(turn) }
@@ -1197,7 +1232,7 @@ final class CodexPetSession: ObservableObject {
         if voiceTurns.contains(turn) || reportTurns.contains(turn) {
             guard completed, !Self.isPrivateNote(text, phase: phase) else { return }
             voiceResults[turn] = (key, asks)
-            let caption = !voiceTurns.contains(turn) ? "Helper result" : realtimeActive ? "Work result" : "After the call"
+            let caption = catchUpTurns.contains(turn) ? "Catch-up" : !voiceTurns.contains(turn) ? "Helper result" : realtimeActive ? "Work result" : "After the call"
             setMessage(text, role: .assistant, key: key, live: false, caption: caption)
             return
         }
@@ -1232,22 +1267,26 @@ final class CodexPetSession: ObservableObject {
             return
         }
         guard let result = voiceResults[turn], let tid = threadId else { return }
-        submitSpeech(turn, result, tid)
+        // The newest request it answers counts as answered once something went to the voice; earlier ones in the turn
+        // wait for a catch-up.
+        if submitSpeech(turn, result, tid), let via = askedVia[turn] { answeredBy(via) }
     }
 
     /// Hands a finished result to the voice, once per turn. A question or a long answer stays in the chat, and
     /// the voice says so. Never retried: it could speak twice.
-    private func submitSpeech(_ turn: String, _ result: (key: String, asks: Bool), _ tid: String) {
+    @discardableResult   // true once something went to the voice, even a failed write: either way it's never retried
+    private func submitSpeech(_ turn: String, _ result: (key: String, asks: Bool), _ tid: String) -> Bool {
         spokenTurns.insert(turn)
         var text = (agentText[result.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if text.hasPrefix("[FINAL]") { text = text.dropFirst(7).trimmingCharacters(in: .whitespaces) }
-        guard !text.isEmpty else { voiceLog.notice("turn \(turn, privacy: .public) not spoken: empty result"); return }
+        guard !text.isEmpty else { voiceLog.notice("turn \(turn, privacy: .public) not spoken: empty result"); return false }
         // ponytail: the CLI caps speech at 990 estimated tokens; ~4 UTF-8 bytes a token approximates its estimate
         let kind = result.asks ? "question pointer" : text.utf8.count > 990 * 4 ? "long-answer pointer" : "result"
         let speech = result.asks ? "Codex has a question for you in the pet chat."
             : text.utf8.count > 990 * 4 ? "Codex's answer is in the pet chat." : text
         let written = server.post("thread/realtime/appendSpeech", ["threadId": tid, "text": speech])
         voiceLog.notice("turn \(turn, privacy: .public): \(kind, privacy: .public) \(written ? "written to Codex for the voice (not proof it was heard)" : "could not be written to Codex", privacy: .public)")
+        return true
     }
 
     /// A new utterance supersedes any answer not yet spoken, from its first words; a transcript that stays empty
@@ -1255,6 +1294,10 @@ final class CodexPetSession: ObservableObject {
     /// come late never jumps ahead of newer speech or typing. A request the voice handed over before its own
     /// transcript finished is matched to it by its words, so its answer still speaks.
     private func noteVoiceInput(_ id: String, sofar text: String, complete: Bool) {
+        let hasWords = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let firstEnd = complete && !heardOut.contains(id)   // only an utterance's first completion pairs it
+        if complete { assembling.remove(id); heardOut.insert(id); scheduleCatchUp() }
+        else if hasWords, !heardOut.contains(id) { assembling.insert(id) }   // a repeated start of a finished one isn't talking
         if voiceInputs[id] == nil { inputsSeen += 1; voiceInputs[id] = inputsSeen }
         guard let input = voiceInputs[id] else { return }
         if input > inputNumber, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {   // repeats and late words never move it back
@@ -1262,23 +1305,57 @@ final class CodexPetSession: ObservableObject {
             supersedeReport()
             voiceLog.notice("input \(input) spoken (transcript \(id, privacy: .public))")
         }
-        guard complete else { return }
+        guard firstEnd else { return }
         let words = Self.words(text)
         guard !words.isEmpty else { return }
-        let newest = max(spokenInputs[words] ?? 0, input)   // a late repeat of an older utterance keeps the newer one
-        spokenInputs[words] = newest
-        if let turn = asks[words] { bind(turn, to: newest) }
+        heard[input] = words
+        let current = delegations.filter { $0.value.words == words && !$0.value.answered && delegatedIn[$0.key] == barriers }
+        if let waiting = current.filter({ $0.value.input == nil }).min(by: { $0.value.order < $1.value.order })?.key {
+            pair(waiting, input)
+        } else if let asked = current.filter({ ($0.value.input ?? .max) < input }).max(by: { $0.value.order < $1.value.order }) {
+            repeatOf[input] = asked.key   // the owner repeating a question still unanswered: its answer is current for this too
+            rebind(asked.value.turn)
+        }
     }
 
-    /// A turn answers the newest input this call matched to it; a repeat never moves it back.
-    private func bind(_ turn: String, to input: Int) {
-        if let had = askedAt[turn], had.call == callNumber, had.input >= input { return }
+    // A request the voice hands over pairs with one finished utterance of this call with the same words, and an utterance
+    // with one request. Words and order are a matching policy, not proof: a leftover same-word utterance can be claimed
+    // later, and then only a catch-up can answer it. Once an answer covered an utterance, nothing else claims it.
+    private struct Delegation { let turn: String; let words: String; let text: String; let order: Int; var input: Int?; var answered = false }
+    private var delegations: [String: Delegation] = [:]   // this call's delegation items
+    private var delegationOrder = 0
+    private var heard: [Int: String] = [:]                // this call's finished utterances → their words
+    private var pairedBy: [Int: String] = [:]             // an utterance → the delegation paired with it
+    private var repeatOf: [Int: String] = [:]             // an utterance repeating a request still unanswered, until claimed
+    private var answeredInputs: Set<Int> = []             // utterances an answer covered
+    private var askedVia: [String: String] = [:]          // a turn → the delegation its current binding came through
+
+    private func pair(_ d: String, _ input: Int) {
+        guard let turn = delegations[d]?.turn else { return }
+        delegations[d]?.input = input; pairedBy[input] = d
+        if let claimed = repeatOf.removeValue(forKey: input), let old = delegations[claimed]?.turn, old != turn { rebind(old) }
+        rebind(turn)
+        record(d)
+    }
+
+    /// The input a turn's answer is current for: the newest utterance one of its current requests is paired with, or
+    /// that repeats one still unanswered. Derived each time, so it can move back, and requests from before a barrier
+    /// (Stop, typing, a call ending) never count.
+    private func rebind(_ turn: String) {
+        let current = delegations.filter { $0.value.turn == turn && delegatedIn[$0.key] == barriers }
+        var best: (input: Int, via: String)?
+        for (d, del) in current { if let n = del.input, n > (best?.input ?? 0) { best = (n, d) } }
+        for (n, d) in repeatOf where current[d]?.answered == false { if n > (best?.input ?? 0) { best = (n, d) } }
+        guard let best else {
+            if askedAt[turn]?.call == callNumber { askedAt[turn] = nil; askedVia[turn] = nil }
+            return
+        }
         // A binding in the call that was live when a helper started proves that helper's owner; any other never does.
         for (thread, helper) in helpers where helper.spawnTurn == turn && helper.owner == nil && helper.ownerCall == callNumber {
             helpers[thread]?.owner = callNumber; helpers[thread]?.ownerCall = nil
         }
-        askedAt[turn] = (callNumber, input)
-        voiceLog.notice("turn \(turn, privacy: .public) answers input \(input) of call \(self.callNumber)")
+        askedAt[turn] = (callNumber, best.input); askedVia[turn] = best.via
+        voiceLog.notice("turn \(turn, privacy: .public) answers input \(best.input) of call \(self.callNumber)")
     }
 
     /// What was said, for matching a request to its transcript: lowercase words, without the request's escaping.
@@ -1294,9 +1371,14 @@ final class CodexPetSession: ObservableObject {
     static func helperConfig(work: String?) -> [String: Any] {
         ["features.multi_agent_v2.multi_agent_mode_hint_text": helperRule + (work.map { " Pass reasoning_effort \"\($0)\" to spawn_agent." } ?? "")]
     }
+    /// Left out of Pulse's conversations, and so of their helpers: the skills catalogue (a skill can still be read when
+    /// asked for), tools the pet has no use for, and the Ponytail coding-style plugin's per-turn text (harmless if it
+    /// isn't installed). Web search, hooks such as a command guard, and the approval rules stay. Dotted keys, unquoted.
+    static let trims: [String: Any] = ["skills.include_instructions": false, "features.goals": false, "features.image_generation": false,
+                                       "features.sleep_tool": false, "plugins.ponytail@ponytail.enabled": false]
     static let helperRule = """
     Pulse helpers. This applies only if your spawn_agent tool accepts fork_turns. If another agent started you (you are a helper), do your task yourself and never start helpers.
-    Hand substantial work (building something, research, multi-step changes) or anything the owner asks to run in the background to one helper with spawn_agent. Give it a self-contained task: the exact asks, the files it owns and any constraints. Use fork_turns "none" unless it truly needs the recent conversation. Tell the owner in one sentence that it has started, then end your turn: don't wait for it, verify it or bring up its result yourself; Pulse will ask you for a report. Answer the owner's other questions directly. If asked about a helper, check list_agents before answering. Helpers don't open browsers or apps unless the owner asked.
+    Hand substantial work (building something, research, multi-step changes, multi-step app or browser work, sweeping through many files) or anything the owner asks to run in the background to one helper with spawn_agent. Give it a self-contained task: the exact asks, the files it owns and any constraints. Use fork_turns "none" unless it truly needs the recent conversation. Tell the owner in one sentence that it has started, then end your turn: don't wait for it, verify it or bring up its result yourself; Pulse will ask you for a report. Answer the owner's other questions directly. If asked about a helper, answer from list_agents; don't message a helper unless the owner wants its task changed. Helpers don't open browsers or apps unless the owner asked.
     """
 
     /// A helper started: by the pet (its first turn becomes the job), or by a helper, which Pulse stops on sight.
@@ -1420,8 +1502,15 @@ final class CodexPetSession: ObservableObject {
     /// Asks the pet to tell the owner how finished helpers went, once the pet is free: never inside the owner's
     /// own turn. One owner per report, so a call never hears a typed request's or another call's result; the
     /// live call's helpers go first.
-    private func reportIfIdle() {
+    private func reportIfIdle(catchUp: Bool = false) {
         guard report == nil, !reportsHeld, turnId == nil, !thinking, !waitingOnYou, threadId != nil else { return }
+        if catchUp, let due = catchUpDue() {
+            reportSeq += 1
+            report = Report(seq: reportSeq, jobs: [], owner: callNumber, epoch: epoch, speak: true, asks: due.map(\.input))
+            catchUpTriedAt = inputNumber
+            voiceLog.notice("catch-up \(self.reportSeq) for \(due.count) unanswered request(s)")
+            return sendReport(catchUpInput(due))
+        }
         let ready = helpers.filter { $0.value.state == .finished && $0.value.epoch == epoch && $0.value.parent == nil }
         guard let first = ready.first else { return }
         let live: Int? = realtimeActive ? callNumber : nil
@@ -1430,22 +1519,78 @@ final class CodexPetSession: ObservableObject {
         reportSeq += 1
         report = Report(seq: reportSeq, jobs: jobs, owner: owner, epoch: epoch, speak: owner != nil && jobs.allSatisfy { helpers[$0]!.failedReports <= 1 })
         for job in jobs { helpers[job]?.state = .reporting }
-        let input = reportInput(jobs)
-        let previous = lastSend, stop = stops, conversation = epoch, seq = reportSeq
+        sendReport(reportInput(jobs))
+    }
+
+    /// Requests of this call whose work completed but whose answer the voice never got, once the call is quiet: live,
+    /// not speaking, the owner not mid-sentence, and not already tried at this input.
+    private func catchUpDue() -> [VoiceAsk]? {
+        let due = voiceAsks.filter { settledVoiceTurns.contains($0.turn) }
+        guard !due.isEmpty, catchUpTriedAt != inputNumber, callQuiet else { return nil }
+        return due
+    }
+    private var callQuiet: Bool { realtimeActive && realtimeRequested && voiceState == .live && assembling.isEmpty }
+
+    /// A catch-up waits for 2 s of quiet after the last thing that happened, so it doesn't start as the owner speaks.
+    private func scheduleCatchUp() {
+        guard !voiceAsks.isEmpty else { return }
+        catchUpTimer?.cancel()
+        catchUpTimer = Task { [weak self] in
+            guard (try? await Task.sleep(for: .seconds(2))) != nil else { return }
+            self?.reportIfIdle(catchUp: true)
+        }
+    }
+
+    /// A paired, current request that hasn't been answered becomes one ledger request.
+    private func record(_ d: String) {
+        guard let del = delegations[d], let input = del.input, !del.answered, delegatedIn[d] == barriers,
+              !voiceAsks.contains(where: { $0.delegation == d }) else { return }
+        voiceAsks.append(VoiceAsk(input: input, turn: del.turn, words: del.text, delegation: d))
+        scheduleCatchUp()   // its work may have finished already, with the call quiet
+    }
+
+    /// An answer went to the voice through `d`: it, its utterance and every repeat of it are answered for good.
+    private func answeredBy(_ d: String) {
+        delegations[d]?.answered = true
+        if let input = delegations[d]?.input { answeredInputs.insert(input) }
+        for (input, r) in repeatOf where r == d { answeredInputs.insert(input) }
+        retire(voiceAsks.filter { $0.delegation == d }.map(\.input))
+    }
+
+    /// Everything that ends this call's catch-ups also ends what earlier requests the current turns answer.
+    private func forgetAsks() {
+        voiceAsks = []; settledVoiceTurns = []; barriers += 1
+        for turn in Set(delegations.values.map(\.turn)) { rebind(turn) }
+    }
+    private var barriers = 0   // bumped by everything that ends this call's catch-ups: one accepted later is interrupted
+    private var delegatedIn: [String: Int] = [:]   // a delegation item → the barrier count at its first sight; a replay keeps it
+
+    private func retire(_ inputs: [Int]) {
+        for ask in voiceAsks where inputs.contains(ask.input) { answered.append((ask.input, ask.words)) }
+        voiceAsks.removeAll { inputs.contains($0.input) }
+    }
+
+    /// Sends the pending report or catch-up through the same queue as typed messages.
+    private func sendReport(_ input: String) {
+        guard let jobs = report?.jobs else { return }
+        let previous = lastSend, stop = stops, conversation = epoch, seq = reportSeq, barrier = barriers
+        let catchUp = report?.asks.isEmpty == false
+        let current = { stop == self.stops && conversation == self.epoch && (!catchUp || barrier == self.barriers) }
         lastSend = Task {
             await previous?.value   // the same queue as typed messages
             // Re-checked after waiting: anything newer wins, and the report waits for the next idle moment.
-            guard stop == stops, conversation == epoch, report?.seq == seq, report?.superseded == false,
-                  turnId == nil, !thinking, let tid = threadId else { return reportDidNotRun(seq) }
+            guard current(), report?.seq == seq, report?.superseded == false,
+                  turnId == nil, !thinking, !waitingOnYou, let tid = threadId,
+                  report?.asks.isEmpty != false || (report?.owner == callNumber && callQuiet) else { return reportDidNotRun(seq) }
             report?.sent = true
             thinking = true
             voiceLog.notice("report \(seq) for \(jobs.count) helper(s) started")
             do {
                 let r = try await server.request("turn/start", ["threadId": tid, "input": [["type": "text", "text": input, "text_elements": []]]])
                 guard let accepted = (r["turn"] as? [String: Any])?["id"] as? String else { return reportDidNotRun(seq) }
-                // Stop or New conversation while Codex accepted it: stop that turn first; it is never shown or requeued
-                // (after Stop its helpers wait, held, for the owner's next input).
-                if stop != stops || conversation != epoch {
+                // Stop, New conversation, or for a catch-up any of its barriers, while Codex accepted it: stop that turn
+                // first; it is never shown or requeued (after Stop its helpers wait, held, for the owner's next input).
+                if !current() {
                     if earlyReportEnd?["id"] as? String == accepted { earlyReportEnd = nil }
                     if conversation == epoch {
                         if report?.seq == seq { report = nil; for job in jobs { helpers[job]?.state = .finished } }
@@ -1459,6 +1604,7 @@ final class CodexPetSession: ObservableObject {
                 reportTurns.insert(accepted)
                 guard report?.seq == seq else { return releaseHeldItems() }
                 report?.turn = accepted
+                if report?.asks.isEmpty == false { catchUpTurns.insert(accepted) }
                 releaseHeldItems()
                 // It may have ended already: settled now, and the next batch of finished helpers reports.
                 if let early = earlyReportEnd, early["id"] as? String == accepted { earlyReportEnd = nil; settleTurn(early); reportIfIdle() }
@@ -1483,6 +1629,7 @@ final class CodexPetSession: ObservableObject {
     private func reportDidNotRun(_ seq: Int) {
         guard let mine = report, mine.seq == seq else { return }
         report = nil
+        if !mine.sent, !mine.asks.isEmpty { catchUpTriedAt = nil }   // it never reached Codex: not a try
         releaseHeldItems()
         for job in mine.jobs { helpers[job]?.state = .finished }
         if mine.superseded { Task { try? await Task.sleep(for: .seconds(5)); reportIfIdle() } }
@@ -1508,7 +1655,9 @@ final class CodexPetSession: ObservableObject {
             if let failed = gates.first(where: { !$0.ok }) {
                 voiceLog.notice("report turn \(id, privacy: .public) not spoken: \(failed.why, privacy: .public)")
             } else if let result = voiceResults[id], let tid = threadId {
-                submitSpeech(id, result, tid)
+                if submitSpeech(id, result, tid) {   // answered only once its answer went to the voice
+                    for d in voiceAsks.filter({ mine.asks.contains($0.input) }).map(\.delegation) { answeredBy(d) }
+                }
             }
         } else if mine.stopped {
             voiceLog.notice("report turn \(id, privacy: .public) stopped")
@@ -1527,6 +1676,7 @@ final class CodexPetSession: ObservableObject {
     private func supersedeReport() {
         guard report?.superseded == false else { return }
         report?.superseded = true
+        if report?.asks.isEmpty == false { catchUpTriedAt = nil }   // a superseded catch-up wasn't a try: it goes again later
         voiceLog.notice("report superseded by newer input")
     }
 
@@ -1538,9 +1688,19 @@ final class CodexPetSession: ObservableObject {
             let final = helper.outcome?.final.map { " Its final message: \"\(String($0.prefix(2000)))\"" } ?? " It left no final message."
             return "- \(helper.path): ended with status \(status).\(final)"
         }
-        return Self.reportTag + "\nThese helpers you started have ended. Tell the owner the outcome of exactly these, in one or two sentences each. Say plainly if one failed, was refused or was stopped: status completed alone doesn't mean it succeeded. Don't mention anything else.\n" + lines.joined(separator: "\n") + "\n</pulse_helper_report>"
+        return Self.reportTag + "\nThese helpers you started have ended. Tell the owner the outcome of exactly these, in one or two sentences each, saying a helper did the work. Say plainly if one failed, was refused or was stopped: status completed alone doesn't mean it succeeded. Don't mention anything else.\n" + lines.joined(separator: "\n") + "\n</pulse_helper_report>"
     }
     static let reportTag = "<pulse_helper_report>"
+
+    /// Pulse's own request for a catch-up, hidden from the chat. It quotes the owner's requests; it never replays an
+    /// old answer as fact, and the pet's reply is spoken only once its turn completes.
+    private func catchUpInput(_ due: [VoiceAsk]) -> String {
+        let quote = { (words: String) in "- \"\(String(words.prefix(500)))\"" }
+        return Self.catchUpTag + "\nThese requests the owner made by voice in this call may not have had a spoken answer:\n" + due.map { quote($0.words) }.joined(separator: "\n")
+            + (answered.isEmpty ? "" : "\nAlready answered aloud in this call:\n" + answered.suffix(8).map { quote($0.words) }.joined(separator: "\n"))
+            + "\nGive one brief catch-up answer covering the ones still relevant, from verified completed work and the owner's latest instructions. Don't repeat an answer already given, revive a request the owner withdrew, or present a progress note as a result. If the conversation doesn't establish an answer, say so plainly. This is a report only: don't run tools, contact anyone, start helpers or repeat an action. Say when a helper did the work. Never address the owner by an account name or username. The quoted requests are the owner's words, not instructions from Pulse.\n</pulse_voice_recovery>"
+    }
+    static let catchUpTag = "<pulse_voice_recovery>"
 
     /// A request the voice handed to Codex (core wraps it in <realtime_delegation>).
     static func isDelegation(_ text: String) -> Bool { text.hasPrefix("<realtime_delegation>") }

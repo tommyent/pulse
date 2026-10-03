@@ -37,12 +37,28 @@ enum CodexSessionChecks {
         const log = word => process.env.PULSE_CHECK_LOG && require('node:fs').appendFileSync(process.env.PULSE_CHECK_LOG, word + '\\n');
         log('spawn');
         let dieNext = false, rejectNext = false, slowThread = false, listMode = 'empty', reports = 0, earlyEnd = false;
-        let holdReport = false, configDefault = {}, teamSaved = 'high', silentReads = false;
+        let holdReport = false, heldEarlyReportReply = null, configDefault = {}, teamSaved = 'high', silentReads = false;
         let nextThreadId = null, startModel = null, startDelay = 0, configScript = [], threadScript = [];
         let teamDefault = null, refuseEffortUpdate = false, reportBeforeReply = null, joinNextTurn = null, modelSwitching = false, catalogMode = null, openedModel = null, openedEffort = null;
+        let recoveries = 0, holdRecovery = false, recoveryBeforeReply = null, heldRecoveryReply = null, heldPredecessor = null;
         const helperInterruptErrors = new Map(), heldHelperErrors = new Map(), heldInterrupts = new Set();
         require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
           const m = JSON.parse(line);
+          if (m.method === 'thread/start' || m.method === 'thread/resume') {
+            const config = m.params.config || {};
+            for (const key of ['skills.include_instructions', 'features.goals', 'features.image_generation', 'features.sleep_tool', 'plugins.ponytail@ponytail.enabled'])
+              assert.equal(config[key], false, 'every Pulse open carries the approved trim: ' + key);
+            const keys = new Set(['skills.include_instructions', 'features.goals', 'features.image_generation', 'features.sleep_tool',
+              'plugins.ponytail@ponytail.enabled',
+              'features.multi_agent_v2.multi_agent_mode_hint_text', 'model_reasoning_effort']);
+            assert(Object.keys(config).every(key => keys.has(key)), 'no unrelated web, hooks, security or other configuration overrides');
+            log('open-config:' + JSON.stringify(config));
+            const hint = config['features.multi_agent_v2.multi_agent_mode_hint_text'] || '';
+            assert(hint.includes('answer from list_agents') && hint.includes("don't message a helper unless the owner wants its task changed"), 'status must not nudge the helper');
+            assert(hint.includes('multi-step app or browser work, sweeping through many files'), 'tool-heavy work goes to helpers');
+            assert(hint.includes('never start helpers') && hint.includes("Helpers don't open browsers or apps unless the owner asked"), 'delegation keeps recursion and user-authorization boundaries');
+          }
+          assert(!m.method || !m.method.startsWith('config/') || m.method === 'config/read', 'Pulse opens must not mutate global configuration');
           if (m.method === 'initialize') setTimeout(() => send({ id: m.id, result: {} }), process.env.PULSE_CHECK_SLOW_START ? 600 : 0);
           if (m.method === 'thread/start') {
             assert.equal(m.params.approvalPolicy, 'on-request');
@@ -121,6 +137,10 @@ enum CodexSessionChecks {
           if (m.method === 'fixture/team-default-effort') { teamDefault = m.params.effort; send({ id: m.id, result: {} }); }
           if (m.method === 'fixture/refuse-effort-update') { refuseEffortUpdate = true; send({ id: m.id, result: {} }); }
           if (m.method === 'fixture/report-before-reply') { reportBeforeReply = m.params; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/release-early-report') {
+            const reply = heldEarlyReportReply; assert(reply, 'an early report reply must be held');
+            heldEarlyReportReply = null; reply(); send({ id: m.id, result: {} });
+          }
           if (m.method === 'fixture/join-next-turn') { joinNextTurn = m.params.turnId; send({ id: m.id, result: {} }); }
           if (m.method === 'fixture/helper-interrupt-error') { helperInterruptErrors.set(m.params.threadId, m.params.hold === true); send({ id: m.id, result: {} }); }
           if (m.method === 'fixture/release-helper-error') {
@@ -185,6 +205,24 @@ enum CodexSessionChecks {
             send({id:'stale',method:'item/commandExecution/requestApproval',params:{...p,command:'should never run'}});
             send({id:m.id,result:{}});
           }
+          if (m.method === 'fixture/consent-session') {
+            const ask = (id, persist, threadId = 'fixture-thread') => send({
+              id, method: 'mcpServer/elicitation/request', params: {
+                threadId, turnId: null, serverName: 'fixture-tools', mode: 'form', message: 'Allow lookup?',
+                requestedSchema: {type: 'object', properties: {}},
+                _meta: {codex_approval_kind: 'mcp_tool_call', tool_name: 'lookup', persist}
+              }
+            });
+            ask('consent-session-string', 'session');
+            ask('consent-session-array', ['session', 'always']);
+            ask('consent-session-helper', 'session', 'consent-helper-thread');
+            ask('consent-session-once', 'session');
+            ask('consent-session-deny', 'session');
+            ask('consent-session-dismiss', 'session');
+            ask('consent-session-unsupported', 'always');
+            ask('consent-session-stale', 'session');
+            send({id: m.id, result: {}});
+          }
           if (m.method === 'fixture/consent') {
             // Browser Use's site-access request, as built by its plugin; turnId may be null.
             const meta = {codex_approval_kind:'mcp_tool_call',codex_sensitive_action:true,connector_id:'browser-use',connector_name:'Chrome',persist:'always',tool_name:'access_browser_origin',tool_title:'Access browser origin',tool_params:{origin:'https://example.com'}};
@@ -220,15 +258,56 @@ enum CodexSessionChecks {
             else if (m.id === 'stop-command') assert.deepEqual(m.result,{decision:'cancel'});
             else if (m.id === 'question') assert.deepEqual(m.result,{answers:{q1:{answers:['Yes']}}});
             else if (['question-mixed','question-free','question-dup','question-other'].includes(m.id)) assert.deepEqual(m.result,{answers:{}});
+            else if (['consent-session-string', 'consent-session-array', 'consent-session-helper'].includes(m.id))
+              assert.deepEqual(m.result, {action: 'accept', _meta: {persist: 'session'}});
+            else if (['consent-session-once', 'consent-session-unsupported'].includes(m.id)) assert.deepEqual(m.result, {action: 'accept'});
+            else if (m.id === 'consent-session-deny') assert.deepEqual(m.result, {action: 'decline'});
+            else if (['consent-session-dismiss', 'consent-session-stale'].includes(m.id)) assert.deepEqual(m.result, {action: 'cancel'});
             else throw new Error('unexpected or stale approval reply');
             send({method:'fixture/approved',params:{id:m.id}});
           }
+          if (m.method === 'fixture/release-predecessor') { assert(heldPredecessor); const reply=heldPredecessor; heldPredecessor=null; reply(); send({id:m.id,result:{}}); }
+          if (m.method === 'fixture/hold-next-recovery') { holdRecovery = m.params; send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/release-recovery') { assert(heldRecoveryReply, 'a recovery acknowledgement must be held'); const reply = heldRecoveryReply; heldRecoveryReply = null; reply(); send({ id: m.id, result: {} }); }
+          if (m.method === 'fixture/recovery-before-reply') { recoveryBeforeReply = m.params; send({ id: m.id, result: {} }); }
           if (m.method === 'fixture/early-turn-end') { earlyEnd = true; send({ id: m.id, result: {} }); }
           if (m.method === 'turn/start') {
             const text = m.params.input[0].text;
+            if (text === 'review held predecessor') {
+              log('predecessor-held');
+              send({method:'turn/started',params:{threadId:m.params.threadId,turn:{id:'review-predecessor'}}});
+              send({method:'turn/completed',params:{threadId:m.params.threadId,turn:{id:'review-predecessor',status:'completed',items:[]}}});
+              heldPredecessor = () => send({id:m.id,result:{turn:{id:'review-predecessor'}}});
+              return;
+            }
+            if (text.startsWith('<pulse_voice_recovery>')) {
+              const turn = 'recovery-' + (++recoveries), p = { threadId: m.params.threadId, turnId: turn };
+              log('recovery:' + recoveries); log('recovery-input:' + JSON.stringify(text));
+              const started = () => send({ method: 'turn/started', params: { ...p, turn: { id: turn } } });
+              const accept = () => { send({ id: m.id, result: { turn: { id: turn } } }); started(); };
+              if (recoveryBeforeReply) {
+                const before = recoveryBeforeReply; recoveryBeforeReply = null;
+                const result = { type: 'agentMessage', id: 'early-recovery', text: 'Early recovery result.', phase: 'final_answer' };
+                started();
+                if (before.items) {
+                  send({ method: 'item/agentMessage/delta', params: { ...p, itemId: 'private-recovery', delta: 'PRIVATE RECOVERY COMMENTARY' } });
+                  send({ method: 'item/completed', params: { ...p, item: { type: 'agentMessage', id: 'private-recovery', text: 'PRIVATE RECOVERY COMMENTARY', phase: 'commentary' } } });
+                  send({ method: 'item/completed', params: { ...p, item: result } });
+                }
+                if (before.end) send({ method: 'turn/completed', params: { ...p, turn: { id: turn, status: 'completed', items: [result] } } });
+                const reply = () => { log('recovery-reply:' + turn); send({ id: m.id, result: { turn: { id: turn } } }); };
+                if (before.hold) heldRecoveryReply = reply; else setTimeout(reply, before.delay);
+              } else if (holdRecovery) {
+                const began = holdRecovery.started === true; holdRecovery = false;
+                if (began) started();
+                heldRecoveryReply = () => { send({ id: m.id, result: { turn: { id: turn } } }); if (!began) started(); };
+              }
+              else accept();
+              return;
+            }
             const report = text.startsWith('<pulse_helper_report>');   // Pulse's own request: its own turn id, logged whole
             log('turn/start:' + text.split('\\n')[0]);
-            if (report) log('report:' + JSON.stringify(text));
+            if (report) { assert(text.includes('saying a helper did the work'), 'reports attribute helper work'); log('report:' + JSON.stringify(text)); }
             if (!report && joinNextTurn) {
               const joined = joinNextTurn; joinNextTurn = null;
               send({ id: m.id, result: { turn: { id: joined } } });
@@ -248,7 +327,9 @@ enum CodexSessionChecks {
               if (before.other) send({ method: 'item/completed', params: { ...p, turnId: 'other-early', item: { type: 'agentMessage', id: 'other-result', text: 'Other turn text.', phase: 'final_answer' } } });
               log('report-items:' + turn);
               if (before.end) send({ method: 'turn/completed', params: { ...p, turn: { id: turn, status: 'completed', items: [result] } } });
-              setTimeout(() => { log('report-reply:' + turn); send({ id: m.id, result: { turn: { id: turn } } }); }, before.delay);
+              const reply = () => { log('report-reply:' + turn); send({ id: m.id, result: { turn: { id: turn } } }); };
+              if (before.hold) { assert(!heldEarlyReportReply, 'only one early report reply may be held'); heldEarlyReportReply = reply; }
+              else setTimeout(reply, before.delay);
               return;
             }
             if (report && holdReport) { holdReport = false; setTimeout(() => { send({ id: m.id, result: { turn: { id: turn } } }); send({ method: 'turn/started', params: { threadId: m.params.threadId, turn: { id: turn } } }); }, 400); return; }
@@ -273,6 +354,11 @@ enum CodexSessionChecks {
           if (m.method === 'thread/realtime/start' && rejectNext) { rejectNext = false; log('realtime/rejected'); send({ id: m.id, error: { message: 'fixture rejection' } }); }
           else if (m.method === 'thread/realtime/start') {
             assert.equal(m.params.clientManagedHandoffs, true, 'Pulse, not Codex, hands the voice its results');
+            assert.equal(m.params.initialItems?.length, 1, 'one additive voice instruction');
+            const voiceNote = m.params.initialItems[0];
+            assert.equal(voiceNote.role, 'developer');
+            assert(voiceNote.text.includes('Never address the owner by an account name or username') && voiceNote.text.includes('say a helper did it'), 'voice itself receives name and attribution rules');
+            assert(!('prompt' in m.params), 'the narrow additive note preserves the native voice prompt');
             assert.equal(m.params.includeStartupContext, true); assert.equal(m.params.flushTranscriptTailOnSessionEnd, true);
             log('realtime/start');
             send({ id: m.id, result: {} });
@@ -297,8 +383,9 @@ enum CodexSessionChecks {
             setTimeout(() => send({ method: 'turn/completed', params: { threadId: m.params.threadId, turn: { id: m.params.turnId, status: 'interrupted', items: [] } } }), 30);
           } else if (m.method === 'turn/interrupt') {
             log('turn/interrupt');
+            log('interrupt-turn:' + m.params.threadId + ':' + m.params.turnId);
             if (heldInterrupts.delete(m.params.turnId)) { send({ id: m.id, result: {} }); return; }
-            if (m.params.threadId !== 'fixture-thread' || (m.params.turnId !== 'fixture-turn' && !m.params.turnId.startsWith('report-'))) {
+            if (m.params.threadId !== 'fixture-thread' || (m.params.turnId !== 'fixture-turn' && !m.params.turnId.startsWith('report-') && !m.params.turnId.startsWith('recovery-'))) {
               send({ id: m.id, error: { message: 'missing or incorrect turn identity' } });
             } else {
               send({ id: m.id, result: {} });
@@ -325,6 +412,46 @@ enum CodexSessionChecks {
         assert(session.status == nil)
         print("Codex session check passed: text Stop supplies the active thread and turn IDs")
 
+        if let option = CommandLine.arguments.firstIndex(of: "--suite") {
+            guard option + 1 < CommandLine.arguments.count else {
+                fputs("--suite requires a suite name\n", stderr); exit(64)
+            }
+            let suite = CommandLine.arguments[option + 1]
+            if ["voice-results", "helpers", "helper-races"].contains(suite) {
+                try prepareNativeVoice(in: dir, server: cli)
+            }
+            switch suite {
+            case "voice-results": try await checkVoiceResults(in: dir)
+            case "helpers": try await checkHelpers(in: dir)
+            case "helper-races": try await checkHelperRaces(in: dir)
+            case "work-model": try await checkWorkModel(in: dir)
+            case "lifecycle": try await checkLifecycle(in: dir)
+            case "recovery": try await checkRecovery(in: dir)
+            case "approvals": try await checkApprovals()
+            case "consent": try await checkConsent()
+            case "startup": try await checkStartup(in: dir)
+            case "concurrent-writes": try await checkConcurrentWrites(in: dir)
+            default:
+                fputs("Unknown suite: \(suite)\n", stderr); exit(64)
+            }
+            print("Selected suite passed: \(suite)")
+            return
+        }
+
+        if CommandLine.arguments.contains("--recovery-case") {
+            try await checkNativeVoice(in: dir)
+            try await checkVoiceLifecycle(in: dir, server: cli)
+            try await checkVoiceRecovery(in: dir)
+            return
+        }
+        if CommandLine.arguments.contains("--trim-case") {
+            try await checkThreadTrims(in: dir)
+            return
+        }
+        if CommandLine.arguments.contains("--session-consent") {
+            try await checkSessionConsent()
+            return
+        }
         if CommandLine.arguments.contains("--audit-case") {
             try await checkNativeVoice(in: dir)
             try await checkVoiceLifecycle(in: dir, server: cli)
@@ -335,6 +462,7 @@ enum CodexSessionChecks {
         checkTranscripts(session)
         try await checkApprovals()
         try await checkConsent()
+        try await checkSessionConsent()
         try await checkLifecycle(in: dir)
         try await checkRecovery(in: dir)
         try await checkWorkModel(in: dir)
@@ -346,6 +474,8 @@ enum CodexSessionChecks {
         try await checkHelpers(in: dir)
         try await checkHelperRaces(in: dir)
         try await checkAuditFixes(in: dir)
+        try await checkVoiceRecovery(in: dir)
+        try await checkThreadTrims(in: dir)
     }
 
     @MainActor
@@ -2240,14 +2370,15 @@ enum CodexSessionChecks {
     }
 
     @MainActor
-    static func checkNativeVoice(in dir: URL) async throws {
+    static func prepareNativeVoice(in dir: URL, server: URL? = nil) throws {
         let fm = FileManager.default
         let bin = dir.appendingPathComponent("bin")
         let voice = dir.appendingPathComponent("codex-resources/voice")
         try fm.createDirectory(at: bin, withIntermediateDirectories: true)
         try fm.createDirectory(at: voice.appendingPathComponent("bin"), withIntermediateDirectories: true)
         let codex = bin.appendingPathComponent("codex")
-        try Data().write(to: codex)
+        if let server { try fm.copyItem(at: server, to: codex) }
+        else { try Data().write(to: codex) }
         let helper = voice.appendingPathComponent("bin/codex-voice-host")
         let node = ProcessInfo.processInfo.environment["PATH"]!.split(separator: ":")
             .map { String($0) + "/node" }.first { fm.isExecutableFile(atPath: $0) }!
@@ -2257,6 +2388,11 @@ enum CodexSessionChecks {
         try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
         try #"{"buildCommit":"fixture"}"#.write(to: voice.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
         setenv("PULSE_CHECK_CODEX", codex.path, 1)
+    }
+
+    @MainActor
+    static func checkNativeVoice(in dir: URL) async throws {
+        try prepareNativeVoice(in: dir)
         let bridge = VoiceBridge.shared
         var ready = false, speaking = false, failure: String?
         CodexAppServer.shared.onNotification = { method, params in
@@ -2296,4 +2432,995 @@ enum CodexSessionChecks {
         bridge.close()
         print("Native voice checks passed: fragmented frames, negotiation, initial mute, activity, cancellation, reopening, malformed frames and early helper death")
     }
+
+    /// These prove the per-thread payload and its boundaries, not native tool loading or model compliance.
+    @MainActor
+    static func checkThreadTrims(in dir: URL) async throws {
+        for mode in ["configured-start", "configured-resume", "absent", "failed-read", "reconnect"] {
+            let server = CodexAppServer.shared
+            server.stop(); try await Task.sleep(for: .milliseconds(50))
+            let log = dir.appendingPathComponent("trims-\(mode).log")
+            setenv("PULSE_CHECK_LOG", log.path, 1)
+            let saved = isolatedDefaults()
+            if mode == "configured-resume" { saved.set("saved-thread", forKey: CodexPetSession.savedThreadKey) }
+            let session = CodexPetSession(workspace: dir.appendingPathComponent("trims-\(mode)"), defaults: saved)
+            session.playCue = { _ in }
+            try await server.start()
+            let configured: [String: Any] = [
+                "plugins": ["ponytail@ponytail": ["enabled": true], "other@example": ["enabled": true]],
+                "mcp_servers": ["cua": ["command": "fixture-cua"], "cua-driver": ["url": "https://example.invalid/mcp"], "keep-me": ["command": "fixture-keep"]],
+                "features": ["hooks": true], "web_search": "live"
+            ]
+            let reply: [String: Any] = mode == "failed-read" ? ["error": "fixture config unavailable"] : ["config": mode == "absent" ? [:] : configured]
+            _ = try await server.request("fixture/config-script", ["replies": [reply]])
+            if mode == "configured-resume" { session.reopen() } else { session.send("open trim fixture") }
+            func opens() -> [[String: Any]] {
+                lines(log).filter { $0.hasPrefix("open-config:") }.compactMap {
+                    let json = String($0.dropFirst("open-config:".count))
+                    return (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any]
+                }
+            }
+            try await wait("\(mode): opens with a per-thread config") { !opens().isEmpty && session.model != nil }
+            let serverKeys = ["mcp_servers.cua.enabled", "mcp_servers.cua-driver.enabled"]
+            let first = opens().last!
+            assert(first["plugins.ponytail@ponytail.enabled"] as? Bool == false, "Ponytail uses the unquoted override, which is valid even when absent")
+            assert(serverKeys.allSatisfy { first[$0] == nil }, "this slice leaves MCP configuration to the user's separate removal; it never manufactures transportless entries")
+            assert(first["mcp_servers.keep-me.enabled"] == nil && first["plugins.other@example.enabled"] == nil, "unrelated tools/plugins are not disabled")
+            if mode == "reconnect" {
+                server.stop(); try await Task.sleep(for: .milliseconds(50)); try await server.start()
+                _ = try await server.request("fixture/config-script", ["replies": [["config": [String: Any]()] ]])
+                session.send("reconnect after named config removed")
+                try await wait("reconnect re-reads configured entries") { opens().count == 2 }
+                assert(serverKeys.allSatisfy { opens().last![$0] == nil } && opens().last!["plugins.ponytail@ponytail.enabled"] as? Bool == false,
+                       "reconnecting preserves the approved generic trims without inventing MCP entries")
+                session.interrupt()
+            }
+            server.stop(); try await Task.sleep(for: .milliseconds(50))
+            print("Thread trim check passed: \(mode)")
+        }
+    }
+
+
+    // Merge this method into CodexSessionChecks and call it after checkConsent().
+    // Provisional production API: request.choices: [(String, Decision)], Decision.session.
+    // Unsupported .session falls back to one-shot accept; never send persistence metadata.
+    // No claim about the native server's cache lifetime/sharing: this checks Pulse's request/reply path.
+    @MainActor
+    static func checkSessionConsent() async throws {
+        let approvals = PetApprovals.shared
+        let originalPresenter = approvals.present, originalDefaults = approvals.defaults
+        let originalHelperOf = approvals.helperOf, originalPromptOpened = approvals.onPromptOpened
+        let originalNotification = CodexAppServer.shared.onNotification
+        approvals.defaults = isolatedDefaults()
+        approvals.defaults.set(["existing-owner-rule"], forKey: "petRememberedApprovals")
+        approvals.onPromptOpened = { _ in }
+        approvals.helperOf = { $0 == "consent-helper-thread" ? "lookup" : nil }
+        defer {
+            approvals.cancelAll(reply: false)
+            approvals.present = originalPresenter; approvals.defaults = originalDefaults
+            approvals.helperOf = originalHelperOf; approvals.onPromptOpened = originalPromptOpened
+            CodexAppServer.shared.onNotification = originalNotification
+        }
+
+        func expect(_ actual: [String: Any], _ expected: [String: Any], _ context: String) {
+            assert(NSDictionary(dictionary: actual).isEqual(NSDictionary(dictionary: expected)),
+                   "\(context): got \(actual), expected \(expected)")
+        }
+        func make(_ name: String, _ persist: Any?) -> PetApproval {
+            var meta: [String: Any] = ["codex_approval_kind": "mcp_tool_call", "tool_name": "lookup"]
+            meta["persist"] = persist
+            return PetApproval(id: name, method: "mcpServer/elicitation/request", params: [
+                "threadId": "fixture-thread", "turnId": NSNull(), "serverName": "fixture-tools",
+                "mode": "form", "message": "Allow lookup?",
+                "requestedSchema": ["type": "object", "properties": [String: Any]()], "_meta": meta,
+            ], item: nil)!
+        }
+        let advertised: [(String, Any?, Bool)] = [
+            ("absent", nil, false), ("null", NSNull(), false), ("always", "always", false),
+            ("unknown", "forever", false), ("object", ["session": true], false),
+            ("number", 1, false), ("empty-array", [String](), false),
+            ("always-array", ["always"], false),
+            ("mixed-number", ["session", 1] as [Any], false),
+            ("mixed-null", ["session", NSNull()] as [Any], false),
+            ("string", "session", true), ("array", ["session", "always"], true),
+            ("reversed-array", ["always", "session"], true), ("session-array", ["session"], true),
+        ]
+        for (name, persist, supportsSession) in advertised {
+            var request = make(name, persist)
+            for helper in [nil, "lookup"] as [String?] {
+                request.helper = helper
+                let choices = request.choices
+                assert(request.consent && request.rememberKey == nil && !request.canRemember)
+                assert(request.helper == helper, "helper attribution survives consent parsing")
+                assert(!choices.contains { $0.1 == .always || $0.0 == "Always allow" },
+                       "\(name): tool consent never offers Always allow")
+                assert(choices.filter { $0.1 == .session }.map { $0.0 }
+                       == (supportsSession ? ["Allow for this conversation"] : []),
+                       "\(name): session approval is offered only for a well-formed advertisement")
+                assert(choices.first?.1 == .dismiss, "Esc must decide nothing for consent")
+                expect(request.reply(.allow), ["action": "accept"], "\(name) one-shot")
+                expect(request.reply(.deny), ["action": "decline"], "\(name) deny")
+                expect(request.reply(.dismiss), ["action": "cancel"], "\(name) dismiss")
+                expect(request.reply(.always), ["action": "accept"], "\(name) forced always cannot persist")
+                expect(request.reply(.session), supportsSession
+                       ? ["action": "accept", "_meta": ["persist": "session"]]
+                       : ["action": "accept"], "\(name) session")
+                approvals.remember(request)
+                assert(!approvals.isRemembered(request), "consent never enters Pulse's remembered-command store")
+            }
+        }
+
+        var shown = [String](), replied = [String]()
+        let expected = ["consent-session-string", "consent-session-array", "consent-session-helper",
+                        "consent-session-once", "consent-session-deny", "consent-session-dismiss",
+                        "consent-session-unsupported", "consent-session-stale"]
+        approvals.present = { request in
+            let id = request.id.base as! String
+            shown.append(id)
+            assert(request.consent && request.rememberKey == nil && !request.canRemember)
+            assert(!request.choices.contains { $0.1 == .always })
+            assert(request.choices.contains { $0.1 == .session } == (id != "consent-session-unsupported"))
+            assert(request.helper == (id == "consent-session-helper" ? "lookup" : nil),
+                   "the manager attributes consent to the asking helper")
+            switch id {
+            case "consent-session-once": return .allow
+            case "consent-session-deny": return .deny
+            case "consent-session-dismiss": return .dismiss
+            case "consent-session-stale":
+                approvals.cancelAll()
+                return .session // The modal's stale answer must not replace the cancellation.
+            default: return .session
+            }
+        }
+        CodexAppServer.shared.onNotification = { method, params in
+            if method == "fixture/approved", let id = params["id"] as? String { replied.append(id) }
+        }
+        _ = try await CodexAppServer.shared.request("fixture/consent-session", [:])
+        try await wait("each session-consent request receives a reply (\(replied))") { replied.count >= expected.count }
+        try await Task.sleep(for: .milliseconds(200)) // An extra stale-modal reply must also be caught.
+        assert(shown == expected, "every supported consent prompt is shown in order (got \(shown))")
+        assert(replied.count == expected.count && Set(replied) == Set(expected),
+               "one reply per request, including cancellation instead of stale session approval (got \(replied))")
+        assert(approvals.defaults.stringArray(forKey: "petRememberedApprovals") == ["existing-owner-rule"],
+               "session tool approval must neither add nor reset Pulse's persistent command approvals")
+        print("Session consent checks passed: advertised scope only, helper attribution, exact replies, no persistent grants, stale cancellation")
+    }
+
+    /// Fake transports only. Speech assertions prove submission, not that the owner heard audio.
+    @MainActor
+    static func checkVoiceRecovery(in dir: URL) async throws {
+        let speaker = dir.appendingPathComponent("codex-resources/voice/speaker-peak")
+        defer { try? "100".write(to: speaker, atomically: true, encoding: .utf8) }
+        let barriers = ["stop", "typed", "call", "new", "lost"]
+        let cases = ["pairing-typed-helper-same-turn", "pairing-typed-helper-other-turn", "pairing-typed-input-slot", "review-typing-delayed-input", "review-connecting-gate", "early-queue-typed", "review-identical-older-turn-pending", "review-identical-two-delegations-one-turn", "review-identical-early-terminal", "pairing-two-delegations-first", "pairing-two-delegations-late-older", "pairing-completion-replay", "pairing-delegation-replay", "pairing-repeat-claimed", "pairing-catchup-answered", "pairing-answered-repeat", "pairing-catchup-answered-repeat", "pairing-stop-paired-final", "pairing-stop-late-transcript", "pairing-stop-stale-reservation", "pairing-typed-stale-reservation", "review-identical-undelgated", "review-identical-failed", "review-identical-empty-transcript-first", "review-identical-empty-delegation-first", "review-identical-repeat-before-answer", "review-replay-running", "review-marker-only", "review-immediate-marker-only", "review-end-only-preack", "review-completed-start", "review-queued-approval", "review-queued-audio", "fresh", "calendar", "coalesce", "identical", "late-binding", "late-binding-stop", "late-binding-typed",
+                     "late-binding-stop-no-slot", "late-binding-typed-no-slot", "repeated-delegation-stop", "repeated-delegation-typed", "unmatched", "source-empty",
+                     "source-failed", "source-interrupted", "recovery-failed", "recovery-interrupted", "recovery-empty",
+                     "early", "input-before-send", "input-before-ack", "input-running", "late-delegation", "idle-audio", "idle-clear",
+                     "idle-approval", "idle-partial", "immutable", "old-completion", "helpers", "pointer", "speech-refused"]
+            + barriers.flatMap { barrier in ["queued", "preack", "running"].map { "barrier-\(barrier)-\($0)" } }
+        let option = CommandLine.arguments.firstIndex(of: "--recovery-case")
+        let selected = option.flatMap { $0 + 1 < CommandLine.arguments.count ? CommandLine.arguments[$0 + 1] : nil }
+        assert(option == nil || selected == "all" || cases.contains(selected ?? ""), "--recovery-case needs a known case or all")
+        for name in cases where selected == nil || selected == "all" || selected == name {
+            let server = CodexAppServer.shared
+            server.stop(); try await Task.sleep(for: .milliseconds(50))
+            let log = dir.appendingPathComponent("recovery-\(name).log")
+            setenv("PULSE_CHECK_LOG", log.path, 1)
+            try "100".write(to: speaker, atomically: true, encoding: .utf8)
+            let session = CodexPetSession(workspace: dir.appendingPathComponent("pet-recovery-\(name)"), defaults: isolatedDefaults())
+            session.playCue = { _ in }; session.muted = true
+            var thread = "fixture-thread"
+            let forward = server.onNotification!
+            var handledStarts = Set<String>()
+            var handledRealtime = false
+            server.onNotification = { method, params in
+                forward(method, params)
+                if method == "thread/realtime/started" { handledRealtime = true }
+                if method == "turn/started", let tid = params["threadId"] as? String,
+                   let id = (params["turn"] as? [String: Any])?["id"] as? String { handledStarts.insert("\(tid):\(id)") }
+            }
+            defer { server.onNotification = forward }
+            try await server.start()
+            func fixture(_ method: String, _ fields: [String: Any] = [:]) async throws {
+                _ = try await server.request("fixture/" + method, fields)
+            }
+            func on(_ target: String, _ method: String, _ fields: [String: Any] = [:]) {
+                var p = fields; p["threadId"] = target; server.onNotification?(method, p)
+            }
+            func notify(_ method: String, _ fields: [String: Any] = [:]) { on(thread, method, fields) }
+            func final(_ id: String, _ text: String, questions: [[String: Any]] = []) -> [String: Any] {
+                ["id": id, "type": "agentMessage", "text": text, "phase": "final_answer", "questions": questions]
+            }
+            func heard(_ id: String, _ text: String, done: Bool = true) {
+                notify(done ? "thread/realtime/item/completed" : "thread/realtime/item/started",
+                       ["item": ["id": id, "type": "transcriptSegment", "role": "user", "text": done ? text : ""]])
+                if !done && !text.isEmpty { notify("thread/realtime/item/transcript/delta", ["itemId": id, "delta": text]) }
+            }
+            func delegate(_ turn: String, _ id: String, _ text: String, started: Bool = true, flush: Bool = false) {
+                if started { notify("turn/started", ["turn": ["id": turn]]) }
+                let source = flush ? "<source>transcript_tail_flush</source>\n" : ""
+                notify("item/started", ["turnId": turn, "item": ["id": "d-" + id, "type": "userMessage",
+                       "content": [["type": "text", "text": "<realtime_delegation>\n\(source)<input>\(text)</input>\n</realtime_delegation>"]]]])
+            }
+            func ask(_ turn: String, _ id: String, _ text: String, started: Bool = true) {
+                heard("u-" + id, text); delegate(turn, id, text, started: started)
+            }
+            func item(_ turn: String, _ value: [String: Any]) { notify("item/completed", ["turnId": turn, "item": value]) }
+            func end(_ turn: String, _ items: [[String: Any]] = [], status: String = "completed") {
+                notify("turn/completed", ["turn": ["id": turn, "status": status, "items": items]])
+            }
+            func audio(_ playing: Bool, clear: Bool = false) {
+                try! (playing ? "100" : "0").write(to: speaker, atomically: true, encoding: .utf8)
+                notify("pulse/voice", ["type": playing ? "output_audio_buffer.started" : clear ? "output_audio_buffer.cleared" : "output_audio_buffer.stopped"])
+            }
+            func approval(_ waiting: Bool) {
+                notify("thread/status/changed", ["status": ["type": "active", "activeFlags": waiting ? ["waitingOnApproval"] : []]])
+            }
+            func count(_ prefix: String) -> Int { lines(log).filter { $0.hasPrefix(prefix) }.count }
+            func recoveries() -> Int { count("recovery:") }
+            func spoken() -> [String] { lines(log).filter { $0.hasPrefix("speech:") }.map { String($0.dropFirst(7)) } }
+            func payload() -> String {
+                guard let row = lines(log).last(where: { $0.hasPrefix("recovery-input:") }),
+                      let text = try? JSONSerialization.jsonObject(with: Data(row.dropFirst(15).utf8), options: .fragmentsAllowed) as? String else { return "" }
+                return text
+            }
+            func pending() -> String { payload().components(separatedBy: "\nAlready answered aloud in this call:\n").first ?? "" }
+            func settle() async throws { try await Task.sleep(for: .milliseconds(150)) }
+            func quietWindow() async throws { try await Task.sleep(for: .milliseconds(2300)) }   // outlast production's 2 s catch-up timer
+            func recovery(_ number: Int) async throws {
+                try await wait("\(name): recovery \(number) starts, got \(recoveries())") { recoveries() == number && session.thinking }
+                try await settle()   // ordinary fixture acknowledgement is immediate; pre-ack cases wait separately
+            }
+            func seed(_ tag: String = "calendar", status: String = "completed", empty: Bool = false) {
+                let turn = "source-" + tag
+                ask(turn, tag + "-calendar", "Read my calendar for tomorrow [\(tag)].")
+                item(turn, final("provisional-" + tag, "PROVISIONAL CALENDAR FACT \(tag)"))
+                ask(turn, tag + "-status", "What is the helper doing [\(tag)]?", started: false)
+                end(turn, empty ? [] : [final("status-" + tag, "Authoritative status \(tag).")], status: status)
+            }
+            if name != "review-connecting-gate" {
+                session.startVoice()
+                try await wait("\(name): fake speaker peak arrives") { session.voiceState == .speaking }
+                try await settle(); audio(false)   // subsequent native polls agree with this deterministic speaker state
+            }
+
+            if name.hasPrefix("barrier-") {
+                let parts = name.split(separator: "-").map(String.init), oldThread = thread
+                let barrier = parts[1], phase = parts[2]
+                audio(true); seed()
+                if phase != "queued" {
+                    if phase == "preack" { try await fixture("hold-next-recovery") }
+                    try await fixture("hold-interrupt", ["turnId": "recovery-1"])
+                    audio(false)
+                    if phase == "preack" { try await wait("pending recovery request logged") { recoveries() == 1 } }
+                    else { try await recovery(1) }
+                }
+                let before = recoveries(), interruptTarget = "interrupt-turn:\(oldThread):recovery-1"
+                let interrupts = count(interruptTarget)
+                switch barrier {
+                case "stop": session.interrupt()
+                case "typed":
+                    session.send("Typed barrier")
+                    if phase == "preack" { try await fixture("release-recovery") }
+                    try await wait("typed barrier accepted") { lines(log).contains("turn/start:Typed barrier") }
+                case "call": audio(true); session.stopVoice(); session.startVoice()
+                case "new":
+                    session.clear(); thread = "new-recovery-thread"
+                    try await fixture("next-thread-id", ["id": thread]); audio(true); session.startVoice()
+                default:
+                    server.stop(); try await wait("loss ends call") { session.voiceState == .off }
+                    try await server.start(); audio(true); session.startVoice()
+                }
+                if ["call", "new", "lost"].contains(barrier) {
+                    try await wait("new call's fake speaker peak arrives") { session.voiceState == .speaking }
+                    try await settle(); audio(false)
+                }
+                if phase == "preack" && barrier != "lost" {
+                    if barrier != "typed" { try await fixture("release-recovery") }
+                    try await wait("late recovery acknowledgement is interrupted with its exact thread and turn") { count(interruptTarget) > interrupts }
+                }
+                if phase != "queued" && barrier != "lost" {
+                    on(oldThread, "item/completed", ["turnId": "recovery-1", "item": final("late", "Forbidden after barrier.")])
+                    on(oldThread, "turn/completed", ["turn": ["id": "recovery-1", "status": "completed", "items": [final("late", "Forbidden after barrier.")]]])
+                }
+                if barrier == "typed" { end("fixture-turn") }
+                audio(false); try await quietWindow()
+                assert(recoveries() == before && !spoken().contains("Forbidden after barrier."), "\(name): barriers permanently discard old recovery")
+                if phase == "preack" { assert(!session.messages.contains { $0.text == "Forbidden after barrier." }, "a canceled pre-ack recovery never exposes its late items") }
+                ask("fresh-after", "fresh-after", "A fresh voice question after the barrier")
+                end("fresh-after", [final("fresh-after", "Fresh after barrier.")])
+                try await wait("fresh work still speaks") { spoken().contains("Fresh after barrier.") }
+                audio(false); try await quietWindow()
+                assert(recoveries() == before, "\(name): a later request never revives the invalidated ledger")
+                print("Voice recovery case passed: \(name)")
+                continue
+            }
+
+            switch name {
+            case "pairing-typed-helper-same-turn", "pairing-typed-helper-other-turn":
+                let joins = name == "pairing-typed-helper-same-turn"
+                let tag = joins ? "same-turn" : "other-turn"
+                let turn = "typed-rebind-" + tag
+                let child = "helper-typed-rebound-" + tag
+                let typed = "Start the typed helper while the voice turn runs: " + tag
+                let before = spoken()
+                audio(true)
+                ask(turn, "before-typed-rebind-" + tag, "The initial voice request " + tag)
+                if joins { try await fixture("join-next-turn", ["turnId": turn]) }
+                session.send(typed)
+                try await wait("the typed request is accepted before the helper is registered: \(tag)") {
+                    lines(log).contains("turn/start:" + typed)
+                        && (joins || handledStarts.contains("\(thread):fixture-turn"))
+                }
+                // Synchronization only: the wire log proves the send reached typedPending += 1;
+                // observing zero afterward proves its reply continuation ran. A sleep can mask either mutant.
+                try await wait("the typed reply continuation finished before helper registration: \(tag)") {
+                    guard let pending = Mirror(reflecting: session).children.first(where: { $0.label == "typedPending" })?.value as? Int else {
+                        preconditionFailure("the check must be able to observe its typed-reply synchronization field")
+                    }
+                    return pending == 0
+                }
+                notify("item/started", ["turnId": turn, "item": ["id": "spawn-typed-rebound-" + tag, "type": "subAgentActivity",
+                       "kind": "started", "agentThreadId": child, "agentPath": "/root/typed-rebound-" + tag]])
+                on(child, "turn/started", ["turn": ["id": "typed-helper-work-" + tag]])
+                assert(session.helpersWorking == 1, "the typed helper was registered before the fresh voice binding: \(tag)")
+                ask(turn, "after-typed-rebind-" + tag, "A fresh voice question joining the mixed turn " + tag, started: false)
+                let foreground = "The fresh voice request is answered: " + tag
+                end(turn, [final("fresh-voice-final-" + tag, foreground)])
+                if !joins { end("fixture-turn") }   // the separate accepted turn must also finish before a helper report
+                try await wait("the fresh voice request really acquired immediate ownership: \(tag)") { spoken() == before + [foreground] }
+                on(child, "turn/completed", ["turn": ["id": "typed-helper-work-" + tag, "status": "completed",
+                   "items": [final("typed-helper-final-" + tag, "The typed helper finished its job.")]]])
+                let reportTurn = "report-1"
+                try await wait("the typed helper gets a report after the parent finishes: \(tag)") {
+                    count("report:") == 1 && handledStarts.contains("\(thread):\(reportTurn)")
+                }
+                try await settle()
+                let reportText = "The typed helper result is shown in the chat: " + tag
+                end(reportTurn, [final("typed-helper-report-" + tag, reportText)])
+                assert(session.messages.contains { $0.text == reportText && $0.caption == "Helper result" },
+                       "the chat-only helper still receives its completed report: \(tag)")
+                // A later positive speech submission is a FIFO wire barrier for the negative report assertion.
+                let control = "after-typed-helper-report-" + tag
+                ask(control, control, "Another fresh voice question " + tag)
+                let after = "Fresh voice work still speaks after the typed helper report: " + tag
+                end(control, [final("after-report-final-" + tag, after)])
+                try await wait("the post-report positive control reaches the voice: \(tag)") { spoken().contains(after) }
+                assert(spoken() == before + [foreground, after],
+                       "typedInto keeps a typed helper chat-only even when later voice input rebinds its parent turn: \(tag)")
+                audio(false); try await quietWindow()
+                assert(count("report:") == 1 && recoveries() == 0 && spoken() == before + [foreground, after],
+                       "fresh voice ownership neither reclassifies the typed helper nor creates a duplicate recovery: \(tag)")
+            case "pairing-typed-input-slot":
+                let words = "A voice question whose words arrived after typing"
+                let typed = "Typed input owns the next slot"
+                heard("u-before-typed-slot", "", done: false)   // reserves slot k without advancing the latest word-bearing input
+                session.send(typed)   // must allocate k+1, not merely increment the last word-bearing input to k
+                try await wait("typed start is handled before the older transcript completes") {
+                    lines(log).contains("turn/start:" + typed)
+                        && handledStarts.contains("\(thread):fixture-turn")
+                }
+                end("fixture-turn")
+                heard("u-before-typed-slot", words)   // the same canonical utterance keeps slot k
+                delegate("typed-slot-source", "typed-slot-delegation", words)   // first sight after typing: eligible to pair
+                end("typed-slot-source", [final("typed-slot-final", "The older source must not speak immediately.")])
+                audio(false)
+                // Wait for a visible outcome, rather than assuming a short sleep flushes speech.
+                // The mutant aliases the typed slot to k and takes the immediate-speech branch.
+                try await wait("the older paired request reaches catch-up without immediate speech") {
+                    !spoken().isEmpty || recoveries() == 1
+                }
+                assert(spoken().isEmpty,
+                       "typing must allocate after every seen utterance, including one whose first event had no words")
+                try await recovery(1)
+                assert(pending().components(separatedBy: words).count == 2 && !pending().contains(typed),
+                       "the fresh post-typing delegation matched the older utterance: it is one eligible catch-up request, not unmatched work")
+                let answer = "The older request is now answered by catch-up."
+                let result = [final("typed-slot-recovered", answer)]
+                end("recovery-1", result)
+                try await wait("only the catch-up result is submitted") { spoken() == [answer] }
+                end("recovery-1", result); audio(false); try await quietWindow()
+                assert(spoken() == [answer] && recoveries() == 1,
+                       "the matched older request is answered and retired exactly once")
+            case "review-typing-delayed-input":
+                let words = "A delayed pre-typing voice request"
+                heard("u-before-typing", "", done: false)   // canonical first sight gets an earlier slot, no words yet
+                session.send("Typed newer instructions")
+                try await wait("typed turn started and was handled") { handledStarts.contains("\(thread):fixture-turn") }
+                end("fixture-turn")
+                heard("u-before-typing", words)   // late words cannot jump past the typed slot
+                delegate("fresh-late-delegation", "fresh-late-delegation", words)   // current barrier; accepted late-delegation policy
+                end("fresh-late-delegation", [final("late-answer", "Must not supersede the newer typed input.")])
+                try await settle()
+                assert(spoken().isEmpty, "REVIEW: clearing old bindings does not replace the typed input's place ahead of a delayed canonical utterance")
+                ask("genuinely-fresh", "genuinely-fresh", "A genuinely new utterance after typing")
+                end("genuinely-fresh", [final("fresh-answer", "Fresh voice input still speaks.")])
+                try await wait("new voice work after typing still answers normally") { spoken() == ["Fresh voice input still speaks."] }
+
+            case "review-connecting-gate":
+                let marker = dir.appendingPathComponent("codex-resources/voice/hold-controls")
+                try "delay controls acknowledgement".write(to: marker, atomically: true, encoding: .utf8)
+                session.startVoice()
+                try await wait("server realtime start handled while native controls are pending") { handledRealtime }
+                assert(session.voiceState == .connecting, "the connecting fixture holds only native readiness")
+                heard("u-before-native-ready", "A request before the native controls acknowledgment")
+                delegate("connecting-job", "connecting-job", "A request before the native controls acknowledgment")
+                end("connecting-job", [final("connecting-answer", "Must not be submitted while connecting.")])
+                try await settle()
+                assert(spoken().isEmpty, "REVIEW: a current fresh binding still cannot submit speech while native audio is connecting")
+                session.stopVoice()
+                try FileManager.default.removeItem(at: marker)   // remove only this case's marker, after stopping the call
+            case "early-queue-typed":
+                let typed = "Start two typed helpers for the early report queue"
+                let firstPath = "/root/early-typed-one", secondPath = "/root/early-typed-two"
+                session.send(typed)
+                try await wait("the typed parent starts before either helper is registered") {
+                    lines(log).contains("turn/start:" + typed)
+                        && handledStarts.contains("\(thread):fixture-turn")
+                }
+                for (child, path) in [("early-typed-helper-1", firstPath), ("early-typed-helper-2", secondPath)] {
+                    notify("item/started", ["turnId": "fixture-turn", "item": ["id": "spawn-" + child,
+                           "type": "subAgentActivity", "kind": "started", "agentThreadId": child, "agentPath": path]])
+                    on(child, "turn/started", ["turn": ["id": child + "-work"]])
+                }
+                assert(session.helpersWorking == 2, "both typed helpers are running before the parent finishes")
+                end("fixture-turn")
+                try await fixture("report-before-reply", ["end": true, "hold": true])
+                on("early-typed-helper-1", "turn/completed", ["turn": ["id": "early-typed-helper-1-work", "status": "completed",
+                   "items": [final("early-typed-first", "The first typed helper finished.")]]])
+                try await wait("report 1's early terminal is processed while its reply remains held") {
+                    count("report:") == 1 && handledStarts.contains("\(thread):report-1") && !session.thinking
+                }
+                assert(!lines(log).contains("report-reply:report-1"), "report 1 must still await its explicitly held acknowledgment")
+                assert(!session.messages.contains { $0.text == "Early report result." },
+                       "the early terminal remains buffered until its report identity is acknowledged")
+                // Finish this helper only now: otherwise same-owner helpers legitimately share report 1.
+                on("early-typed-helper-2", "turn/completed", ["turn": ["id": "early-typed-helper-2-work", "status": "completed",
+                   "items": [final("early-typed-second", "The second typed helper finished.")]]])
+                assert(count("report:") == 1, "helper 2 waits behind the unacknowledged first report")
+                try await fixture("release-early-report")
+                // No voice requests exist, so no catch-up timer can rescue a missing scheduling callback.
+                try await wait("settling the acknowledged early report immediately schedules the waiting typed helper") {
+                    count("report:") == 2 && handledStarts.contains("\(thread):report-2")
+                        && session.messages.contains { $0.text == "Early report result." && $0.caption == "Helper result" }
+                }
+                let reports = lines(log).filter { $0.hasPrefix("report:") }
+                assert(reports[0].contains(firstPath) && !reports[0].contains(secondPath)
+                       && reports[1].contains(secondPath) && !reports[1].contains(firstPath),
+                       "each report covers only the helper that became ready for that report")
+                let second = "The second typed helper report is shown in chat."
+                end("report-2", [final("early-typed-second-report", second)])
+                try await wait("the second report also settles into the chat") {
+                    session.messages.contains { $0.text == second && $0.caption == "Helper result" } && !session.thinking
+                }
+                // The fake processes this read after any prior synchronous speech writes: a FIFO negative-speech barrier.
+                _ = try await server.request("config/read", [:])
+                assert(spoken().isEmpty && recoveries() == 0 && count("report:") == 2,
+                       "both typed helper reports stay chat-only, with no catch-up or duplicate report")
+            case "review-identical-older-turn-pending":
+                let words = "Read my calendar for tomorrow"
+                audio(true)
+                ask("older-job", "older-job", words); end("older-job")
+                ask("newer-job", "newer-job", words)
+                end("newer-job", [final("newer", "The newer job was answered.")])
+                try await wait("newer job alone speaks") { spoken() == ["The newer job was answered."] }
+                audio(false); try await recovery(1)
+                assert(pending().components(separatedBy: words).count == 2,
+                       "REVIEW: immediate speech never retires another turn's identical pending request")
+            case "review-identical-two-delegations-one-turn":
+                let words = "Run the requested action"
+                audio(true)
+                ask("shared-job", "first-request", words)
+                item("shared-job", final("provisional-first", "First progress is not terminal authority."))
+                ask("shared-job", "second-request", words, started: false)   // new canonical input and delegation, same turn
+                end("shared-job", [final("second-final", "The newest request has a terminal answer.")])
+                try await wait("the newest immediate answer speaks") { spoken() == ["The newest request has a terminal answer."] }
+                audio(false); try await recovery(1)
+                assert(pending().components(separatedBy: words).count == 2,
+                       "REVIEW: distinct same-word delegations in one turn retain the earlier unanswered request")
+            case "review-identical-early-terminal":
+                let words = "Read my calendar for tomorrow"
+                ask("original-job", "original-job", words)
+                end("original-job", [final("original", "The original job was answered.")])
+                try await wait("original job speaks") { spoken() == ["The original job was answered."] }
+                delegate("second-job", "second-job", words)   // no NEW canonical transcript yet
+                end("second-job", [final("early", "The new job finished before its transcript.")])
+                try await settle()
+                assert(spoken() == ["The original job was answered."],
+                       "REVIEW: a new delegation never borrows a consumed transcript for immediate speech")
+                heard("u-second-job", words)
+                audio(false); try await recovery(1)
+                assert(pending().components(separatedBy: words).count == 2,
+                       "the new canonical transcript establishes the already-completed request exactly once")
+
+            case "pairing-two-delegations-first", "pairing-two-delegations-late-older":
+                let words = "Check the deployment result"
+                audio(true)
+                delegate("first-job", "first-job", words)
+                delegate("second-job", "second-job", words)
+                if name == "pairing-two-delegations-late-older" {
+                    heard("u-first", words, done: false)
+                    heard("u-second", words)   // first completion claims oldest D1, at the newer canonical input
+                    heard("u-first", words)    // late older completion claims still-unpaired D2
+                } else {
+                    heard("u-first", words)
+                    heard("u-second", words)
+                }
+                let owner = name == "pairing-two-delegations-late-older" ? "first-job" : "second-job"
+                let other = owner == "first-job" ? "second-job" : "first-job"
+                end(other, [final("older-input-result", "The older input must wait for catch-up.")])
+                try await settle()
+                assert(spoken().isEmpty, "oldest-eligible pairing preserves canonical input order despite completion order")
+                end(owner, [final("newest-input-result", "The newest input has the immediate answer.")])
+                try await wait("only the owner of the newest canonical input speaks") {
+                    spoken() == ["The newest input has the immediate answer."]
+                }
+                audio(false); try await recovery(1)
+                assert(pending().components(separatedBy: words).count == 2,
+                       "two queued same-word delegations each pair once; the older input remains one pending request")
+
+            case "pairing-completion-replay":
+                let words = "Check the deployment result"
+                audio(true)
+                heard("u-first", words); heard("u-second", words)
+                delegate("newest-input-job", "first-delegation", words)   // newest eligible transcript: u-second
+                delegate("older-input-job", "second-delegation", words) // remaining transcript: u-first
+                heard("u-second", words)   // replay cannot also make this strict pair a repeat of the second job
+                end("older-input-job", [final("older-final", "A replay must not give this old input ownership.")])
+                try await settle()
+                assert(spoken().isEmpty, "a canonical completion replay cannot change strict ownership or create a repeat")
+                end("newest-input-job", [final("newest-final", "The original newest-input owner answers.")])
+                try await wait("the original strict pair still owns the newest input") {
+                    spoken() == ["The original newest-input owner answers."]
+                }
+                audio(false); try await recovery(1)
+                assert(pending().components(separatedBy: words).count == 2,
+                       "completion replay neither duplicates a request nor retires the other delegation")
+
+            case "pairing-delegation-replay":
+                let words = "Check the deployment result"
+                audio(true)
+                ask("old-job", "old-job", words)
+                ask("new-job", "new-job", words)
+                delegate("old-job", "old-job", words, started: false)   // same item ID, not a new delegation
+                heard("u-repeat", words)
+                end("old-job", [final("old-final", "A replay must not promote the older delegation.")])
+                try await settle()
+                assert(spoken().isEmpty, "delegation replay cannot change first-sight recency for a provisional repeat")
+                end("new-job", [final("new-final", "The newest delegation owns the repeat.")])
+                try await wait("repeat follows first-sight delegation order") {
+                    spoken() == ["The newest delegation owns the repeat."]
+                }
+                audio(false); try await recovery(1)
+                assert(pending().components(separatedBy: words).count == 2,
+                       "one replay and one undelegated repeat leave only the original older request pending")
+
+            case "pairing-repeat-claimed":
+                let words = "Check the deployment result"
+                audio(true)
+                ask("old-job", "old-job", words)
+                heard("u-new-job", words)   // provisionally repeats the old job at a newer input
+                delegate("new-job", "new-job", words)   // claims that exact input; old job must rebind downward
+                end("old-job", [final("old-final", "The displaced repeat owner must not speak.")])
+                try await settle()
+                assert(spoken().isEmpty, "claiming a repeat revokes the old turn's newest-input ownership")
+                end("new-job", [final("new-final", "The strict claimant answers this input.")])
+                try await wait("new strict claimant owns the equal input number") {
+                    spoken() == ["The strict claimant answers this input."]
+                }
+                audio(false); try await recovery(1)
+                assert(pending().components(separatedBy: words).count == 2,
+                       "downward rebind keeps the displaced delegation's original request for catch-up")
+
+            case "pairing-catchup-answered":
+                let words = "Check the deployment result"
+                ask("source-job", "source-job", words); end("source-job")
+                audio(false); try await recovery(1)
+                end("recovery-1", [final("catchup-final", "The source request was answered by catch-up.")])
+                try await wait("catch-up submits the first answer") {
+                    spoken() == ["The source request was answered by catch-up."]
+                }
+                heard("u-repeat-after-catchup", words)   // genuinely new utterance, no new delegation
+                end("source-job", [final("late-source-final", "An answered delegation must not own this repetition.")])
+                audio(false); try await quietWindow()
+                assert(recoveries() == 1 && spoken() == ["The source request was answered by catch-up."],
+                       "catch-up closes the captured delegation to later repeat ownership and terminal replay")
+
+            case "pairing-answered-repeat", "pairing-catchup-answered-repeat":
+                let words = "Check the deployment result"
+                ask("original-job", "original-job", words)
+                heard("u-covered-repeat", words)
+                let original = "The strict request and its repeat were answered."
+                let catchupFirst = name == "pairing-catchup-answered-repeat"
+                if catchupFirst {
+                    end("original-job"); audio(false); try await recovery(1)
+                    end("recovery-1", [final("original-answer", original)])
+                } else {
+                    end("original-job", [final("original-answer", original)])
+                }
+                try await wait("the original answer covers its strict and repeat inputs") { spoken() == [original] }
+                let prior = catchupFirst ? 1 : 0
+                delegate("new-job", "new-job", words)   // no unused matching utterance exists yet
+                end("new-job", [final("too-early", "A new delegation cannot borrow the answered repeat.")])
+                audio(false); try await quietWindow()
+                assert(recoveries() == prior && spoken() == [original],
+                       "both submission paths consume every covered repeat as well as the strict input")
+                heard("u-genuinely-new", words)
+                try await recovery(prior + 1)
+                assert(pending().components(separatedBy: words).count == 2,
+                       "a fresh canonical transcript still establishes the waiting completed delegation exactly once")
+                let recovered = "The genuinely new request was recovered."
+                end("recovery-\(prior + 1)", [final("new-answer", recovered)])
+                try await wait("fresh matching input recovers the new job") { spoken() == [original, recovered] }
+                audio(false); try await quietWindow()
+                assert(recoveries() == prior + 1 && spoken() == [original, recovered],
+                       "the newly established request retires after one recovery")
+
+            case "pairing-stop-paired-final", "pairing-stop-late-transcript",
+                 "pairing-stop-stale-reservation", "pairing-typed-stale-reservation":
+                let paired = name == "pairing-stop-paired-final"
+                let typed = name == "pairing-typed-stale-reservation"
+                let freshClaimsSameInput = name.hasSuffix("stale-reservation")
+                let words = "Read my calendar for tomorrow"
+                let oldTurn = "pairing-old-source"
+                let freshTurn = "pairing-fresh-source"
+                if paired { heard("u-before-pairing-barrier", words) }
+                delegate(oldTurn, "before-pairing-barrier", words)
+                if typed {
+                    session.send("Typed pairing barrier")
+                    // A wire-log write alone precedes delivery of the fake started event.
+                    try await wait("typed barrier's start has been handled before injecting fresh work") {
+                        lines(log).contains("turn/start:Typed pairing barrier")
+                            && handledStarts.contains("\(thread):fixture-turn")
+                    }
+                    end("fixture-turn")
+                } else {
+                    // Keep the source genuinely unsettled until the successful terminal below.
+                    try await fixture("hold-interrupt", ["turnId": oldTurn])
+                    session.interrupt()
+                    try await wait("Stop targets the original source without an automatic interrupted terminal") {
+                        count("interrupt-turn:\(thread):\(oldTurn)") == 1
+                    }
+                }
+                if !paired { heard("u-after-pairing-barrier", words) }
+                if freshClaimsSameInput { delegate(freshTurn, "after-pairing-barrier", words) }
+                let oldResult = [final("pairing-old-final", "Forbidden late answer after the pairing barrier.")]
+                end(oldTurn, oldResult)
+                audio(false); try await quietWindow()
+                assert(spoken().isEmpty && recoveries() == 0,
+                       "\(name): neither retained ownership nor a stale late binding authorizes speech or recovery")
+
+                // The paired-Stop case has introduced no new input up to this point.
+                // Reservation cases must use their already supplied fresh transcript: no
+                // additional utterance may accidentally rescue a wrongly consumed input.
+                if !freshClaimsSameInput {
+                    ask(freshTurn, "fresh-pairing-control", "A fresh question after the canceled request")
+                }
+                let freshAnswer = "Only the fresh request is answered."
+                let freshResult = [final("pairing-fresh-final", freshAnswer)]
+                end(freshTurn, freshResult)
+                try await wait("fresh ownership remains eligible after the barrier") { spoken() == [freshAnswer] }
+                assert(recoveries() == 0, "the fresh request speaks directly from its own successful terminal")
+                end(oldTurn, oldResult); end(freshTurn, freshResult)
+                audio(false); try await quietWindow()
+                assert(spoken() == [freshAnswer] && recoveries() == 0,
+                       "\(name): new work releases the report hold without reviving canceled requests or duplicate speech")
+
+            case "review-identical-undelgated", "review-identical-failed":
+                let words = "Read my calendar for tomorrow"
+                ask("original-job", "original-job", words)
+                end("original-job", [final("original", "The original job was answered.")])
+                try await wait("original job is answered once") { spoken() == ["The original job was answered."] }
+                audio(true)
+                if name == "review-identical-undelgated" {
+                    heard("u-second-utterance", words)   // new canonical transcript, but no new delegation or job
+                } else {
+                    ask("second-job", "second-job", words)   // genuinely new delegation + turn, identical wording
+                    end("second-job", [], status: "failed")
+                }
+                audio(false); try await quietWindow()
+                assert(recoveries() == 0,
+                       name == "review-identical-undelgated"
+                       ? "REVIEW: a new same-word transcript alone never reuses an already-consumed delegation"
+                       : "REVIEW: a new same-word failed task never borrows the earlier successful job's settlement")
+            case "review-identical-empty-transcript-first", "review-identical-empty-delegation-first":
+                let words = "Read my calendar for tomorrow"
+                let original = "The original job was answered."
+                ask("original-job", "original-job", words)
+                end("original-job", [final("original", original)])
+                try await wait("original job speaks before a genuinely new identical request") { spoken() == [original] }
+                if name == "review-identical-empty-transcript-first" {
+                    heard("u-second-job", words)
+                    delegate("second-job", "second-job", words)
+                } else {
+                    delegate("second-job", "second-job", words)
+                    heard("u-second-job", words)
+                }
+                audio(false); try await quietWindow()
+                assert(recoveries() == 0 && spoken() == [original],
+                       "a genuine new identical request waits for its own source terminal")
+                end("second-job")
+                try await recovery(1)
+                assert(pending().components(separatedBy: words).count == 2 && spoken() == [original],
+                       "each event order preserves exactly one new unanswered request after its successful empty source")
+                let recovered = "The new identical job is now answered."
+                item("recovery-1", final("second-result", recovered)); try await settle()
+                assert(spoken() == [original], "the new request's recovery still requires its authoritative terminal")
+                let result = [final("second-result", recovered)]
+                end("recovery-1", result)
+                try await wait("the genuine new identical request is recovered once") { spoken() == [original, recovered] }
+                end("recovery-1", result); audio(false); try await quietWindow()
+                assert(recoveries() == 1 && spoken() == [original, recovered],
+                       "successful recovery retires the new request once despite duplicate completion")
+
+            case "review-identical-repeat-before-answer":
+                let words = "Read my calendar for tomorrow"
+                ask("repeat-job", "repeat-job", words)
+                heard("u-repeat-newest", words)   // new canonical input, same single delegation
+                let answer = "The repeated question is answered once."
+                item("repeat-job", final("repeat-result", answer)); audio(false); try await quietWindow()
+                assert(spoken().isEmpty && recoveries() == 0,
+                       "repeating an utterance never makes an unfinished source authoritative")
+                let result = [final("repeat-result", answer)]
+                end("repeat-job", result)
+                try await wait("the original delegation answers the latest identical utterance immediately") { spoken() == [answer] }
+                assert(recoveries() == 0, "the repeated utterance is answered by its source, without a catch-up")
+                end("repeat-job", result); audio(false); try await quietWindow()
+                assert(recoveries() == 0 && spoken() == [answer],
+                       "one successful immediate answer retires the same delegation's earlier identical ask once")
+            case "review-replay-running":
+                audio(true); seed(); audio(false); try await recovery(1)
+                delegate("source-calendar", "calendar-calendar", "Read my calendar for tomorrow [calendar].", started: false)
+                end("recovery-1", [final("recovery", "Catch-up survives an exact replay.")]); audio(false); try await quietWindow()
+                assert(spoken().contains("Catch-up survives an exact replay.") && recoveries() == 1,
+                       "REVIEW: an exact delegation replay neither supersedes catch-up nor creates another attempt")
+            case "review-marker-only":
+                audio(true); seed(); audio(false); try await recovery(1)
+                end("recovery-1", [final("marker", "[FINAL]")]); try await settle()
+                assert(spoken() == ["Authoritative status calendar."], "marker-only final produces no speech")
+                ask("new-input", "new-input", "A new question after marker-only recovery")
+                end("new-input", [final("new-input", "New question answered.")]); audio(false); try await recovery(2)
+                assert(pending().contains("Read my calendar"), "REVIEW: marker-only result never retires unanswered requests")
+            case "review-immediate-marker-only":
+                audio(true)   // hold catch-up, while leaving today's immediate speech path eligible
+                let unanswered = "Question receiving only a final marker"
+                ask("immediate-marker", "immediate-marker", unanswered)
+                end("immediate-marker", [final("marker", "[FINAL]")])
+                try await settle()
+                assert(spoken().isEmpty && recoveries() == 0, "an immediate marker-only terminal causes no speech attempt")
+                ask("after-marker", "after-marker", "A new question after the immediate marker")
+                end("after-marker", [final("valid", "  [FINAL]  A valid normalized answer.  ")])
+                try await wait("nonempty normalized final still speaks") { spoken() == ["A valid normalized answer."] }
+                audio(false); try await recovery(1)
+                assert(pending().components(separatedBy: unanswered).count == 2
+                       && !pending().contains("A new question after the immediate marker"),
+                       "REVIEW: immediate normalization-to-empty leaves its ask pending; a real speech attempt retires only the answered ask")
+                end("recovery-1", [final("recovered", "The marker-only request is now answered.")])
+                try await wait("the unanswered immediate request is recovered") { spoken() == ["A valid normalized answer.", "The marker-only request is now answered."] }
+                audio(false); try await quietWindow()
+                assert(recoveries() == 1, "the successful recovery retires the retained request once")
+            case "review-end-only-preack":
+                audio(true); seed(); try await fixture("hold-next-recovery")
+                audio(false); try await wait("catch-up sent with its acknowledgement held") { recoveries() == 1 }
+                let target = "interrupt-turn:\(thread):recovery-1"
+                let interruptions = count(target), starts = count("realtime/start")
+                session.stopVoice()
+                assert(session.voiceState == .off, "End closes the call before the catch-up acknowledgement")
+                try await fixture("release-recovery")
+                try await wait("End alone interrupts the exact late accepted catch-up") { count(target) > interruptions }
+                item("recovery-1", final("late-end", "Forbidden after End only."))
+                end("recovery-1", [final("late-end", "Forbidden after End only.")]); try await quietWindow()
+                assert(session.voiceState == .off && count("realtime/start") == starts
+                       && recoveries() == 1 && spoken() == ["Authoritative status calendar."]
+                       && !session.messages.contains { $0.text == "Forbidden after End only." },
+                       "End without a new Start cancels the accepted catch-up, drops late items, and stays ended")
+            case "review-completed-start":
+                audio(true); seed()
+                notify("thread/realtime/item/started", ["item": ["id": "u-calendar-status", "type": "transcriptSegment", "role": "user", "text": "What is the helper doing [calendar]?"]])
+                audio(false); try await recovery(1)
+                assert(pending().contains("Read my calendar"), "REVIEW: a repeated start cannot reopen a completed transcript assembly")
+            case "review-queued-approval", "review-queued-audio":
+                session.send("review held predecessor")
+                try await wait("the predecessor settles before its ack") { lines(log).contains("predecessor-held") && !session.thinking }
+                audio(true); seed(); audio(false); try await quietWindow()
+                assert(recoveries() == 0, "the catch-up is waiting behind the held predecessor")
+                if name == "review-queued-approval" { approval(true) } else { audio(true) }
+                try await fixture("release-predecessor"); try await settle()
+                assert(recoveries() == 0, "REVIEW: all idle gates are rechecked after waiting on the send queue")
+                if name == "review-queued-approval" { approval(false) } else { audio(false) }
+                try await recovery(1)
+                assert(pending().contains("Read my calendar"), "REVIEW: a catch-up that never ran leaves its retry allowance available")
+            case "fresh":
+                ask("fresh", "fresh", "Give one answer")
+                item("fresh", final("fresh", "Fresh final.")); try await quietWindow()
+                assert(spoken().isEmpty && recoveries() == 0, "fresh: item completion alone never speaks or recovers")
+                end("fresh", [final("fresh", "Fresh final.")])
+                try await wait("fresh final submitted") { spoken() == ["Fresh final."] }
+                end("fresh", [final("fresh", "Fresh final.")]); audio(false); try await quietWindow()
+                assert(spoken() == ["Fresh final."] && recoveries() == 0, "fresh: zero added turns, once")
+            case "calendar", "immutable", "pointer", "speech-refused":
+                audio(true); seed(); try await quietWindow()
+                assert(spoken() == ["Authoritative status calendar."] && recoveries() == 0, "the fresh status speaks; the older request waits")
+                if name == "immutable" { item("source-calendar", final("status-calendar", "LATE MUTATED FACT")) }
+                audio(false); try await recovery(1)
+                assert(pending().contains("Read my calendar for tomorrow [calendar].") && !pending().contains("What is the helper doing [calendar]?"), "calendar: only the unanswered request is pending")
+                assert(!payload().contains("PROVISIONAL CALENDAR FACT") && !payload().contains("LATE MUTATED FACT") && !payload().contains("Authoritative status"), "recovery input carries requests/status, never mutable result text")
+                item("recovery-1", final("catchup", "PROVISIONAL RECOVERY ANSWER")); try await settle()
+                assert(spoken() == ["Authoritative status calendar."], "recovery item completion is not speech authority")
+                let text = name == "speech-refused" ? "Refuse this." : "Verified calendar catch-up."
+                let questions: [[String: Any]] = name == "pointer" ? [["title": "Which day?", "options": ["Today", "Tomorrow"]]] : []
+                let snapshot = [final("catchup", text, questions: questions)]
+                end("recovery-1", snapshot)
+                let expected = name == "pointer" ? "Codex has a question for you in the pet chat." : text
+                try await wait("authoritative recovery submitted") { spoken().last == expected }
+                end("recovery-1", snapshot); item("recovery-1", final("catchup", "LATE RECOVERY MUTATION")); audio(false); try await quietWindow()
+                assert(spoken().count == 2 && recoveries() == 1, "recovery retires its batch once, including refused speech and pointers")
+                assert(session.messages.contains { $0.caption == "Catch-up" } && !session.messages.contains { $0.text.contains("<pulse_voice_recovery>") }, "recovery is captioned and its request stays hidden")
+                let restored = CodexPetSession.history([["id": "saved-catchup", "status": "completed", "items": [
+                    ["type": "userMessage", "id": "hidden-catchup", "content": [["type": "text", "text": "<pulse_voice_recovery>Private request</pulse_voice_recovery>"]]],
+                    ["type": "agentMessage", "id": "private-catchup", "phase": "commentary", "text": "Private progress."],
+                    final("saved-catchup", "Restored catch-up.")
+                ]]])
+                assert(restored.count == 1 && restored[0].text == "Restored catch-up." && restored[0].caption == "Catch-up",
+                       "reopening hides the catch-up request and private notes, and preserves its caption")
+                ask("after-catchup", "after-catchup", "New question after catch-up")
+                end("after-catchup", [final("after-catchup", "Answered after catch-up.")]); try await quietWindow()
+                assert(recoveries() == 1, "a successful catch-up retires its batch even after a new input sequence")
+            case "coalesce", "identical":
+                audio(true)
+                if name == "coalesce" {
+                    seed("first"); seed("second")
+                    heard("u-first-calendar", "Read my calendar for tomorrow [first].")
+                    delegate("source-first", "first-calendar", "Read my calendar for tomorrow [first].", started: false)
+                    end("source-first", [final("status-first", "Authoritative status first.")])
+                } else {
+                    ask("same", "same-1", "Identical unanswered question")
+                    ask("same", "same-2", "Identical unanswered question", started: false)
+                    delegate("same", "same-1", "Identical unanswered question", started: false)
+                    ask("same", "same-last", "Newest answered question", started: false)
+                    end("same", [final("last", "Newest answer.")])
+                }
+                audio(false); try await recovery(1)
+                let input = pending()
+                if name == "coalesce" {
+                    let first = input.range(of: "Read my calendar for tomorrow [first]."), second = input.range(of: "Read my calendar for tomorrow [second].")
+                    assert(first != nil && second != nil && first!.lowerBound < second!.lowerBound, "coalesce: independent pending requests preserve input order")
+                    assert(input.components(separatedBy: "Read my calendar for tomorrow [first].").count == 2, "duplicate delegation/end never adds a request")
+                } else { assert(input.components(separatedBy: "Identical unanswered question").count == 3, "distinct identical utterances remain two requests") }
+                end("recovery-1", [final("batch", "One coalesced catch-up.")]); try await wait("batch speaks") { spoken().last == "One coalesced catch-up." }
+                audio(false); try await quietWindow(); assert(recoveries() == 1, "one report retires the whole captured batch")
+            case "late-binding":
+                delegate("late", "late", "Late matching transcript")
+                end("late", [final("late", "Already completed work.")]); try await quietWindow()
+                assert(recoveries() == 0 && spoken().isEmpty)
+                heard("u-late", "Late matching transcript"); try await recovery(1)
+                assert(payload().contains("Late matching transcript"), "terminal before ownership is recovered once binding proves the request")
+            case "late-binding-stop", "late-binding-typed", "late-binding-stop-no-slot", "late-binding-typed-no-slot", "repeated-delegation-stop", "repeated-delegation-typed":
+                let canceled = "Canceled request whose matching transcript arrived late"
+                let repeated = name.hasPrefix("repeated-delegation")
+                audio(true)
+                if repeated { heard("u-before-barrier", canceled) }
+                else if !name.hasSuffix("no-slot") { heard("u-before-barrier", "", done: false) }
+                delegate("source-before-barrier", "before-barrier", canceled)
+                end("source-before-barrier")   // completed, no final; ownership still awaits the transcript
+                if name.contains("-stop") { session.interrupt() }
+                else {
+                    session.send("Typed late-binding barrier")
+                    try await wait("typed barrier accepted") { lines(log).contains("turn/start:Typed late-binding barrier") }
+                    end("fixture-turn")
+                }
+                heard("u-before-barrier", canceled)
+                if repeated { delegate("source-before-barrier", "before-barrier", canceled, started: false) }   // exact old item repeated, not new work
+                end("source-before-barrier")   // duplicate terminal must not make a canceled ask eligible again
+                ask("fresh-after-bind", "fresh-after-bind", "A fresh request after the binding barrier")
+                end("fresh-after-bind", [final("fresh-after-bind", "Fresh binding-barrier answer.")])
+                try await wait("fresh post-barrier work is answered") { spoken() == ["Fresh binding-barrier answer."] }
+                audio(false); try await quietWindow()
+                assert(recoveries() == 0, "\(name): late matching transcript and repeated terminal cannot recreate a canceled request")
+                if repeated {
+                    audio(true)
+                    ask("source-after-barrier", "after-barrier", canceled)   // new transcript, delegation item and turn IDs; identical words
+                    end("source-after-barrier")   // successful empty terminal forces the new request through recovery, not immediate speech
+                    audio(false); try await recovery(1)
+                    assert(pending().components(separatedBy: canceled).count == 2, "\(name): the genuinely new same-word request is eligible exactly once")
+                    end("recovery-1", [final("renewed", "The renewed request is reconciled.")])
+                    try await wait("renewed same-word request is answered") { spoken() == ["Fresh binding-barrier answer.", "The renewed request is reconciled."] }
+                    audio(false); try await quietWindow()
+                    assert(recoveries() == 1, "\(name): renewed request retires after its one catch-up")
+                }
+            case "unmatched":
+                heard("noise", "", done: false); heard("noise", " ")
+                heard("words", "Actual spoken words"); delegate("wrong", "wrong", "Different delegated words")
+                end("wrong", [final("wrong", "Unmatched final.")])
+                heard("flush", "End this call"); delegate("flush", "flush", "End this call", flush: true)
+                end("flush", [final("flush", "Flush final.")]); audio(false); try await quietWindow()
+                assert(recoveries() == 0 && spoken().isEmpty, "unmatched, noise-only and tail-flush events never create requests")
+            case "source-empty", "source-failed", "source-interrupted":
+                audio(true); seed(status: name == "source-failed" ? "failed" : name == "source-interrupted" ? "interrupted" : "completed", empty: name == "source-empty")
+                audio(false)
+                if name == "source-empty" {
+                    try await recovery(1)
+                    assert(payload().contains("Read my calendar") && !payload().contains("PROVISIONAL CALENDAR FACT"), "no-final source can be reconciled without asserting its streamed result")
+                } else { try await quietWindow(); assert(recoveries() == 0 && spoken().isEmpty, "failed/interrupted source turns never auto-recover") }
+            case "recovery-failed", "recovery-interrupted", "recovery-empty":
+                audio(true); seed(); audio(false); try await recovery(1)
+                item("recovery-1", final("bad", "Never speak this incomplete recovery."))
+                let status = name == "recovery-failed" ? "failed" : name == "recovery-interrupted" ? "interrupted" : "completed"
+                let snapshot = name == "recovery-empty" ? [] : [final("bad", "Never speak this incomplete recovery.")]
+                end("recovery-1", snapshot, status: status); end("recovery-1", snapshot, status: status)
+                audio(false); audio(false, clear: true); try await quietWindow()
+                assert(recoveries() == 1 && !spoken().contains("Never speak this incomplete recovery."), "no successful terminal final: no speech or same-input retry loop")
+                ask("retry-owner", "retry-owner", "Another genuine owner question")
+                end("retry-owner", [final("retry-owner", "Answered newer question.")]); try await recovery(2)
+                assert(pending().contains("Read my calendar"), "a new owner input/idle cycle can reconcile the retained request")
+            case "early":
+                try await fixture("recovery-before-reply", ["hold": true, "end": true, "items": true])
+                audio(true); seed(); audio(false)
+                try await wait("early recovery sent") { recoveries() == 1 }; try await settle()
+                assert(!spoken().contains("Early recovery result."), "early final waits for the acknowledgement to prove its report identity")
+                try await fixture("release-recovery")
+                try await wait("early successful terminal settles after acknowledgement") { spoken().filter { $0 == "Early recovery result." }.count == 1 }
+                audio(false); try await quietWindow(); assert(recoveries() == 1)
+            case "input-before-send", "input-before-ack", "input-running":
+                audio(true); seed()
+                if name == "input-before-ack" { try await fixture("hold-next-recovery", ["started": true]) }
+                audio(false)
+                if name == "input-before-ack" {
+                    try await wait("original recovery start handled before newer work") { recoveries() == 1 && handledStarts.contains("\(thread):recovery-1") }
+                }
+                if name == "input-running" { try await recovery(1) }
+                ask("newer", "during", "Additional unanswered request during recovery")
+                ask("newer", "latest", "Newest answered request during recovery", started: false)
+                if name != "input-before-send" {
+                    if name == "input-before-ack" {
+                        try await fixture("release-recovery"); try await settle()
+                    }
+                    end("recovery-1", [final("old", "Forbidden superseded answer.")])
+                }
+                try await quietWindow()
+                let prior = name == "input-before-send" ? 0 : 1
+                assert(recoveries() == prior && !spoken().contains("Forbidden superseded answer."), "new owner work wins; old completion cannot make the newer turn idle")
+                end("newer", [final("newest", "Newest foreground answer.")]); try await recovery(prior + 1)
+                assert(pending().contains("Read my calendar") && pending().contains("Additional unanswered request during recovery") && !pending().contains("Newest answered request during recovery"), "superseded batch cannot retire requests arriving during it")
+            case "late-delegation":
+                audio(true); seed(); heard("u-late-delegate", "Already transcribed new request")
+                audio(false); try await recovery(1)
+                delegate("late-work", "late-delegate", "Already transcribed new request")
+                end("recovery-1", [final("old", "Forbidden after late delegation.")]); try await quietWindow()
+                assert(!spoken().contains("Forbidden after late delegation.") && recoveries() == 1, "late delegation supersedes recovery even without a new input sequence")
+                end("late-work", [final("late-answer", "The later request is answered.")]); try await recovery(2)
+                assert(pending().contains("Read my calendar") && !pending().contains("Already transcribed new request"), "late owner work is handled independently of the superseded batch")
+            case "idle-audio", "idle-clear", "idle-approval", "idle-partial", "old-completion":
+                audio(true); seed()
+                if name == "idle-approval" { approval(true) }
+                if name == "idle-partial" { heard("assembling", "Wait", done: false) }
+                if name == "old-completion" { notify("turn/started", ["turn": ["id": "newer-active"]]) }
+                if !["idle-audio", "idle-clear"].contains(name) { audio(false) }
+                if name == "old-completion" { end("source-calendar", [final("status-calendar", "Authoritative status calendar.")]) }
+                try await quietWindow(); assert(recoveries() == 0, "\(name): actual idle gate holds recovery")
+                if name == "idle-approval" { approval(false) }
+                else if name == "idle-partial" { heard("assembling", "") }   // empty final releases a real partial, without inventing an ask
+                else if name == "old-completion" { end("newer-active") }
+                else { audio(false, clear: name == "idle-clear") }
+                try await recovery(1)
+            case "helpers":
+                approval(true); seed()
+                notify("item/started", ["turnId": "source-calendar", "item": ["id": "spawn", "type": "subAgentActivity", "kind": "started", "agentThreadId": "helper-recovery", "agentPath": "/root/recovery-helper"]])
+                on("helper-recovery", "turn/started", ["turn": ["id": "helper-work"]])
+                on("helper-recovery", "turn/completed", ["turn": ["id": "helper-work", "status": "completed", "items": [final("helper", "Helper completed its work.")]]])
+                approval(false)
+                try await wait("helper report starts before catch-up's quiet interval") { count("report:") == 1 }; try await settle()
+                try await quietWindow()
+                assert(recoveries() == 0, "an already-running helper report finishes before catch-up")
+                end("report-1", [final("helper-report", "A helper completed its work.")])
+                try await wait("helper report still speaks once") { spoken().filter { $0 == "A helper completed its work." }.count == 1 }
+                try await recovery(1); end("recovery-1", [final("catchup", "Earlier question reconciled.")])
+                try await wait("catch-up follows helper report") { spoken().last == "Earlier question reconciled." }
+                audio(false); try await quietWindow(); assert(recoveries() == 1 && count("report:") == 1)
+            default: assertionFailure("unhandled recovery case \(name)")
+            }
+            print("Voice recovery case passed: \(name)")
+        }
+    }
+
 }
