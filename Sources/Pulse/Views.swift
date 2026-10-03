@@ -415,6 +415,10 @@ struct PetCard: View {
                             .font(.caption).foregroundStyle(Ink.secondary(scheme))
                     }
                     ForEach(session.messages) { m in
+                        if m.role == .note {   // Pulse's own notice, not a message and not input: a small centered line
+                            Text(m.text).font(.caption).foregroundStyle(Ink.secondary(scheme)).multilineTextAlignment(.center)
+                                .textSelection(.enabled).frame(maxWidth: .infinity).padding(.vertical, 2).id(m.id)
+                        } else {
                         HStack {
                             if m.role == .user { Spacer(minLength: 40) }
                             VStack(alignment: .leading, spacing: 2) {
@@ -434,6 +438,7 @@ struct PetCard: View {
                             if m.role != .user { Spacer(minLength: 40) }
                         }
                         .id(m.id)
+                        }
                     }
                     if session.waitingOnYou {
                         Label("Waiting for your answer in the Codex prompt", systemImage: "hand.raised")
@@ -478,8 +483,10 @@ struct PetCard: View {
     /// Model · folder · since when, as Codex reported them for the open conversation.
     /// Model · effort, as Codex reported them (or the saved choice before a conversation).
     private var workDetail: String? {
-        let parts = [session.shownModel, session.shownEffort.map { session.helperEffort != nil ? "talks at \($0)" : $0 },
-                     session.helperEffort.map { "helpers at \($0)" },
+        // Before a conversation opens, the split it will get previews from the pick.
+        let next = session.nextSplit
+        let parts = [session.shownModel, next.map { "talks at \($0.talk)" } ?? session.shownEffort.map { session.helperEffort != nil ? "talks at \($0)" : $0 },
+                     next.map { "helpers at \($0.helpers)" } ?? session.helperEffort.map { "helpers at \($0)" },
                      session.pendingModel.map { "switches to \($0) from the next open" },
                      session.pendingHelperEffort.map { "helpers at \($0) from the next open" }].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
@@ -495,7 +502,8 @@ struct PetCard: View {
     /// The header detail doubles as the work-model menu: the model doing Codex's work and its effort,
     /// never the voice's own realtime model.
     private func workModelMenu(_ detail: String) -> some View {
-        Menu {
+        let planned = session.nextSplit != nil ? " (for the next conversation)" : ""
+        return Menu {
             Section("Work model · the voice stays the same") {
                 ForEach(session.workModels) { work in
                     Menu(work.id == session.shownModel ? "✓ " + work.name : work.name) {
@@ -512,8 +520,8 @@ struct PetCard: View {
         }
         .menuStyle(.borderlessButton)
         .disabled(session.choosingWork)
-        .help("Work model: \(detail). Choose the model and effort Codex works with; the voice doesn't change. With helpers and an effort above medium, the pet talks at medium and helpers work at the effort you pick; a new helper effort, or a model that can't run the helpers' current effort, applies from the next conversation or Pulse restart.")
-        .accessibilityLabel("Work model: \(detail)")
+        .help("Work model: \(detail)\(planned). Choose the model and effort Codex works with; the voice doesn't change. With helpers and an effort above medium, the pet talks at medium and helpers work at the effort you pick; a new helper effort, or a model that can't run the helpers' current effort, applies from the next conversation or Pulse restart.")
+        .accessibilityLabel("Work model: \(detail)\(planned)")
     }
 
     private func submit() {

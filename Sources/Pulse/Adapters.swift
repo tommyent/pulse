@@ -570,6 +570,17 @@ enum GrokAdapter {
 
 // MARK: - Antigravity
 
+/// When Antigravity polling pauses, and when a manual Refresh lifts it. A sign-out or a stalled agy run pauses it (agy
+/// would open a browser sign-in each poll). A Refresh runs it again, even one clicked while a run is in flight: that
+/// run's result doesn't re-pause before the Refresh's own pass, though a second failure does.
+struct AgyPause {
+    private(set) var paused = false
+    private var retry = false
+    mutating func manualRefresh(whileRefreshing: Bool) { paused = false; if whileRefreshing { retry = true } }
+    mutating func passStarted() { retry = false }
+    mutating func update(with snap: AccountSnapshot) { paused = AntigravityAdapter.pausesPolling(snap) && !retry }
+}
+
 /// The Antigravity CLI's own usage report (`agy -p /usage`). agy asks Google as itself, so Pulse never
 /// reads the Google token; Google's quota API refuses that token from any other client. The report is
 /// a local command: no model prompt, no tokens, no conversation.

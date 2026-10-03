@@ -96,6 +96,25 @@ enum SecurityChecks {
         assert(AntigravityAdapter.pausesPolling(agSnap(.providerError, AntigravityAdapter.stalled)))
         assert(!AntigravityAdapter.pausesPolling(agSnap(.providerError, "Offline, Antigravity check skipped")))
         assert(!AntigravityAdapter.pausesPolling(agSnap(.ok, nil)))
+        // A Refresh clicked while agy runs gets its own pass, even if that run comes back stalled or signed out; a
+        // second failure pauses again. Without a click, a failure pauses.
+        var pause = AgyPause()
+        pause.passStarted(); pause.update(with: agSnap(.providerError, AntigravityAdapter.stalled))
+        assert(pause.paused, "a stall pauses polling")
+        pause.manualRefresh(whileRefreshing: false)
+        assert(!pause.paused, "a Refresh lifts the pause")
+        pause.passStarted(); pause.manualRefresh(whileRefreshing: true); pause.update(with: agSnap(.needsAuth, nil))
+        assert(!pause.paused, "a Refresh clicked during the run isn't consumed by that run's failure")
+        pause.passStarted(); pause.update(with: agSnap(.needsAuth, nil))
+        assert(pause.paused, "the Refresh's own pass may pause again")
+        pause.passStarted(); pause.update(with: agSnap(.ok, nil))
+        assert(pause.paused == false, "a good report never pauses")
+        // A failure after a good report keeps the windows, shown stale with the failure's own reason.
+        var good = agSnap(.ok, nil); good.windows = [UsageWindow(id: "weekly_all", label: "Weekly", percentUsed: 40, resetsAt: nil)]
+        let stalled = agSnap(.providerError, AntigravityAdapter.stalled).staleKeeping(good)
+        assert(stalled.health == .stale && stalled.windows.count == 1 && stalled.healthMessage?.contains("click Refresh") == true,
+               "a stall after a good report still says what to do (got \(stalled.healthMessage ?? "nil"))")
+        assert(good.staleKeeping(good).healthMessage?.hasPrefix("Stale — last updated") == true, "no reason, no suffix")
         print("Security checks passed: private atomic auth writes, redirect/cache policy, shortcut release and the agy usage guard")
     }
 }

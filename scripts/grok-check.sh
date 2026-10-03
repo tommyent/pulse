@@ -3,7 +3,10 @@
 # Fresh output dir each run: overwriting the same binary inode trips macOS's stale-signature SIGKILL.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-OUT="$(mktemp -d)/grok-check"
+DIR="$(mktemp -d)"
+trap 'rm -rf "$DIR"' EXIT
+OUT="$DIR/grok-check"
+export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"
 swiftc -O -o "$OUT" Sources/Pulse/Models.swift Sources/Pulse/Adapters.swift Sources/Pulse/GrokLogin.swift scripts/grok-check/main.swift
 codesign -s - "$OUT" 2>/dev/null || true
-exec "$OUT" "$@"
+"$OUT" "$@"

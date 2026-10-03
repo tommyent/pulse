@@ -43,7 +43,7 @@ process.stdin.on('data', chunk => {
       else send({type:'audioControlsApplied'});
     } else if (m.type === 'inspectAudio') {
       const fs = require('node:fs'), speaker = require('node:path').join(__dirname, '..', 'speaker-peak');
-      const peak = fs.existsSync(speaker) ? Number(fs.readFileSync(speaker, 'utf8')) : 100;
+      const peak = fs.existsSync(speaker) ? Number(fs.readFileSync(speaker, 'utf8')) : 1000;
       assert(controls > 0); send({type:'audioState', state:{microphonePeak:0, speakerPeak:peak}});
     } else { throw new Error('unexpected message'); }
   }

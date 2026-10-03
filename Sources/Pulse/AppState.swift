@@ -40,7 +40,7 @@ final class AppState: ObservableObject {
     @Published var refreshing = false
     @Published var dragging = false
     private var refreshRequested = false
-    private var agyPaused = false   // agy signed out or stalled: only a manual refresh runs it again
+    private var agy = AgyPause()   // agy signed out or stalled: only a manual refresh runs it again
 
     private static let dir = FileManager.default
         .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -85,23 +85,22 @@ final class AppState: ObservableObject {
     }
 
     func refreshAll(manual: Bool = true) async {
-        if manual { agyPaused = false }
+        if manual { agy.manualRefresh(whileRefreshing: refreshing) }
         guard !refreshing else { refreshRequested = true; return }
         refreshing = true
         repeat {
             refreshRequested = false
+            agy.passStarted()
             await withTaskGroup(of: AccountSnapshot.self) { group in
-                for id in enabledAccounts where !(id == .antigravity && agyPaused) {
+                for id in enabledAccounts where !(id == .antigravity && agy.paused) {
                     group.addTask { await fetchSnapshot(id) }
                 }
                 for await snap in group {
-                    if snap.id == .antigravity { agyPaused = AntigravityAdapter.pausesPolling(snap) }
+                    if snap.id == .antigravity { agy.update(with: snap) }
                     // keep last good windows for stale display instead of blanking the card
                     if snap.windows.isEmpty, let old = snapshots[snap.id], !old.windows.isEmpty,
                        snap.health == .providerError {
-                        var stale = old
-                        stale.health = .stale
-                        snapshots[snap.id] = stale
+                        snapshots[snap.id] = snap.staleKeeping(old)
                     } else {
                         snapshots[snap.id] = snap
                     }

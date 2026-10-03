@@ -51,6 +51,14 @@ struct AccountSnapshot: Codable, Identifiable {
     var source: Source
     var detail: String? = nil   // provider-specific reason behind needsAuth / providerError
 
+    /// A failed fetch keeps the last good windows on screen, marked stale, with this failure's reason.
+    func staleKeeping(_ old: AccountSnapshot) -> AccountSnapshot {
+        var stale = old
+        stale.health = .stale
+        stale.detail = detail
+        return stale
+    }
+
     /// Tightest window = the one nearest lockout.
     var tightestPercent: Double? {
         windows.compactMap(\.percentUsed).max()
@@ -61,7 +69,7 @@ struct AccountSnapshot: Codable, Identifiable {
         case .ok: nil
         case .needsAuth: detail ?? "Connect \(displayName) — subscription login required"
         case .missingClient: "Install \(displayName) CLI"
-        case .stale: "Stale — last updated \(fetchedAt.formatted(date: .omitted, time: .shortened))"
+        case .stale: "Stale — last updated \(fetchedAt.formatted(date: .omitted, time: .shortened))" + (detail.map { ". \($0)" } ?? "")
         case .providerError: detail ?? "\(displayName) usage unavailable"
         }
     }

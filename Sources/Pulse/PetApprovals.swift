@@ -41,17 +41,24 @@ struct PetApproval {
         // Identity and display-only fields do not broaden the operation being remembered.
         for field in ["threadId", "turnId", "itemId", "startedAtMs", "approvalId", "reason", "commandActions", "availableDecisions", "proposedExecpolicyAmendment", "proposedNetworkPolicyAmendments"] { rule[field] = nil }
         rule["method"] = method
-        rule["cwd"] = p["cwd"] ?? item?["cwd"]
+        let cwd = p["cwd"] as? String ?? item?["cwd"] as? String
+        // Codex may send `command: null` or "" with the command on the cached item: either falls back to the item's.
+        let command = [p["command"], item?["command"]].compactMap { $0 as? String }.first { !$0.isEmpty }
+        rule["cwd"] = cwd
         if let reason = p["reason"] as? String { details.append(reason) }
-        if let cwd = (p["cwd"] ?? item?["cwd"]) as? String { details.append("Working folder: \(cwd)") }
+        if let cwd { details.append("Working folder: \(cwd)") }
         switch method {
         case "item/commandExecution/requestApproval":
             if let options = p["availableDecisions"] as? [Any], !options.contains(where: { $0 as? String == "accept" }) { return nil }
             if let network = p["networkApprovalContext"] as? [String: Any] {
                 title = "Allow network access?"
                 details.append("Network destination:\n" + Self.json(network))
+                if let command {
+                    details.append("For this command:\n" + command)
+                    rule["command"] = command
+                }
             } else {
-                guard let command = (p["command"] ?? item?["command"]) as? String, !command.isEmpty else { return nil }
+                guard let command else { return nil }
                 title = p["kind"] as? String == "writeStdin" ? "Allow terminal input?" : "Allow this command?"
                 details.append(command)
                 rule["command"] = command
@@ -117,7 +124,9 @@ struct PetApproval {
         }
         // Store only a digest, never shell commands or their potential secret arguments.
         // Consent and answers are never remembered by Pulse: the tool keeps its own decisions.
-        if consent || !questions.isEmpty || p["kind"] as? String == "writeStdin" { rememberKey = nil }
+        // A command without its working folder could match the same command run anywhere: Allow once only.
+        if consent || !questions.isEmpty || p["kind"] as? String == "writeStdin"
+            || (method == "item/commandExecution/requestApproval" && cwd == nil) { rememberKey = nil }
         else if let data = try? JSONSerialization.data(withJSONObject: rule, options: [.sortedKeys]) {
             rememberKey = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         } else { rememberKey = nil }

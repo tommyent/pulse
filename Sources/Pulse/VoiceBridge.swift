@@ -23,6 +23,7 @@ final class VoiceBridge {
     private var devicesOpen = false
     private var announcedReady = false
     private var errorHandle: FileHandle?
+    static let speakingFloor = 512
     private let errorLog = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("pulse-voice.err")
     private var prewarmDevice: (AudioDeviceID, AudioDeviceIOProcID)?
     private var bluetoothInput = false
@@ -221,8 +222,10 @@ final class VoiceBridge {
                     startPolling()
                 }
             case "audioState":
+                // The loudest rendered sample since the last poll (u16). At or below Codex's own meter noise floor
+                // (512 of 65535) it's quiet: faint playback noise isn't the voice talking.
                 let peak = (message["state"] as? [String: Any])?["speakerPeak"] as? Int ?? 0
-                CodexAppServer.shared.onNotification?("pulse/voice", ["type": peak > 0 ? "output_audio_buffer.started" : "output_audio_buffer.stopped"])
+                CodexAppServer.shared.onNotification?("pulse/voice", ["type": peak > Self.speakingFloor ? "output_audio_buffer.started" : "output_audio_buffer.stopped"])
                 updateControls()
             default: fail("Unexpected native voice response."); return
             }

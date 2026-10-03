@@ -3,7 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 OUT="$(mktemp -d)"
-export CLANG_MODULE_CACHE_PATH="$OUT/module-cache"
+trap 'rm -rf "$OUT"' EXIT
+export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"   # shared across runs, rebuilt only when sources change
 swiftc Sources/Pulse/DockGeometry.swift Sources/Pulse/Models.swift Checks/OverlayChecks.swift -o "$OUT/overlay"
 "$OUT/overlay"
 swiftc Sources/Pulse/CodexPetSprite.swift Checks/CodexPetChecks.swift -o "$OUT/pet"
