@@ -78,9 +78,14 @@ final class OverlayController {
     private var voiceGesture = VoiceShortcutGesture()
 
     /// A held shortcut mutes only capture on release, so Codex can still answer aloud.
-    private func bindVoiceKey(_ combo: HotKeyCombo) {
+    private func bindVoiceKey(_ combo: HotKeyCombo?) {
         cancelVoiceKey()
         voiceKey = nil   // unregister before registering its replacement
+        guard let combo else {   // the pet is hidden: its call ends and the shortcut is free for other apps
+            CodexPetSession.shared.stopVoice()
+            state.petVisible = false
+            return
+        }
         voiceKey = HotKey(combo)
         if voiceKey == nil {
             // Enter outside GCD's serial main queue so a modal cannot delay microphone mute.
@@ -265,7 +270,7 @@ final class OverlayController {
             .store(in: &cancellables)
 
         state.$persisted
-            .map { $0.voiceHotKey ?? .voiceDefault }
+            .map { $0.showPet == false ? nil : $0.voiceHotKey ?? .voiceDefault }
             .removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [weak self] combo in self?.bindVoiceKey(combo) }

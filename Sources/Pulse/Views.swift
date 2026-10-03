@@ -305,7 +305,7 @@ struct PetCard: View {
     @ObservedObject private var session = CodexPetSession.shared
     @FocusState private var composing: Bool
     var tailEdge: Edge = .trailing
-    var showUsage: () -> Void
+    var showUsage: (() -> Void)?   // nil while Codex usage is switched off
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -324,8 +324,10 @@ struct PetCard: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Button("Usage", action: showUsage).buttonStyle(.plain).font(.caption)
-                    .foregroundStyle(Ink.secondary(scheme)).fixedSize()
+                if let showUsage {
+                    Button("Usage", action: showUsage).buttonStyle(.plain).font(.caption)
+                        .foregroundStyle(Ink.secondary(scheme)).fixedSize()
+                }
                 Button { session.clear() } label: { Image(systemName: "square.and.pencil") }
                     .buttonStyle(.plain).help("New conversation: starts over and stops running helpers")
                     .accessibilityLabel("New conversation").accessibilityHint("Starts over and stops running helpers")
@@ -573,7 +575,7 @@ struct OverlayView: View {
     @ViewBuilder
     private func card(tail: Edge) -> some View {
         if state.petVisible {
-            PetCard(tailEdge: tail, showUsage: { toggleCard(.codex) })
+            PetCard(tailEdge: tail, showUsage: state.persisted.enabled.contains(.codex) ? { toggleCard(.codex) } : nil)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onCardFrame?($0) }
                 .transition(.opacity.combined(with: .move(edge: tail)))
         } else if state.cardVisible, state.persisted.enabled.contains(state.selected) {
@@ -589,7 +591,7 @@ struct OverlayView: View {
             ? AnyLayout(VStackLayout(spacing: expanded ? 18 : 10))
             : AnyLayout(HStackLayout(alignment: .top, spacing: expanded ? 18 : 10))
         return layout {
-            if state.persisted.enabled.contains(.codex) {
+            if state.showsPet {
                 VStack(spacing: 6) {
                     Button { togglePet(voice: NSApp.currentEvent?.modifierFlags.contains(.command) == true) } label: {
                         CodexPet(size: expanded ? 52 : 28, animateIdle: expanded)
@@ -841,7 +843,9 @@ struct SettingsView: View {
                     .help("Off shows plain Liquid Glass in both appearances, following the whole range of the Liquid Glass slider in System Settings → Appearance")
             }
             Section("Codex voice") {
-                LabeledContent("Shortcut") { HotKeyRecorder(combo: state.voiceHotKeyBinding) }
+                Toggle("Show the Codex pet", isOn: state.showPetBinding)
+                    .help("Chat and live voice with Codex, separate from the Codex usage ring. Off hides the pet, ends a call and frees the shortcut.")
+                LabeledContent("Shortcut") { HotKeyRecorder(combo: state.voiceHotKeyBinding) }.disabled(!state.showsPet)
                 Text("Tap to start hands-free voice; tap again to pause or resume the microphone. Hold to talk; letting go pauses the microphone while replies keep playing. The shortcut never ends a call: Escape ends it and closes the card.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Reset remembered approvals") { PetApprovals.shared.resetRemembered() }

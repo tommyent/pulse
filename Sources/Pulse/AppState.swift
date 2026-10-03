@@ -12,6 +12,12 @@ final class AppState: ObservableObject {
         var glassTint: Bool?   // nil = on: the white wash over light-mode glass
         var dock: DockEdge?
         var voiceHotKey: HotKeyCombo?   // nil = the default shortcut
+        var showPet: Bool?   // nil = shown; independent of the Codex usage switch
+    }
+
+    var showsPet: Bool { persisted.showPet ?? true }
+    var showPetBinding: Binding<Bool> {
+        Binding(get: { self.showsPet }, set: { self.persisted.showPet = $0 })
     }
 
     var voiceHotKey: HotKeyCombo { persisted.voiceHotKey ?? .voiceDefault }
