@@ -574,6 +574,12 @@ enum GrokAdapter {
 /// reads the Google token; Google's quota API refuses that token from any other client. The report is
 /// a local command: no model prompt, no tokens, no conversation.
 enum AntigravityAdapter {
+    /// A run Pulse had to kill: agy waits there for a browser sign-in it opened itself. AppState stops
+    /// polling agy on this or needsAuth until a manual refresh, so it can't open a tab every poll.
+    static let stalled = "Antigravity CLI stalled, likely waiting for sign-in. Run agy once, then click Refresh"
+
+    static func pausesPolling(_ snap: AccountSnapshot) -> Bool { snap.health == .needsAuth || snap.detail == stalled }
+
     static func fetch() async -> AccountSnapshot {
         var snap = AccountSnapshot(id: .antigravity, displayName: "Antigravity", planLabel: "Google account",
                                    health: .missingClient, windows: [], fetchedAt: .now, source: .cliStatus)
@@ -587,9 +593,17 @@ enum AntigravityAdapter {
             snap.detail = "Update the Antigravity CLI (agy 1.1.11 or later)"
             return snap
         }
+        // agy takes a network error during its token refresh for a sign-out and opens a browser sign-in,
+        // even in print mode, so it only runs when Google's token endpoint answers (any HTTP status).
+        var probe = URLRequest(url: URL(string: "https://oauth2.googleapis.com/")!, timeoutInterval: 5)
+        probe.httpMethod = "HEAD"
+        guard (try? await ProviderHTTP.session.data(for: probe)) != nil else {
+            snap.detail = "Offline, Antigravity check skipped"
+            return snap
+        }
         guard let report = await run(agy, ["-p", "/usage", "--output-format", "json", "--print-timeout", "45s"],
                                      timeout: .seconds(60)) else {
-            snap.detail = "Antigravity CLI timed out"
+            snap.detail = stalled
             return snap
         }
         if let json = try? JSONSerialization.jsonObject(with: report.out) as? [String: Any] {
@@ -599,7 +613,7 @@ enum AntigravityAdapter {
             snap.health = .ok
         } else if signedOut(report.err + report.out) {
             snap.health = .needsAuth
-            snap.detail = "Run agy once to sign in to Antigravity"
+            snap.detail = "Run agy once to sign in to Antigravity, then click Refresh"
         } else {
             snap.detail = "Antigravity CLI returned no usage"
         }

@@ -40,6 +40,7 @@ final class AppState: ObservableObject {
     @Published var refreshing = false
     @Published var dragging = false
     private var refreshRequested = false
+    private var agyPaused = false   // agy signed out or stalled: only a manual refresh runs it again
 
     private static let dir = FileManager.default
         .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -66,7 +67,7 @@ final class AppState: ObservableObject {
         // ponytail: one flat 2-min poll for everything (three small GETs); per-adapter budgets if a provider ever throttles
         Task {
             while true {
-                await refreshAll()
+                await refreshAll(manual: false)
                 try? await Task.sleep(for: .seconds(120))
             }
         }
@@ -83,14 +84,18 @@ final class AppState: ObservableObject {
         if hoveringOverlay { hoveringOverlay = false }
     }
 
-    func refreshAll() async {
+    func refreshAll(manual: Bool = true) async {
+        if manual { agyPaused = false }
         guard !refreshing else { refreshRequested = true; return }
         refreshing = true
         repeat {
             refreshRequested = false
             await withTaskGroup(of: AccountSnapshot.self) { group in
-                for id in enabledAccounts { group.addTask { await fetchSnapshot(id) } }
+                for id in enabledAccounts where !(id == .antigravity && agyPaused) {
+                    group.addTask { await fetchSnapshot(id) }
+                }
                 for await snap in group {
+                    if snap.id == .antigravity { agyPaused = AntigravityAdapter.pausesPolling(snap) }
                     // keep last good windows for stale display instead of blanking the card
                     if snap.windows.isEmpty, let old = snapshots[snap.id], !old.windows.isEmpty,
                        snap.health == .providerError {

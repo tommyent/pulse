@@ -87,6 +87,15 @@ enum SecurityChecks {
         assert(AntigravityAdapter.windows(from: prompted).isEmpty, "a model answer is not a usage report")
         assert(AntigravityAdapter.signedOut(Data("Select login method:".utf8)))
         assert(!AntigravityAdapter.signedOut(Data("dial tcp: i/o timeout".utf8)))
+        // agy opens a browser sign-in when it can't auth, so a stall or sign-out stops polling; offline does not.
+        func agSnap(_ health: Health, _ detail: String?) -> AccountSnapshot {
+            AccountSnapshot(id: .antigravity, displayName: "Antigravity", planLabel: "", health: health, windows: [],
+                            fetchedAt: .now, source: .cliStatus, detail: detail)
+        }
+        assert(AntigravityAdapter.pausesPolling(agSnap(.needsAuth, nil)))
+        assert(AntigravityAdapter.pausesPolling(agSnap(.providerError, AntigravityAdapter.stalled)))
+        assert(!AntigravityAdapter.pausesPolling(agSnap(.providerError, "Offline, Antigravity check skipped")))
+        assert(!AntigravityAdapter.pausesPolling(agSnap(.ok, nil)))
         print("Security checks passed: private atomic auth writes, redirect/cache policy, shortcut release and the agy usage guard")
     }
 }
