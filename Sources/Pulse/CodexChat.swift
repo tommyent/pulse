@@ -3,6 +3,7 @@ import AppKit
 import AVFoundation
 import Combine
 import os
+import UniformTypeIdentifiers
 
 /// What Pulse decided about speaking voice work: IDs and reasons only, never what was said or written.
 private let voiceLog = Logger(subsystem: "app.pulse", category: "voice-results")
@@ -500,6 +501,8 @@ final class CodexPetSession: ObservableObject {
     private var realtimeRequested = false   // this call sent thread/realtime/start
     private var closesExpected = 0
     private let workspace: URL?
+    static var defaultHome: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("codex-pet") }
+    var homeFolder: URL { workspace ?? Self.defaultHome }   // where the pet's conversations run
 
     init(workspace: URL? = nil, defaults: UserDefaults = .standard) {
         self.workspace = workspace
@@ -945,7 +948,7 @@ final class CodexPetSession: ObservableObject {
     /// Default workspace. Extra access requires an approval; existing custom instructions survive migration.
     static func petHome(at workspace: URL? = nil) throws -> URL {
         let fm = FileManager.default
-        let dir = workspace ?? fm.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("codex-pet")
+        let dir = workspace ?? defaultHome
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let agents = dir.appendingPathComponent("AGENTS.md")
         if !fm.fileExists(atPath: agents.path) { try petAgentsMD.write(to: agents, atomically: true, encoding: .utf8) }
@@ -1856,6 +1859,68 @@ final class CodexPetSession: ObservableObject {
 
     /// A request the voice handed to Codex (core wraps it in <realtime_delegation>).
     static func isDelegation(_ text: String) -> Bool { text.hasPrefix("<realtime_delegation>") }
+
+    /// Where a link in a reply leads. Web and mail links stay as they are. Codex writes file links as bare paths, often
+    /// relative to the conversation's folder and sometimes with a `:line` suffix: those become file URLs there.
+    /// Another app's link (`scheme://`) is never followed from a reply: nil.
+    static func linkTarget(_ url: URL, folder: URL) -> URL? {
+        let scheme = url.scheme?.lowercased()
+        if scheme == "http" || scheme == "https" || scheme == "mailto" { return url }
+        if scheme != "file" && url.absoluteString.contains("://") { return nil }
+        // Anchor and line number go while still encoded: an encoded # or : is part of the file's name.
+        var encoded = url.isFileURL ? (URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? url.path) : url.absoluteString
+        if let hash = encoded.firstIndex(of: "#") { encoded = String(encoded[..<hash]) }
+        if let line = encoded.range(of: #"(:\d+)+$"#, options: .regularExpression) { encoded.removeSubrange(line) }
+        let path = ((encoded.removingPercentEncoding ?? encoded) as NSString).expandingTildeInPath
+        return path.hasPrefix("/") ? URL(fileURLWithPath: path) : folder.appendingPathComponent(path)
+    }
+
+    /// How a file a reply links to is shown, judged by what it resolves to: documents (text, images, PDFs, audio and
+    /// video) and plain folders open in their apps. Anything else, a script (its app may run it), an app, package,
+    /// alias or executable included, is only shown in Finder. nil: nothing there.
+    static func linkOpens(_ file: URL) -> (url: URL, open: Bool)? {
+        let real = file.resolvingSymlinksInPath()
+        guard let v = try? real.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey, .isAliasFileKey, .isExecutableKey, .contentTypeKey])
+        else { return nil }
+        if v.isDirectory == true { return (real, v.isPackage != true) }
+        let document = [UTType.text, .image, .pdf, .audiovisualContent].contains { v.contentType?.conforms(to: $0) == true }
+        let runs = v.isAliasFile == true || v.isExecutable == true || v.contentType?.conforms(to: .script) == true
+            || ["command", "tool", "terminal"].contains(real.pathExtension.lowercased())
+        return (real, document && !runs)
+    }
+
+    /// A reply split into prose (for inline Markdown) and fenced code blocks, kept line for line without their fence
+    /// lines: inline Markdown would join a block into one code span. As CommonMark: a fence is a line of 3 or more
+    /// backticks or tildes, indented at most 3 spaces; it closes on a line of the same character, at least as long,
+    /// with nothing after it. An unclosed block, still streaming, runs to the end.
+    static func fenceParts(_ text: String) -> [(text: String, code: Bool)] {
+        var parts: [(text: String, code: Bool)] = [], current = "", fence: (mark: Character, count: Int)?, joined = false
+        func fenceLine(_ line: Substring) -> (mark: Character, count: Int, rest: Substring)? {
+            let indent = line.prefix { $0 == " " }.count
+            guard indent <= 3, let mark = line.dropFirst(indent).first, mark == "`" || mark == "~" else { return nil }
+            let count = line.dropFirst(indent).prefix { $0 == mark }.count
+            return count >= 3 ? (mark, count, line.dropFirst(indent + count)) : nil
+        }
+        let lines = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")   // CRLF and CR end lines too
+            .split(separator: "\n", omittingEmptySubsequences: false)
+        for (i, line) in lines.enumerated() {
+            let f = fenceLine(line)
+            if let open = fence {
+                if let f, f.mark == open.mark, f.count >= open.count, f.rest.allSatisfy(\.isWhitespace) {   // its closing fence
+                    parts.append((current, true)); current = ""; fence = nil; joined = false
+                    continue
+                }
+            } else if let f, f.mark == "~" || !f.rest.contains("`") {   // an opening fence; a backtick info string can't hold a backtick
+                if i > 0 { current += "\n" }
+                parts.append((current, false)); current = ""; fence = (f.mark, f.count); joined = true
+                continue
+            }
+            if i > 0 && !joined { current += "\n" }
+            current += line; joined = false
+        }
+        parts.append((current, fence != nil))
+        return parts.filter { !$0.text.isEmpty || $0.code }
+    }
 
     /// Core's handoff of a call's last words: a delegation whose source is the transcript tail flush.
     static func isTranscriptFlush(_ text: String) -> Bool {

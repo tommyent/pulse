@@ -12,6 +12,45 @@ enum CodexSessionChecks {
     static func main() async throws {
         signal(SIGPIPE, SIG_IGN)   // as PulseApp.init does; checkStartup writes to servers that just exited
         CodexPetSession.microphoneAccess = { true }   // never the real permission: a CLI asking for it would be killed
+        let fence = CodexPetSession.fenceParts("Here:\n```text\nProjects/\n├── dev/\n```\nDone")
+        assert(fence.map(\.text) == ["Here:\n", "Projects/\n├── dev/", "\nDone"] && fence.map(\.code) == [false, true, false],
+               "fenced code keeps its lines, without its language tag")
+        assert(CodexPetSession.fenceParts("Start\n```swift\nlet a = 1\nlet b").map(\.text) == ["Start\n", "let a = 1\nlet b"],
+               "a fence still streaming runs to the end")
+        assert(CodexPetSession.fenceParts("run ```ls -la``` now").map(\.code) == [false], "triple backticks inside a line are inline code, not a fence")
+        assert(CodexPetSession.fenceParts("```swift\nlet marker = \"```\"\n```").map(\.text) == ["let marker = \"```\""], "a literal delimiter stays code")
+        assert(CodexPetSession.fenceParts("````md\n```\nshown\n```\n````\nafter").map(\.text) == ["```\nshown\n```", "\nafter"],
+               "a longer fence holds a shorter one")
+        for end in ["\r\n", "\r"] {
+            assert(CodexPetSession.fenceParts("```text\(end)alpha\(end)beta\(end)```").map(\.text) == ["alpha\nbeta"]
+                   && CodexPetSession.fenceParts("```\(end)alpha\(end)beta").map(\.code) == [true], "CRLF and CR end fence lines too")
+        }
+        let pet = URL(fileURLWithPath: "/tmp/pet")
+        func link(_ s: String) -> String? { CodexPetSession.linkTarget(URL(string: s)!, folder: pet).map(\.absoluteString) }
+        assert(link("research/projects-directory-list.txt") == "file:///tmp/pet/research/projects-directory-list.txt", "a bare path is the pet folder's")
+        assert(link("/tmp/notes.md:12") == "file:///tmp/notes.md" && link("Sources/a.swift:12:3") == "file:///tmp/pet/Sources/a.swift"
+               && link("a.swift#L4") == "file:///tmp/pet/a.swift", "line suffixes and anchors are dropped")
+        assert(link("my%20notes.txt") == "file:///tmp/pet/my%20notes.txt" && link("notes%23draft.txt") == "file:///tmp/pet/notes%23draft.txt"
+               && link("notes%3A12") == "file:///tmp/pet/notes:12", "an encoded # or : is part of the name")
+        assert(link("~/Downloads/x.pdf") == URL(fileURLWithPath: NSHomeDirectory() + "/Downloads/x.pdf").absoluteString, "~ is the home folder")
+        assert(link("https://example.com/a") == "https://example.com/a" && link("mailto:a@example.com") == "mailto:a@example.com")
+        assert(link("shortcuts://run-shortcut?name=x") == nil && link("vscode://file/a") == nil, "another app's link is never followed")
+        // Opened or only shown in Finder, judged by what a link resolves to.
+        let files = FileManager.default.temporaryDirectory.appendingPathComponent("pulse-links-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: files.appendingPathComponent("Sample.app"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: files.appendingPathComponent("folder"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: files) }
+        for name in ["note.txt", "run.command", "script.sh", "site.webloc", "report.py"] { try "x".write(to: files.appendingPathComponent(name), atomically: true, encoding: .utf8) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: files.appendingPathComponent("script.sh").path)
+        try FileManager.default.createSymbolicLink(at: files.appendingPathComponent("friendly-results"), withDestinationURL: files.appendingPathComponent("Sample.app"))
+        try FileManager.default.createSymbolicLink(at: files.appendingPathComponent("listing"), withDestinationURL: files.appendingPathComponent("note.txt"))
+        try FileManager.default.createSymbolicLink(at: files.appendingPathComponent("results"), withDestinationURL: files.appendingPathComponent("report.py"))
+        func opens(_ name: String) -> Bool? { CodexPetSession.linkOpens(files.appendingPathComponent(name))?.open }
+        assert(opens("note.txt") == true && opens("folder") == true && opens("listing") == true, "documents, folders and links to them open")
+        for name in ["Sample.app", "friendly-results", "run.command", "script.sh", "site.webloc", "report.py", "results"] {   // report.py is mode 644
+            assert(opens(name) == false, "\(name) is only shown in Finder, never opened from a reply")
+        }
+        assert(opens("missing.txt") == nil, "nothing there, nothing opened")
         if CommandLine.arguments.contains("--approval-ui") || Bundle.main.bundleIdentifier == "app.pulse.approval-check" {
             _ = NSApplication.shared
             NSApp.setActivationPolicy(.accessory)

@@ -232,8 +232,12 @@ struct WindowRow: View {
 private struct BubbleShape: Shape {
     static let tailWidth: CGFloat = 13
     var edge: Edge = .trailing
+    var at: CGFloat? = nil   // where the tail sits along its edge; nil = the middle
     func path(in rect: CGRect) -> Path {
         let t = Self.tailWidth
+        // Kept clear of the 18pt corners by half the tail's 24pt base.
+        let along = edge == .top || edge == .bottom ? rect.width : rect.height
+        let c = min(max(at ?? along / 2, 30), along - 30)
         let body: CGRect
         switch edge {
         case .trailing: body = CGRect(x: 0, y: 0, width: rect.width - t, height: rect.height)
@@ -244,21 +248,21 @@ private struct BubbleShape: Shape {
         var p = Path()
         switch edge {
         case .trailing:
-            p.move(to: CGPoint(x: body.maxX, y: rect.midY - 12))
-            p.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-            p.addLine(to: CGPoint(x: body.maxX, y: rect.midY + 12))
+            p.move(to: CGPoint(x: body.maxX, y: rect.minY + c - 12))
+            p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + c))
+            p.addLine(to: CGPoint(x: body.maxX, y: rect.minY + c + 12))
         case .leading:
-            p.move(to: CGPoint(x: body.minX, y: rect.midY - 12))
-            p.addLine(to: CGPoint(x: 0, y: rect.midY))
-            p.addLine(to: CGPoint(x: body.minX, y: rect.midY + 12))
+            p.move(to: CGPoint(x: body.minX, y: rect.minY + c - 12))
+            p.addLine(to: CGPoint(x: 0, y: rect.minY + c))
+            p.addLine(to: CGPoint(x: body.minX, y: rect.minY + c + 12))
         case .top:
-            p.move(to: CGPoint(x: rect.midX - 12, y: body.minY))
-            p.addLine(to: CGPoint(x: rect.midX, y: 0))
-            p.addLine(to: CGPoint(x: rect.midX + 12, y: body.minY))
+            p.move(to: CGPoint(x: rect.minX + c - 12, y: body.minY))
+            p.addLine(to: CGPoint(x: rect.minX + c, y: 0))
+            p.addLine(to: CGPoint(x: rect.minX + c + 12, y: body.minY))
         case .bottom:
-            p.move(to: CGPoint(x: rect.midX - 12, y: body.maxY))
-            p.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
-            p.addLine(to: CGPoint(x: rect.midX + 12, y: body.maxY))
+            p.move(to: CGPoint(x: rect.minX + c - 12, y: body.maxY))
+            p.addLine(to: CGPoint(x: rect.minX + c, y: rect.maxY))
+            p.addLine(to: CGPoint(x: rect.minX + c + 12, y: body.maxY))
         }
         p.closeSubpath()
         return Path(roundedRect: body, cornerRadius: 18).union(p)
@@ -269,6 +273,7 @@ struct UsageCard: View {
     @Environment(\.colorScheme) private var scheme
     let snapshot: AccountSnapshot
     var tailEdge: Edge = .trailing
+    var tailAt: CGFloat? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -294,7 +299,7 @@ struct UsageCard: View {
         .padding(16)
         .padding(Edge.Set(tailEdge), BubbleShape.tailWidth)
         .frame(width: tailEdge == .trailing || tailEdge == .leading ? 320 + BubbleShape.tailWidth : 320)
-        .glassCard(in: BubbleShape(edge: tailEdge))
+        .glassCard(in: BubbleShape(edge: tailEdge, at: tailAt))
     }
 }
 
@@ -306,11 +311,22 @@ struct PetCard: View {
     @FocusState private var composing: Bool
     @State private var following = true   // the transcript is at its bottom, so new text scrolls it
 
-    /// Codex's replies with their inline Markdown (bold, italics, code, links); lists and code blocks stay as written.
+    /// Codex's replies with their inline Markdown (bold, italics, code, links); lists stay as written, and fenced
+    /// code keeps its lines in a monospaced font.
     private static func inlineMarkdown(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+        CodexPetSession.fenceParts(text).reduce(into: AttributedString()) { out, part in
+            if part.code {
+                var block = AttributedString(part.text)
+                block.font = .system(.callout, design: .monospaced)
+                out += block
+            } else {
+                out += (try? AttributedString(markdown: part.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+                    ?? AttributedString(part.text)
+            }
+        }
     }
     var tailEdge: Edge = .trailing
+    var tailAt: CGFloat? = nil
     var showUsage: (() -> Void)?   // nil while Codex usage is switched off
 
     var body: some View {
@@ -410,7 +426,7 @@ struct PetCard: View {
         .padding(16)
         .padding(Edge.Set(tailEdge), BubbleShape.tailWidth)
         .frame(width: tailEdge == .trailing || tailEdge == .leading ? 340 + BubbleShape.tailWidth : 340)
-        .glassCard(in: BubbleShape(edge: tailEdge))
+        .glassCard(in: BubbleShape(edge: tailEdge, at: tailAt))
         .task { session.reopen(); session.loadWorkModels(); try? await Task.sleep(for: .milliseconds(200)); composing = true }   // after the panel is key
         .onExitCommand {
             // Escape: end the call and hand the keyboard back to whatever was in front
@@ -469,6 +485,7 @@ struct PetCard: View {
                 }
                 .foregroundStyle(Ink.primary(scheme))
             }
+            .environment(\.openURL, OpenURLAction { openLink($0) })
             .frame(maxHeight: 260)
             .fixedSize(horizontal: false, vertical: true)   // grows with the transcript, scrolls past 260pt
             .modifier(FollowsBottom(following: $following))
@@ -564,6 +581,15 @@ struct PetCard: View {
         .accessibilityLabel("Work model: \(detail)\(planned)")
     }
 
+    /// A link in a reply: web and mail links open; a file opens or is shown in Finder as `linkOpens` decides.
+    private func openLink(_ url: URL) -> OpenURLAction.Result {
+        guard let target = CodexPetSession.linkTarget(url, folder: session.homeFolder) else { return .discarded }
+        guard target.isFileURL else { return .systemAction(target) }
+        guard let file = CodexPetSession.linkOpens(target) else { return .discarded }
+        if file.open { NSWorkspace.shared.open(file.url) } else { NSWorkspace.shared.activateFileViewerSelecting([file.url]) }
+        return .handled
+    }
+
     private func submit() {
         guard !session.draft.trimmingCharacters(in: .whitespaces).isEmpty, session.canSend else { return }
         session.send(session.draft)
@@ -597,6 +623,14 @@ struct OverlayView: View {
     var onCardFrame: ((CGRect) -> Void)? = nil
 
     private var expanded: Bool { state.hoveringOverlay || state.cardVisible || state.petVisible }
+    @State private var itemFrames: [String: CGRect] = [:]   // the pet and each ring, so a card's tail points at its own
+    @State private var cardFrame = CGRect.zero
+
+    /// The tail's position along the card's edge: at the rail item that opened the card.
+    private func tailAt(_ item: String) -> CGFloat? {
+        guard let target = itemFrames[item], cardFrame != .zero else { return nil }
+        return state.dock.isVertical ? target.midY - cardFrame.minY : target.midX - cardFrame.minX
+    }
 
     var body: some View {
         let layout = state.dock.isVertical
@@ -629,13 +663,13 @@ struct OverlayView: View {
     @ViewBuilder
     private func card(tail: Edge) -> some View {
         if state.petVisible {
-            PetCard(tailEdge: tail, showUsage: state.persisted.enabled.contains(.codex) ? { toggleCard(.codex) } : nil)
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onCardFrame?($0) }
+            PetCard(tailEdge: tail, tailAt: tailAt("pet"), showUsage: state.persisted.enabled.contains(.codex) ? { toggleCard(.codex) } : nil)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
                 .transition(.opacity.combined(with: .move(edge: tail)))
         } else if state.cardVisible, state.persisted.enabled.contains(state.selected) {
             UsageCard(snapshot: state.snapshots[state.selected] ?? placeholder(state.selected),
-                      tailEdge: tail)
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onCardFrame?($0) }
+                      tailEdge: tail, tailAt: tailAt(state.selected.rawValue))
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
                 .transition(.opacity.combined(with: .move(edge: tail)))
         }
     }
@@ -652,6 +686,7 @@ struct OverlayView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { itemFrames["pet"] = $0 }
                     .accessibilityLabel("Codex pet — chat and voice")
                     .accessibilityValue(session.voiceState == .off ? "Voice off" : session.voiceState == .connecting ? "Connecting"
                                         : session.microphonePaused ? "Voice on, microphone paused" : "Recording")
@@ -687,6 +722,7 @@ struct OverlayView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { itemFrames[id.rawValue] = $0 }
                 .accessibilityLabel("\(id.displayName) usage")
             }
         }
