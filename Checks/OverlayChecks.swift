@@ -52,6 +52,17 @@ enum OverlayChecks {
         assert(!resetLabel(soon, now: now).contains(soon.formatted(.dateTime.month())), "under six days: weekday only")
         assert(resetLabel(nextWeek, now: now).contains(nextWeek.formatted(.dateTime.day())), "a week out names the date")
         assert(resetLabel(nextWeek, now: now).contains(nextWeek.formatted(.dateTime.hour().minute())), "time follows the locale")
-        print("Overlay checks passed: docking, expansion, displays, persistence, pop-out dismissal and reset labels")
+        // The pet's transcript: content growing, twice in a row, keeps a reader at the bottom following; their own scroll decides.
+        var following = true
+        following = transcriptFollows(following, oldOffset: 740, offset: 740, visible: 260, content: 1100)
+        following = transcriptFollows(following, oldOffset: 740, offset: 740, visible: 260, content: 1200)
+        assert(following, "successive content growth keeps following")
+        following = transcriptFollows(following, oldOffset: 940, offset: 600, visible: 260, content: 1200)
+        assert(!following, "scrolling up stops following")
+        following = transcriptFollows(following, oldOffset: 600, offset: 600, visible: 260, content: 1300)
+        assert(!following, "new text never pulls back a reader who scrolled up")
+        following = transcriptFollows(following, oldOffset: 600, offset: 1040, visible: 260, content: 1300)
+        assert(following, "back at the bottom, it follows again")
+        print("Overlay checks passed: docking, expansion, displays, persistence, pop-out dismissal, reset labels and transcript following")
     }
 }

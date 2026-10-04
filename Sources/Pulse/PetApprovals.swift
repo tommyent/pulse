@@ -130,7 +130,7 @@ struct PetApproval {
         else if let data = try? JSONSerialization.data(withJSONObject: rule, options: [.sortedKeys]) {
             rememberKey = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         } else { rememberKey = nil }
-        if rememberKey != nil { details.append("Remembered approvals persist across restarts. Reset them in Settings → Codex voice.") }
+        if rememberKey != nil { details.append("Remembered approvals persist across restarts. Reset them in Settings → Codex pet.") }
         detail = details.joined(separator: "\n\n")
     }
 

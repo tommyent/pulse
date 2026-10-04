@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import AVFoundation
 import Combine
 import os
 
@@ -321,6 +322,30 @@ final class CodexPetSession: ObservableObject {
     var playCue: (String) -> Void = { NSSound(named: $0)?.play() }   // checks record instead of playing
     @Published var muted = false { didSet { VoiceBridge.shared.setMuted(muted) } }
     @Published private(set) var status: String?   // connection / error line under the composer
+    /// The one status line that is news, not a problem: shown without the error color.
+    static let reconnectNote = "Codex app-server stopped. Your next message reconnects to this conversation."
+    var microphoneBlocked: Bool { status == MicrophoneBlocked.message }   // the card offers the Privacy settings
+    /// Hidden, the pet starts nothing: the call ends, and work already running finishes (the report of its helpers
+    /// included, or their results would be lost); then Codex's app-server stops. The next open reconnects.
+    var hidden = false {
+        didSet {
+            guard hidden != oldValue else { return }
+            hiddenWatch?.cancel(); hiddenWatch = nil
+            guard hidden else { return }
+            stopVoice()
+            // ponytail: a 2 s check for as long as it's hidden, since work ends on many paths (events, replies,
+            // timeouts) and a server may still be starting; one completion hook per path if the poll ever matters
+            hiddenWatch = Task { [weak self] in
+                while let self, self.hidden {
+                    self.stopServerIfDrained()
+                    guard (try? await Task.sleep(for: .seconds(2))) != nil else { return }
+                }
+            }
+        }
+    }
+    private var hiddenWatch: Task<Void, Never>?
+    private var quietStop = false   // Pulse stopped the server itself: not news for the status line
+    private var queuedRequests = 0   // typed messages and reports not yet answered by Codex
     @Published private(set) var waitingOnYou = false   // Codex is paused on an approval or a question
     @Published var draft = ""   // unsent text survives closing the card
     // What Codex reports for the open conversation: the model it actually runs, its folder, when it began.
@@ -427,6 +452,15 @@ final class CodexPetSession: ObservableObject {
     private var unclaimed: [String: [(String, [String: Any])]] = [:]     // a few events that beat their helper's registration
     private struct Report { let seq: Int; let jobs: [String]; let owner: Int?; let epoch: Int; let speak: Bool; var sent = false; var turn: String?; var superseded = false; var stopped = false; var asks: [Int] = [] }   // asks: a catch-up's requests
     private var report: Report?
+    /// Typing joins the pet's own running turn (Codex steers it in). A turn the voice or a report started stays
+    /// theirs, so Send waits for it to end; the box stays editable meanwhile.
+    var canSend: Bool {
+        // A report whose turn/start Codex hasn't answered may already have started, or even ended, under an ID not yet
+        // known as a report's. Bounded: an unanswered start times out and drops the report.
+        if report?.sent == true && report?.turn == nil { return false }
+        guard thinking, let turnId else { return true }
+        return !voiceTurns.contains(turnId) && !reportTurns.contains(turnId)
+    }
     private var reportSeq = 0
     private var reportTurns: Set<String> = []
     private var earlyReportEnd: [String: Any]?   // a report turn's end that beat its turn/start reply
@@ -676,7 +710,8 @@ final class CodexPetSession: ObservableObject {
     func send(_ text: String) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        messages.append(ChatMessage(role: .user, text: text))
+        let bubble = ChatMessage(role: .user, text: text)
+        messages.append(bubble)
         thinking = true
         status = nil
         inputsSeen += 1; inputNumber = inputsSeen   // typing supersedes any voice answer not yet spoken
@@ -685,19 +720,22 @@ final class CodexPetSession: ObservableObject {
         forgetAsks()   // typing moves on: earlier spoken requests aren't caught up
         sends += 1
         let previous = lastSend, stop = stops, conversation = epoch, mine = sends
+        queuedRequests += 1
         lastSend = Task {
+            defer { queuedRequests -= 1 }
             await previous?.value   // a stopped send finishes interrupting before the next turn starts
             let current = { stop == self.stops && conversation == self.epoch }
             // Stopped before reaching Codex: send nothing, create no thread, leave newer work alone.
             let standDown = { if conversation == self.epoch && mine == self.sends && self.turnId == nil { self.thinking = false } }
             guard current() else { return standDown() }
+            var written = false   // once turn/start may have reached Codex, only its refusal proves it didn't
             do {
                 let tid = try await ensureThread()
                 guard current() else { return standDown() }
                 typedPending += 1
                 if let joined = turnId { typedInto.insert(joined) }   // Codex steers it into the running turn
                 let r: [String: Any]
-                do { r = try await server.request("turn/start", ["threadId": tid, "input": [["type": "text", "text": text, "text_elements": []]]]) }
+                do { written = true; r = try await server.request("turn/start", ["threadId": tid, "input": [["type": "text", "text": text, "text_elements": []]]]) }
                 catch { typedPending -= 1; throw error }
                 typedPending -= 1
                 if let accepted = (r["turn"] as? [String: Any])?["id"] as? String { typedInto.insert(accepted) }   // maybe a voice turn it joined
@@ -714,7 +752,18 @@ final class CodexPetSession: ObservableObject {
                 guard current() else { return }
                 if mine == sends { thinking = false }
                 status = error.localizedDescription
+                // Never delivered: the text goes back in an empty box rather than sitting there looking sent.
+                // A timeout or a lost connection may have delivered it, so that bubble stays.
+                if !written || Self.refused(error), draft.isEmpty { messages.removeAll { $0.id == bubble.id }; draft = text }
             }
+        }
+    }
+
+    /// Codex certainly never took the request: it refused it, or there was no server to write it to.
+    static func refused(_ error: Error) -> Bool {
+        switch error as? CodexAppServer.Failure {
+        case .remote, .notRunning, .notInstalled: return true
+        default: return false
         }
     }
 
@@ -791,6 +840,9 @@ final class CodexPetSession: ObservableObject {
         voiceStartTask = Task {
             var away: [String] = []
             do {
+                // Without the permission the helper hears only silence, with no error: say so before a call starts.
+                guard await Self.microphoneAccess() else { throw MicrophoneBlocked() }
+                try Task.checkCancellation()
                 let tid = try await ensureThread()
                 VoiceBridge.shared.mark("thread ready")
                 try Task.checkCancellation()
@@ -813,8 +865,9 @@ final class CodexPetSession: ObservableObject {
                     // read out by the next call, and each flush cost a backend turn.
                     "flushTranscriptTailOnSessionEnd": false,
                     // Added to Codex's own voice instructions, which otherwise name the owner from the Mac account.
+                    // The away note quotes work results, which may carry text from the web: user authority, never developer.
                     "initialItems": [["role": "developer", "text": Self.voiceNote]]
-                        + (away.isEmpty ? [] : [["role": "developer", "text": Self.awayNote(away)]]),
+                        + (away.isEmpty ? [] : [["role": "user", "text": Self.awayNote(away)]]),
                 ])
                 VoiceBridge.shared.mark("realtime/start acknowledged")   // the answer arrives as thread/realtime/sdp
             } catch {
@@ -827,6 +880,20 @@ final class CodexPetSession: ObservableObject {
                 status = error.localizedDescription
             }
         }
+    }
+
+    /// Microphone permission, asked for on the first call. Checks replace it and never touch the real one.
+    static var microphoneAccess: () async -> Bool = {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return true
+        case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
+        default: return false
+        }
+    }
+
+    struct MicrophoneBlocked: LocalizedError {
+        static let message = "Pulse can't use the microphone. Turn on Pulse in System Settings → Privacy & Security → Microphone, then start the call again."
+        var errorDescription: String? { Self.message }
     }
 
     static let voiceNote = "Never address the owner by an account name or username. When you pass on work a helper did, say a helper did it. Open a call with a brief greeting only: don't repeat earlier backend messages unless the owner asks about them or you're told what finished while the owner was away."
@@ -941,6 +1008,11 @@ final class CodexPetSession: ObservableObject {
         }
     }
 
+    /// How every Pulse conversation opens; the live check opens its own with these too.
+    static func threadParams(cwd: String) -> [String: Any] {
+        ["cwd": cwd, "approvalPolicy": "on-request", "approvalsReviewer": "user", "sandbox": "workspace-write"]
+    }
+
     /// Continues the pet's conversation (after a lost server, after a restart, or once, the newest
     /// pet conversation from before Pulse saved them) or starts one when there is none. A
     /// conversation that cannot be reopened stays saved and fails visibly: it never silently
@@ -950,7 +1022,7 @@ final class CodexPetSession: ObservableObject {
         // The helper rule and the pet's own effort apply to Pulse's conversations only, in memory; Codex's own limit
         // on helpers applies. The rule replaces Codex's multi-agent mode message (developer instructions are overruled
         // by it, and not resent on resume); models without that mode never see it.
-        var params: [String: Any] = ["cwd": home.path, "approvalPolicy": "on-request", "approvalsReviewer": "user", "sandbox": "workspace-write"]
+        var params = Self.threadParams(cwd: home.path)
         let reconnecting = resumeId != nil   // its messages are still on screen
         var id = resumeId ?? defaults.string(forKey: Self.savedThreadKey) ?? legacyCandidate
         var legacy = id != nil && id == legacyCandidate
@@ -1054,6 +1126,17 @@ final class CodexPetSession: ObservableObject {
         guard text.hasPrefix("<realtime_delegation>"), let open = text.range(of: "<input>"),
               let close = text.range(of: "</input>", range: open.upperBound..<text.endIndex) else { return text }
         return String(text[open.upperBound..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Stops a ready server once nothing is left to finish: no turn, queued message or report, no conversation
+    /// opening or model list loading, no helper running or with a result still to report (one held after Stop waits
+    /// for the owner's return), and no call. A server still starting is left for the next check.
+    private func stopServerIfDrained() {
+        guard server.ready, !thinking, turnId == nil, queuedRequests == 0, report == nil, voiceState == .off, helpersWorking == 0,
+              threadTask == nil, lookup == nil, !loadingWorkModels,
+              !helpers.values.contains(where: { $0.epoch == epoch && $0.parent == nil && $0.state != .reported }) else { return }
+        quietStop = true
+        server.stop()
     }
 
     private func handle(_ method: String, _ p: [String: Any]) {
@@ -1213,8 +1296,11 @@ final class CodexPetSession: ObservableObject {
             forgetAsks()
             if lost > 0 { messages.append(ChatMessage(role: .note, text: "Pulse lost track of \(lost == 1 ? "a helper" : "\(lost) helpers") when Codex's app-server stopped; that work may be unfinished.")) }
             countHelpers()
-            status = "Codex app-server stopped. Your next message reconnects to this conversation."
-            recoveryMessage = status
+            if !quietStop {   // a hidden pet's finished work is not a lost server, and its own last status stays
+                status = Self.reconnectNote
+                recoveryMessage = status
+            }
+            quietStop = false
         default: break
         }
     }
@@ -1634,7 +1720,9 @@ final class CodexPetSession: ObservableObject {
         let previous = lastSend, stop = stops, conversation = epoch, seq = reportSeq, barrier = barriers
         let catchUp = report?.asks.isEmpty == false
         let current = { stop == self.stops && conversation == self.epoch && (!catchUp || barrier == self.barriers) }
+        queuedRequests += 1
         lastSend = Task {
+            defer { queuedRequests -= 1 }
             await previous?.value   // the same queue as typed messages
             // Re-checked after waiting: anything newer wins, and the report waits for the next idle moment.
             guard current(), report?.seq == seq, report?.superseded == false,

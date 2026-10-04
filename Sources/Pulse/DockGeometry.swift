@@ -7,6 +7,12 @@ func overlayClickIsOutside(_ point: CGPoint, in bounds: CGRect, rail: CGRect, ca
     bounds.contains(point) && !rail.contains(point) && card?.contains(point) != true
 }
 
+/// The pet's transcript follows new text while its reader is at the bottom. Only the reader's own scroll (the
+/// offset moving) changes that: content growing, even several times in a row, or the card resizing keeps it.
+func transcriptFollows(_ following: Bool, oldOffset: CGFloat, offset: CGFloat, visible: CGFloat, content: CGFloat) -> Bool {
+    offset == oldOffset ? following : offset + visible >= content - 24
+}
+
 enum DockEdge: String, Codable, CaseIterable {
     case right, left, top, bottom
 

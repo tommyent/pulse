@@ -32,8 +32,7 @@ struct PulseApp: App {
             app.forceTerminate()
         }
         let state = AppState()
-        _state = StateObject(wrappedValue: state)
-        _ = try? CodexPetSession.petHome()   // prepare on launch; chat retries and reports any failure
+        _state = StateObject(wrappedValue: state)   // the pet's folder waits for its first use: no Documents prompt at launch
         overlay = OverlayController(state: state)
         NSApplication.shared.setActivationPolicy(.accessory)   // no Dock icon
     }
@@ -81,8 +80,9 @@ final class OverlayController {
     private func bindVoiceKey(_ combo: HotKeyCombo?) {
         cancelVoiceKey()
         voiceKey = nil   // unregister before registering its replacement
-        guard let combo else {   // the pet is hidden: its call ends and the shortcut is free for other apps
-            CodexPetSession.shared.stopVoice()
+        // Hidden, the pet's call ends, the shortcut is free for other apps and running work finishes without new work.
+        CodexPetSession.shared.hidden = combo == nil
+        guard let combo else {
             state.petVisible = false
             return
         }
@@ -94,7 +94,7 @@ final class OverlayController {
                     guard let self, self.voiceKey == nil, self.state.voiceHotKey == combo, self.state.showsPet else { return }
                     let alert = NSAlert()
                     alert.messageText = "Voice shortcut unavailable"
-                    alert.informativeText = "Pulse couldn't register \(combo.label). Choose another shortcut in Settings → Codex voice. You can still use the waveform button to start or end a call."
+                    alert.informativeText = "Pulse couldn't register \(combo.label). Choose another shortcut in Settings → Codex pet. You can still use the waveform button to start or end a call."
                     alert.addButton(withTitle: "OK")
                     NSApp.activate(ignoringOtherApps: true)
                     alert.runModal()
@@ -271,7 +271,7 @@ final class OverlayController {
             .store(in: &cancellables)
 
         state.$persisted
-            .map { $0.showPet == false ? nil : $0.voiceHotKey ?? .voiceDefault }
+            .map { $0.showPet == false || !$0.showOverlay ? nil : $0.voiceHotKey ?? .voiceDefault }   // the rings column hides the pet too
             .removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [weak self] combo in self?.bindVoiceKey(combo) }

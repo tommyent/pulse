@@ -70,7 +70,14 @@ Task {
     do {
         try await server.start()
         check("app-server starts and initializes", true)
-        let t = try await server.request("thread/start", ["cwd": NSHomeDirectory(), "approvalPolicy": "never", "sandbox": "read-only", "ephemeral": true])
+        // Opened as the app opens its conversations, so a setting Codex stops accepting fails here too; ephemeral, so nothing is saved.
+        var open = await MainActor.run {
+            var p = CodexPetSession.threadParams(cwd: NSTemporaryDirectory())
+            p["config"] = CodexPetSession.helperConfig(work: nil).merging(CodexPetSession.trims) { rule, _ in rule }
+            return p
+        }
+        open["ephemeral"] = true
+        let t = try await server.request("thread/start", open)
         let tid = (t["thread"] as? [String: Any])?["id"] as? String
         check("thread/start returns a thread id", tid != nil)
         guard let tid else { done.signal(); return }

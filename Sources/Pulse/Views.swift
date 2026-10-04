@@ -304,6 +304,12 @@ struct PetCard: View {
     @Environment(\.colorScheme) private var scheme
     @ObservedObject private var session = CodexPetSession.shared
     @FocusState private var composing: Bool
+    @State private var following = true   // the transcript is at its bottom, so new text scrolls it
+
+    /// Codex's replies with their inline Markdown (bold, italics, code, links); lists and code blocks stay as written.
+    private static func inlineMarkdown(_ text: String) -> AttributedString {
+        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+    }
     var tailEdge: Edge = .trailing
     var showUsage: (() -> Void)?   // nil while Codex usage is switched off
 
@@ -367,7 +373,15 @@ struct PetCard: View {
             }
 
             if let status = session.status {
-                Text(status).font(.caption).foregroundStyle(.red.opacity(0.85)).lineLimit(2)
+                Text(status).font(.caption)
+                    .foregroundStyle(status == CodexPetSession.reconnectNote ? Ink.secondary(scheme) : .red.opacity(0.85))
+                    .lineLimit(3).help(status)
+                if session.microphoneBlocked {
+                    Button("Open Microphone Settings") {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
+                    }
+                    .buttonStyle(.link).font(.caption)
+                }
             }
 
             HStack(spacing: 8) {
@@ -378,16 +392,16 @@ struct PetCard: View {
                     .onSubmit { submit() }
                     .padding(.horizontal, 10).padding(.vertical, 6)
                     .background(RoundedRectangle(cornerRadius: 10).fill(scheme == .dark ? Color(white: 0.14) : Color(white: 0.92)))
-                // Stop stays while helpers work, even with the pet free; Send stays then too, so talking goes on.
-                if session.thinking || session.helpersWorking > 0 {
-                    Button { session.interrupt() } label: { Image(systemName: "stop.circle.fill") }
-                        .buttonStyle(.plain).help("Stop work and helpers").accessibilityLabel("Stop work and helpers")
-                }
-                if !session.thinking {
-                    Button { submit() } label: { Image(systemName: "arrow.up.circle.fill") }
-                        .buttonStyle(.plain).help("Send").accessibilityLabel("Send")
-                        .disabled(session.draft.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
+                // Fixed slots: Send never moves and Stop never appears where a click meant for Send lands.
+                Button { submit() } label: { Image(systemName: "arrow.up.circle.fill") }
+                    .buttonStyle(.plain).help("Send").accessibilityLabel("Send")
+                    .disabled(session.draft.trimmingCharacters(in: .whitespaces).isEmpty || !session.canSend)
+                // Stop stays while helpers work, even with the pet free.
+                Button { session.interrupt() } label: { Image(systemName: "stop.circle.fill") }
+                    .buttonStyle(.plain).help("Stop work and helpers").accessibilityLabel("Stop work and helpers")
+                    .opacity(session.thinking || session.helpersWorking > 0 ? 1 : 0)
+                    .disabled(!session.thinking && session.helpersWorking == 0)
+                    .accessibilityHidden(!session.thinking && session.helpersWorking == 0)
                 voiceButton
             }
             .font(.title3)
@@ -429,7 +443,7 @@ struct PetCard: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 // Results of work a call started: never one of the spoken replies.
                                 if let caption = m.caption { Text(caption).font(.caption2).foregroundStyle(Ink.secondary(scheme)) }
-                                Text(m.text)
+                                Text(m.role == .user ? AttributedString(m.text) : Self.inlineMarkdown(m.text))
                                     .font(.callout)
                                     .textSelection(.enabled)
                                     .padding(.horizontal, 10).padding(.vertical, 6)
@@ -457,8 +471,11 @@ struct PetCard: View {
             }
             .frame(maxHeight: 260)
             .fixedSize(horizontal: false, vertical: true)   // grows with the transcript, scrolls past 260pt
+            .modifier(FollowsBottom(following: $following))
             .onChange(of: session.messages.last?.text) { _, _ in
-                if let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                // Scrolled up to read, the reader stays put; what they send always shows.
+                guard let last = session.messages.last, following || last.role == .user else { return }
+                proxy.scrollTo(last.id, anchor: .bottom)
             }
             .onAppear {   // reopening the card shows where the conversation is, not its oldest message
                 DispatchQueue.main.async { if let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) } }
@@ -548,9 +565,25 @@ struct PetCard: View {
     }
 
     private func submit() {
-        guard !session.draft.trimmingCharacters(in: .whitespaces).isEmpty, !session.thinking else { return }
+        guard !session.draft.trimmingCharacters(in: .whitespaces).isEmpty, session.canSend else { return }
         session.send(session.draft)
         session.draft = ""
+    }
+}
+
+/// Keeps `following` up to date from the scroll view's geometry (the rule is `transcriptFollows`).
+private struct FollowsBottom: ViewModifier {
+    @Binding var following: Bool
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content.onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { old, new in
+                following = transcriptFollows(following, oldOffset: old.contentOffset.y, offset: new.contentOffset.y,
+                                              visible: new.containerSize.height, content: new.contentSize.height)
+            }
+        } else {
+            content   // ponytail: macOS 14 has no scroll geometry, so it always follows as before
+        }
     }
 }
 
@@ -853,7 +886,7 @@ struct SettingsView: View {
                 }
             }
             Section("Overlay") {
-                Toggle("Show floating card", isOn: $state.persisted.showOverlay)
+                Toggle("Show usage rings on desktop", isOn: $state.persisted.showOverlay)
                 Toggle("Always on top", isOn: $state.persisted.alwaysOnTop)
                 Text("Drag the usage rings to any screen edge. Top and bottom arrange horizontally.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -863,9 +896,9 @@ struct SettingsView: View {
                 Toggle("Tint the glass", isOn: state.glassTintBinding)
                     .help("Off shows plain Liquid Glass in both appearances, following the whole range of the Liquid Glass slider in System Settings → Appearance")
             }
-            Section("Codex voice") {
+            Section("Codex pet") {
                 Toggle("Show the Codex pet", isOn: state.showPetBinding)
-                    .help("Chat and live voice with Codex, separate from the Codex usage ring. Off hides the pet, ends a call and frees the shortcut.")
+                    .help("Chat and live voice with Codex, separate from the Codex usage ring. Off hides the pet, ends a call, frees the shortcut and starts nothing new; work already running finishes, then Codex stops.")
                 LabeledContent("Shortcut") { HotKeyRecorder(combo: state.voiceHotKeyBinding) }.disabled(!state.showsPet)
                 Text("Tap to start hands-free voice; tap again to pause or resume the microphone. Hold to talk; letting go pauses the microphone while replies keep playing. Double-tap to end the call; Escape also ends it and closes the card.")
                     .font(.caption).foregroundStyle(.secondary)

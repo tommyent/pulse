@@ -11,6 +11,7 @@ enum CodexSessionChecks {
     @MainActor
     static func main() async throws {
         signal(SIGPIPE, SIG_IGN)   // as PulseApp.init does; checkStartup writes to servers that just exited
+        CodexPetSession.microphoneAccess = { true }   // never the real permission: a CLI asking for it would be killed
         if CommandLine.arguments.contains("--approval-ui") || Bundle.main.bundleIdentifier == "app.pulse.approval-check" {
             _ = NSApplication.shared
             NSApp.setActivationPolicy(.accessory)
@@ -274,6 +275,7 @@ enum CodexSessionChecks {
           if (m.method === 'fixture/early-turn-end') { earlyEnd = true; send({ id: m.id, result: {} }); }
           if (m.method === 'turn/start') {
             const text = m.params.input[0].text;
+            if (text === 'fixture refuses this') { send({ id: m.id, error: { message: 'fixture refusal' } }); return; }
             if (text === 'review held predecessor') {
               log('predecessor-held');
               send({method:'turn/started',params:{threadId:m.params.threadId,turn:{id:'review-predecessor'}}});
@@ -359,6 +361,7 @@ enum CodexSessionChecks {
             const voiceNote = m.params.initialItems[0];
             log('away:' + JSON.stringify(m.params.initialItems[1]?.text ?? ''));
             assert.equal(voiceNote.role, 'developer');
+            if (m.params.initialItems[1]) assert.equal(m.params.initialItems[1].role, 'user', 'quoted results never get developer authority');
             assert(voiceNote.text.includes('Never address the owner by an account name or username') && voiceNote.text.includes('say a helper did it'), 'voice itself receives name and attribution rules');
             assert(voiceNote.text.includes("Open a call with a brief greeting only: don't repeat earlier backend messages"), 'a new call does not replay old backend lines');
             assert(!('prompt' in m.params), 'the narrow additive note preserves the native voice prompt');
@@ -513,7 +516,19 @@ enum CodexSessionChecks {
         }
         session.send("first")
         try await wait("a text turn starts (status \(session.status ?? "none"), thinking \(session.thinking), log \(lines(log)))") { session.thinking && lines(log).contains("turn/start:first") }
+        assert(session.canSend, "typing joins the pet's own running turn")
         notify("turn/completed", ["turn": ["id": "fixture-turn", "status": "completed"]])
+
+        // A message Codex refused goes back in the empty box instead of looking sent; newer text there is never replaced.
+        let shown = session.messages.count
+        session.send("fixture refuses this")
+        try await wait("a refused message comes back") { session.draft == "fixture refuses this" }
+        assert(session.messages.count == shown && session.status == "fixture refusal" && !session.thinking, "a refused message leaves no bubble")
+        session.draft = "next thought"
+        session.send("fixture refuses this")
+        try await wait("a second refusal settles") { !session.thinking }
+        assert(session.draft == "next thought" && session.messages.count == shown + 1, "with newer text in the box, the refused message stays shown")
+        session.draft = ""
 
 
         notify("thread/realtime/started")
@@ -524,6 +539,7 @@ enum CodexSessionChecks {
 
         notify("turn/started", ["turn": ["id": "background"]])
         notify("item/started", ["turnId": "background", "item": ["id": "u-background", "type": "userMessage", "content": [["type": "text", "text": "<realtime_delegation>\n  <input>Check my flights</input>\n</realtime_delegation>"]]]])
+        assert(!session.canSend, "a turn the voice started stays its own: Send waits for it")
         notify("thread/realtime/closed")
         let before = session.messages.count
         let result: [String: Any] = ["turnId": "background", "item": ["id": "result", "type": "agentMessage", "text": "Finished after the call"]]
@@ -532,6 +548,7 @@ enum CodexSessionChecks {
         assert(session.messages.count == before + 1 && session.messages.last?.text == "Finished after the call" && session.messages.last?.caption == "After the call",
                "a result finishing after hangup was never heard, so it shows once, marked after the call")
         notify("turn/completed", ["turn": ["id": "background", "status": "completed"]])
+        assert(session.canSend, "once the voice's turn ends, Send works again")
 
         // Work a call started that finishes after it: no progress notes, the result once and marked, even
         // after a newer typed turn; core's end-of-call handoff counts as such work; typed turns stay normal.
@@ -628,7 +645,44 @@ enum CodexSessionChecks {
         try await wait("the next message reaches a new server") { lines(log).contains("turn/start:after the server came back") }
         notify("turn/completed", ["turn": ["id": "fixture-turn", "status": "completed"]])
         try await wait("settled again") { !session.thinking }
-        print("Lifecycle checks passed: delegated voice work, results after hangup, failures, retries, waiting state, stale work after New conversation, Stop before and during turn start, a lost server")
+
+        // Hidden: running work finishes, then the app-server stops without a "stopped" notice; the next open reconnects.
+        func reconnects() -> Int { lines(log).filter { $0 == "resume:fixture-thread:reconnect" }.count }
+        session.send("work before hiding")
+        try await wait("a turn runs before hiding") { session.thinking && lines(log).contains("turn/start:work before hiding") }
+        session.hidden = true
+        assert(CodexAppServer.shared.ready, "running work keeps the app-server while the pet is hidden")
+        notify("turn/completed", ["turn": ["id": "fixture-turn", "status": "failed", "error": ["message": "fixture hidden failure"]]])
+        try await wait("the app-server stops once a hidden pet's work is done") { !CodexAppServer.shared.ready }
+        try await Task.sleep(for: .milliseconds(100))   // its close reaches the session
+        assert(session.status == "fixture hidden failure", "Pulse stopping its own server adds no notice and keeps the work's own status")
+        let reconnected = reconnects()
+        session.hidden = false
+        session.send("after showing again")
+        try await wait("showing it again reconnects to the same conversation") {
+            lines(log).contains("turn/start:after showing again") && reconnects() == reconnected + 1
+        }
+        notify("turn/completed", ["turn": ["id": "fixture-turn", "status": "completed"]])
+        try await wait("settled after showing") { !session.thinking }
+        // A message still on its way keeps the server; its refusal, with no event after it, still lets a hidden pet's server stop.
+        session.send("fixture refuses this")
+        session.hidden = true
+        assert(CodexAppServer.shared.ready, "a message on its way keeps the app-server")
+        try await wait("the refused message comes back while hidden") { session.draft == "fixture refuses this" }
+        try await wait("then the app-server stops with no further event") { !CodexAppServer.shared.ready }
+        session.draft = ""; session.hidden = false
+        // Hidden while Codex is still starting (the card's model list): it is stopped once it has started, not left running.
+        let spawns = lines(log).filter { $0 == "spawn" }.count
+        setenv("PULSE_CHECK_SLOW_START", "1", 1)
+        session.loadWorkModels()
+        try await wait("Codex starts for the model list") { lines(log).filter { $0 == "spawn" }.count == spawns + 1 }
+        session.hidden = true
+        assert(!CodexAppServer.shared.ready, "hidden while Codex is still starting")
+        try await wait("it finishes starting") { CodexAppServer.shared.ready }
+        try await wait("then the hidden pet stops it") { !CodexAppServer.shared.ready }
+        unsetenv("PULSE_CHECK_SLOW_START")
+        session.hidden = false
+        print("Lifecycle checks passed: delegated voice work, results after hangup, failures, retries, waiting state, stale work after New conversation, Stop before and during turn start, a lost server, a hidden pet")
     }
 
     /// The conversation continues across restarts and a lost server, and never silently becomes a new one.
@@ -686,6 +740,7 @@ enum CodexSessionChecks {
         let failing = CodexPetSession(workspace: dir.appendingPathComponent("pet-broken"), defaults: broken)
         failing.send("hello")
         try await wait("a failed reopen is visible") { failing.status?.hasPrefix("Couldn't reopen your last conversation") == true }
+        assert(failing.draft == "hello" && !failing.messages.contains { $0.text == "hello" }, "a message that never reached Codex goes back in the box")
         assert(count("thread") == 0 && broken.string(forKey: key) == "missing-thread" && !failing.thinking, "a failed reopen never starts a new conversation")
         failing.draft = "not sent yet"
         failing.clear()
@@ -902,7 +957,13 @@ enum CodexSessionChecks {
         session.muted = true   // the fake helper expects calls to open muted
         var inCall: Bool { session.voiceState == .live || session.voiceState == .speaking }
         assert(!session.microphonePaused, "an off call has no paused-microphone badge")
+        CodexPetSession.microphoneAccess = { false }
         session.startVoice()
+        try await wait("a denied microphone ends the start") { session.voiceState == .off }
+        assert(session.microphoneBlocked && starts() == 0, "a denied microphone says where to allow it and starts no call")
+        CodexPetSession.microphoneAccess = { true }
+        session.startVoice()
+        assert(!session.microphoneBlocked, "the next start clears the microphone notice")
         assert(session.voiceState == .connecting && !session.microphonePaused, "a muted connecting call still shows connecting")
         try await wait("a call goes live (\(session.voiceState), \(session.status ?? "no status"))") { inCall }
         assert(session.microphonePaused && !session.isRecording, "a connected muted call shows microphone paused")
@@ -2955,6 +3016,7 @@ enum CodexSessionChecks {
                     count("report:") == 1 && handledStarts.contains("\(thread):report-1") && !session.thinking
                 }
                 assert(!lines(log).contains("report-reply:report-1"), "report 1 must still await its explicitly held acknowledgment")
+                assert(!session.canSend, "a report Codex hasn't acknowledged stays its own, even once it ended: Send waits")
                 assert(!session.messages.contains { $0.text == "Early report result." },
                        "the early terminal remains buffered until its report identity is acknowledged")
                 // Finish this helper only now: otherwise same-owner helpers legitimately share report 1.
