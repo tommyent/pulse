@@ -597,6 +597,14 @@ struct PetCard: View {
     }
 }
 
+/// A card fades in where it opens. Only its opacity animates, never the layout, so the rail stays put.
+private struct FadesIn: ViewModifier {
+    @State private var shown = false
+    func body(content: Content) -> some View {
+        content.opacity(shown ? 1 : 0).onAppear { withAnimation(.easeOut(duration: 0.12)) { shown = true } }
+    }
+}
+
 /// Keeps `following` up to date from the scroll view's geometry (the rule is `transcriptFollows`).
 private struct FollowsBottom: ViewModifier {
     @Binding var following: Bool
@@ -621,6 +629,8 @@ struct OverlayView: View {
     var onDrop: ((CGPoint) -> Void)? = nil
     var onRailFrame: ((CGRect) -> Void)? = nil
     var onCardFrame: ((CGRect) -> Void)? = nil
+    var pointerInside: (() -> Bool)? = nil   // whether the pointer is really over the panel
+    @State private var exitWatch: Task<Void, Never>?
 
     private var expanded: Bool { state.hoveringOverlay || state.cardVisible || state.petVisible }
     @State private var itemFrames: [String: CGRect] = [:]   // the pet and each ring, so a card's tail points at its own
@@ -646,14 +656,21 @@ struct OverlayView: View {
                 rail
             }
         }
-        .padding(12)
-        .animation(expanded ? .easeOut(duration: 0.12) : nil, value: expanded)
-        .animation(state.cardVisible ? .easeOut(duration: 0.12) : nil, value: state.cardVisible)
-        .animation(state.petVisible ? .easeOut(duration: 0.12) : nil, value: state.petVisible)
+        .padding(12)   // no layout animation: the panel resizes at once, so an animated rail would slide from its old spot
         .onHover { over in
             guard !state.dragging else { return }
-            if over { state.hoveringOverlay = true }
-            else if !state.petVisible { state.collapseOverlay() }   // a chat stays open until a click outside
+            exitWatch?.cancel(); exitWatch = nil
+            if over { state.hoveringOverlay = true; return }
+            guard !state.petVisible else { return }   // a chat stays open until a click outside
+            // Hover also ends without the pointer leaving: when Pulse hands focus back as the pet closes, and while a
+            // shorter card shifts the rail inside the not yet resized panel. Then no later exit may come, so the
+            // pointer is watched until it really leaves.
+            guard pointerInside?() == true else { return state.collapseOverlay() }
+            // ponytail: a 250 ms check, only after an exit the pointer didn't make
+            exitWatch = Task { @MainActor in
+                while !Task.isCancelled, pointerInside?() == true { try? await Task.sleep(for: .milliseconds(250)) }
+                if !Task.isCancelled, !state.petVisible { state.collapseOverlay() }
+            }
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { onSize?($0) }
         .colorScheme(state.isLight ? .light : .dark)
@@ -665,12 +682,12 @@ struct OverlayView: View {
         if state.petVisible {
             PetCard(tailEdge: tail, tailAt: tailAt("pet"), showUsage: state.persisted.enabled.contains(.codex) ? { toggleCard(.codex) } : nil)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
-                .transition(.opacity.combined(with: .move(edge: tail)))
+                .modifier(FadesIn())
         } else if state.cardVisible, state.persisted.enabled.contains(state.selected) {
             UsageCard(snapshot: state.snapshots[state.selected] ?? placeholder(state.selected),
                       tailEdge: tail, tailAt: tailAt(state.selected.rawValue))
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
-                .transition(.opacity.combined(with: .move(edge: tail)))
+                .modifier(FadesIn())
         }
     }
 

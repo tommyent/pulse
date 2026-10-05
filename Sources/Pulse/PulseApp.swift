@@ -60,6 +60,12 @@ private final class OverlayPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
+/// The panel is rarely key, and a first click on a non-key window only makes it key: the rail's drag would need a
+/// second click. Accepting the first mouse lets that first click reach the overlay too.
+private final class OverlayHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 @MainActor
 final class OverlayController {
     private let panel: NSPanel
@@ -208,12 +214,13 @@ final class OverlayController {
         panel.hasShadow = false
         panel.isMovableByWindowBackground = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        let hosting = NSHostingView(rootView: OverlayView(state: state,
+        let hosting = OverlayHostingView(rootView: OverlayView(state: state,
             onSize: { [weak self] size in self?.contentSized(size) },
             onDrag: { [weak self] in self?.drag($0) },
             onDrop: { [weak self] in self?.drop($0) },
             onRailFrame: { [weak self] in self?.railFrame = $0 },
-            onCardFrame: { [weak self] in self?.cardFrame = $0 }))
+            onCardFrame: { [weak self] in self?.cardFrame = $0 },
+            pointerInside: { [weak self] in self.map { $0.panel.frame.insetBy(dx: 1, dy: 1).contains(NSEvent.mouseLocation) } ?? false }))
         panel.contentView = hosting
         if panel.setFrameUsingName("PulseOverlay"), panel.frame.width > 50 {
             pinned = state.dock.anchor(of: panel.frame)
