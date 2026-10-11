@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Fake native helper for CodexSessionChecks; no audio devices or network.
 const assert = require('node:assert/strict');
-let buffer = Buffer.alloc(0), stage = 'hello', controls = 0, dying = false;
+let buffer = Buffer.alloc(0), stage = 'hello', controls = 0, dying = false, refusing = false;
 function send(message) {
   const body = Buffer.from(JSON.stringify(message));
   const head = Buffer.alloc(4); head.writeUInt32BE(body.length);
@@ -26,12 +26,13 @@ process.stdin.on('data', chunk => {
     } else if (m.type === 'applyAnswer') {
       assert.equal(stage, m.type);
       if (m.sdp === 'malformed-frame') { process.stdout.write(Buffer.from([0, 3, 0, 0])); return; }
-      if (m.sdp === 'die-after-devices') dying = true; else assert.equal(m.sdp, 'fixture-answer');
+      if (m.sdp === 'die-after-devices') dying = true; else if (m.sdp === 'refuse-devices') refusing = true; else assert.equal(m.sdp, 'fixture-answer');
       stage = 'openDevices'; send({type:'transportReady'});
     } else if (m.type === 'openDevices') {
       const version = require('../manifest.json').appVersion;
       assert.deepEqual(m, version.startsWith('0.160.') ? {type:'openDevices'} : {type:'openDevices', selection:{}},
         'the audio-device request must match the installed helper schema');
+      if (refusing) { process.stderr.write('fixture: unknown field in openDevices\n'); process.exit(1); }   // as a helper whose protocol changed
       assert.equal(stage, m.type); stage = 'controls'; send({type:'devicesOpened'});
       if (dying) setTimeout(() => {                        // stands in for an audio device changing under the helper
         process.stderr.write('fixture: input stream error, ending session\n');

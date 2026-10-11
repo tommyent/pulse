@@ -2619,7 +2619,15 @@ enum CodexSessionChecks {
         while failure == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
         assert(failure != nil && bridge.lastFailureWasEarlyDeath, "a helper dying just after its devices open must be retryable")
         bridge.close()
-        print("Native voice checks passed: legacy/current device selection, fragmented frames, negotiation, initial mute, activity, cancellation, reopening, malformed frames and early helper death")
+        failure = nil
+        _ = try await bridge.createOffer(muted: true)
+        bridge.accept(answer: "refuse-devices")
+        deadline = Date().addingTimeInterval(5)
+        while failure == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        assert(failure?.hasSuffix(" Step: opening audio devices. Codex 0.162.1.") == true,
+               "a helper refusing a step names the step and its Codex version (got \(failure ?? "none"))")
+        bridge.close()
+        print("Native voice checks passed: legacy/current device selection, failures naming their step and Codex version, fragmented frames, negotiation, initial mute, activity, cancellation, reopening, malformed frames and early helper death")
     }
 
     /// These prove the per-thread payload and its boundaries, not native tool loading or model compliance.

@@ -23,6 +23,7 @@ final class VoiceBridge {
     private var devicesOpen = false
     private var announcedReady = false
     private var supportsDeviceSelection = false
+    private var helperVersion: String?   // the helper's Codex version, named when it fails
     private var errorHandle: FileHandle?
     static let speakingFloor = 512
     private let errorLog = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("pulse-voice.err")
@@ -67,7 +68,8 @@ final class VoiceBridge {
             throw CodexAppServer.Failure.remote("Install a Codex CLI package with native voice support.")
         }
         // Codex 0.161 added a required selection; older helpers reject the extra field.
-        supportsDeviceSelection = (info["appVersion"] as? String ?? "0").compare("0.161.0", options: .numeric) != .orderedAscending
+        helperVersion = info["appVersion"] as? String
+        supportsDeviceSelection = (helperVersion ?? "0").compare("0.161.0", options: .numeric) != .orderedAscending
         // Both ends of a headset drop to the hands-free rate when the microphone is its own,
         // which is what a thin, crackly call sounds like. 24 kHz here means the call is on that
         // profile; a built-in input leaves the headset at its full 44.1/48 kHz for playback.
@@ -144,8 +146,17 @@ final class VoiceBridge {
         waiter?.resume(throwing: CodexAppServer.Failure.remote("Voice stopped."))
     }
 
+    /// What each awaited reply means, for a failure before the call is live.
+    private static let steps = ["ready": "starting the helper", "runtimeReady": "starting audio", "offer": "creating the call",
+                                "transportReady": "connecting the call", "devicesOpened": "opening audio devices",
+                                "audioControlsApplied": "setting the microphone", "audioState": "reading audio levels"]
+
     private func fail(_ message: String) {
         var message = message
+        // A Codex update that changes the helper's protocol shows up as a helper failing at one step, with no reason
+        // of its own: name the step and the helper's version.
+        if !announcedReady, let expected { message += " Step: \(Self.steps[expected] ?? expected)." }
+        if let helperVersion { message += " Codex \(helperVersion)." }
         lastFailureWasEarlyDeath = devicesOpenedAt.map { Date().timeIntervalSince($0) < 5 } ?? false
         if bluetoothInput && devicesOpen {
             message += " A Bluetooth microphone can stop the call; switching Sound input to the built-in microphone works around it."
