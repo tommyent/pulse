@@ -705,11 +705,16 @@ enum CodexSessionChecks {
         notify("turn/completed", ["turn": ["id": "fixture-turn", "status": "completed"]])
         try await wait("settled after showing") { !session.thinking }
         // A message still on its way keeps the server; its refusal, with no event after it, still lets a hidden pet's server stop.
+        // `ready` drops inside stop(); the session handles the close a main-queue hop later (it empties the model list).
+        var closes = 0
+        let forward = CodexAppServer.shared.onNotification!
+        CodexAppServer.shared.onNotification = { method, params in forward(method, params); if method == "pulse/closed" { closes += 1 } }
+        defer { CodexAppServer.shared.onNotification = forward }
         session.send("fixture refuses this")
         session.hidden = true
         assert(CodexAppServer.shared.ready, "a message on its way keeps the app-server")
         try await wait("the refused message comes back while hidden") { session.draft == "fixture refuses this" }
-        try await wait("then the app-server stops with no further event") { !CodexAppServer.shared.ready }
+        try await wait("then the app-server stops with no further event, and the session handles its close") { !CodexAppServer.shared.ready && closes == 1 }
         session.draft = ""; session.hidden = false
         // Hidden while Codex is still starting (the card's model list): it is stopped once it has started, not left running.
         let spawns = lines(log).filter { $0 == "spawn" }.count
