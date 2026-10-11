@@ -2796,8 +2796,10 @@ enum CodexSessionChecks {
             let forward = server.onNotification!
             var handledStarts = Set<String>()
             var handledRealtime = false
+            var nativeSamples = 0, injecting = false   // speaker samples from the fake helper, not this check's own events
             server.onNotification = { method, params in
                 forward(method, params)
+                if method == "pulse/voice" && !injecting { nativeSamples += 1 }
                 if method == "thread/realtime/started" { handledRealtime = true }
                 if method == "turn/started", let tid = params["threadId"] as? String,
                    let id = (params["turn"] as? [String: Any])?["id"] as? String { handledStarts.insert("\(tid):\(id)") }
@@ -2834,7 +2836,15 @@ enum CodexSessionChecks {
             }
             func audio(_ playing: Bool, clear: Bool = false) {
                 try! (playing ? "1000" : "0").write(to: speaker, atomically: true, encoding: .utf8)
+                injecting = true
                 notify("pulse/voice", ["type": playing ? "output_audio_buffer.started" : clear ? "output_audio_buffer.cleared" : "output_audio_buffer.stopped"])
+                injecting = false
+            }
+            // A sample the helper read before the change can still arrive after it and flip the voice state back.
+            // Pulse polls one sample at a time, so the second one after the change was read after it.
+            func audioSettled() async throws {
+                let start = nativeSamples
+                try await wait("\(name): two fresh speaker samples arrive") { nativeSamples >= start + 2 }
             }
             func approval(_ waiting: Bool) {
                 notify("thread/status/changed", ["status": ["type": "active", "activeFlags": waiting ? ["waitingOnApproval"] : []]])
@@ -3408,9 +3418,13 @@ enum CodexSessionChecks {
                 try await wait("the predecessor settles before its ack") { lines(log).contains("predecessor-held") && !session.thinking }
                 audio(true); seed(); audio(false); try await quietWindow()
                 assert(recoveries() == 0, "the catch-up is waiting behind the held predecessor")
-                if name == "review-queued-approval" { approval(true) } else { audio(true) }
+                if name == "review-queued-approval" { approval(true) } else {
+                    audio(true); try await audioSettled()
+                    assert(session.voiceState == .speaking, "\(name): the speaker gate holds when the queue releases")
+                }
                 try await fixture("release-predecessor"); try await settle()
-                assert(recoveries() == 0, "REVIEW: all idle gates are rechecked after waiting on the send queue")
+                assert(recoveries() == 0, "REVIEW (\(name)): all idle gates are rechecked after waiting on the send queue"
+                       + " (voice \(session.voiceState), waiting \(session.waitingOnYou), recoveries \(recoveries()))")
                 if name == "review-queued-approval" { approval(false) } else { audio(false) }
                 try await recovery(1)
                 assert(pending().contains("Read my calendar"), "REVIEW: a catch-up that never ran leaves its retry allowance available")
