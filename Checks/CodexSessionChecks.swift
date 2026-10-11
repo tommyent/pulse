@@ -475,6 +475,7 @@ enum CodexSessionChecks {
             case "approvals": try await checkApprovals()
             case "consent": try await checkConsent()
             case "startup": try await checkStartup(in: dir)
+            case "native-voice": try await checkNativeVoice(in: dir)
             case "concurrent-writes": try await checkConcurrentWrites(in: dir)
             default:
                 fputs("Unknown suite: \(suite)\n", stderr); exit(64)
@@ -2569,7 +2570,7 @@ enum CodexSessionChecks {
             .replacingOccurrences(of: "#!/usr/bin/env node", with: "#!" + node)
         try fixture.write(to: helper, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
-        try #"{"buildCommit":"fixture"}"#.write(to: voice.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+        try #"{"buildCommit":"fixture","appVersion":"0.162.1"}"#.write(to: voice.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
         setenv("PULSE_CHECK_CODEX", codex.path, 1)
     }
 
@@ -2583,13 +2584,18 @@ enum CodexSessionChecks {
             if method == "pulse/voice", params["type"] as? String == "output_audio_buffer.started" { speaking = true }
             if method == "thread/realtime/error" { failure = params["message"] as? String }
         }
-        let initialOffer = try await bridge.createOffer(muted: true)
-        assert(initialOffer == "fixture-offer")
-        assert(!ready, "offer must not mean audio is ready")
-        bridge.accept(answer: "fixture-answer")
-        var deadline = Date().addingTimeInterval(5)
-        while !speaking && failure == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
-        assert(ready && speaking && failure == nil, "native helper must negotiate, open devices, restore mute and poll")
+        var deadline = Date()
+        for version in ["0.160.0", "0.160.1", "0.161.0", "0.162.1"] {
+            try "{\"buildCommit\":\"fixture\",\"appVersion\":\"\(version)\"}".write(to: dir.appendingPathComponent("codex-resources/voice/manifest.json"), atomically: true, encoding: .utf8)
+            ready = false; speaking = false; failure = nil
+            let initialOffer = try await bridge.createOffer(muted: true)
+            assert(initialOffer == "fixture-offer")
+            assert(!ready, "offer must not mean audio is ready")
+            bridge.accept(answer: "fixture-answer")
+            deadline = Date().addingTimeInterval(5)
+            while !speaking && failure == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+            assert(ready && speaking && failure == nil, "\(version): native helper must negotiate, open devices, restore mute and poll")
+        }
         bridge.setMuted(false)
         try await Task.sleep(for: .milliseconds(100))
         bridge.close()
@@ -2613,7 +2619,7 @@ enum CodexSessionChecks {
         while failure == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
         assert(failure != nil && bridge.lastFailureWasEarlyDeath, "a helper dying just after its devices open must be retryable")
         bridge.close()
-        print("Native voice checks passed: fragmented frames, negotiation, initial mute, activity, cancellation, reopening, malformed frames and early helper death")
+        print("Native voice checks passed: legacy/current device selection, fragmented frames, negotiation, initial mute, activity, cancellation, reopening, malformed frames and early helper death")
     }
 
     /// These prove the per-thread payload and its boundaries, not native tool loading or model compliance.

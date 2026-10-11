@@ -22,6 +22,7 @@ final class VoiceBridge {
     private var sentMute = false
     private var devicesOpen = false
     private var announcedReady = false
+    private var supportsDeviceSelection = false
     private var errorHandle: FileHandle?
     static let speakingFloor = 512
     private let errorLog = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("pulse-voice.err")
@@ -65,6 +66,8 @@ final class VoiceBridge {
               let commit = info["buildCommit"] as? String, !commit.isEmpty else {
             throw CodexAppServer.Failure.remote("Install a Codex CLI package with native voice support.")
         }
+        // Codex 0.161 added a required selection; older helpers reject the extra field.
+        supportsDeviceSelection = (info["appVersion"] as? String ?? "0").compare("0.161.0", options: .numeric) != .orderedAscending
         // Both ends of a headset drop to the hands-free rate when the microphone is its own,
         // which is what a thin, crackly call sounds like. 24 kHz here means the call is on that
         // profile; a built-in input leaves the headset at its full 44.1/48 kHz for playback.
@@ -208,7 +211,10 @@ final class VoiceBridge {
                     guard let self, self.generation == run else { return }
                     self.fail("Native voice timed out waiting for the server answer.")
                 }
-            case "transportReady": send(["type": "openDevices"], expecting: "devicesOpened")
+            case "transportReady":
+                var request: [String: Any] = ["type": "openDevices"]
+                if supportsDeviceSelection { request["selection"] = [String: Any]() }
+                send(request, expecting: "devicesOpened")
             case "devicesOpened": devicesOpen = true; devicesOpenedAt = .now; updateControls()
             case "audioControlsApplied":
                 appliedMute = sentMute

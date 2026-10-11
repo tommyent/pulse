@@ -29,6 +29,9 @@ process.stdin.on('data', chunk => {
       if (m.sdp === 'die-after-devices') dying = true; else assert.equal(m.sdp, 'fixture-answer');
       stage = 'openDevices'; send({type:'transportReady'});
     } else if (m.type === 'openDevices') {
+      const version = require('../manifest.json').appVersion;
+      assert.deepEqual(m, version.startsWith('0.160.') ? {type:'openDevices'} : {type:'openDevices', selection:{}},
+        'the audio-device request must match the installed helper schema');
       assert.equal(stage, m.type); stage = 'controls'; send({type:'devicesOpened'});
       if (dying) setTimeout(() => {                        // stands in for an audio device changing under the helper
         process.stderr.write('fixture: input stream error, ending session\n');
