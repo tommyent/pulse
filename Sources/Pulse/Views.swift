@@ -325,6 +325,44 @@ struct PetCard: View {
             }
         }
     }
+
+    private struct Bubble: View, Equatable {
+        let message: ChatMessage
+        let scheme: ColorScheme
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.scheme == rhs.scheme && lhs.message.id == rhs.message.id && lhs.message.role == rhs.message.role
+                && lhs.message.text == rhs.message.text && lhs.message.caption == rhs.message.caption
+        }
+
+        var body: some View {
+            let m = message
+            if m.role == .note {   // Pulse's own notice, not a message and not input: a small centered line
+                Text(m.text).font(.caption).foregroundStyle(Ink.secondary(scheme)).multilineTextAlignment(.center)
+                    .textSelection(.enabled).frame(maxWidth: .infinity).padding(.vertical, 2).id(m.id)
+            } else {
+                HStack {
+                    if m.role == .user { Spacer(minLength: 40) }
+                    VStack(alignment: .leading, spacing: 2) {
+                        // Results of work a call started: never one of the spoken replies.
+                        if let caption = m.caption { Text(caption).font(.caption2).foregroundStyle(Ink.secondary(scheme)) }
+                        Text(m.role == .user ? AttributedString(m.text) : inlineMarkdown(m.text))
+                            .font(.callout)
+                            .textSelection(.enabled)
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(RoundedRectangle(cornerRadius: 12)
+                                .fill(m.role == .user ? AccountID.codex.accent.opacity(0.35)
+                                                      : m.caption != nil ? Color.clear
+                                                      : (scheme == .dark ? Color(white: 0.16) : Color(white: 0.9))))
+                            .overlay { if m.caption != nil { RoundedRectangle(cornerRadius: 12).strokeBorder(Ink.secondary(scheme).opacity(0.5)) } }
+                    }
+                    .accessibilityElement(children: .combine)
+                    if m.role != .user { Spacer(minLength: 40) }
+                }
+                .id(m.id)
+            }
+        }
+    }
     var tailEdge: Edge = .trailing
     var tailAt: CGFloat? = nil
     var showUsage: (() -> Void)?   // nil while Codex usage is switched off
@@ -450,30 +488,7 @@ struct PetCard: View {
                             .font(.caption).foregroundStyle(Ink.secondary(scheme))
                     }
                     ForEach(session.messages) { m in
-                        if m.role == .note {   // Pulse's own notice, not a message and not input: a small centered line
-                            Text(m.text).font(.caption).foregroundStyle(Ink.secondary(scheme)).multilineTextAlignment(.center)
-                                .textSelection(.enabled).frame(maxWidth: .infinity).padding(.vertical, 2).id(m.id)
-                        } else {
-                        HStack {
-                            if m.role == .user { Spacer(minLength: 40) }
-                            VStack(alignment: .leading, spacing: 2) {
-                                // Results of work a call started: never one of the spoken replies.
-                                if let caption = m.caption { Text(caption).font(.caption2).foregroundStyle(Ink.secondary(scheme)) }
-                                Text(m.role == .user ? AttributedString(m.text) : Self.inlineMarkdown(m.text))
-                                    .font(.callout)
-                                    .textSelection(.enabled)
-                                    .padding(.horizontal, 10).padding(.vertical, 6)
-                                    .background(RoundedRectangle(cornerRadius: 12)
-                                        .fill(m.role == .user ? AccountID.codex.accent.opacity(0.35)
-                                                              : m.caption != nil ? Color.clear
-                                                              : (scheme == .dark ? Color(white: 0.16) : Color(white: 0.9))))
-                                    .overlay { if m.caption != nil { RoundedRectangle(cornerRadius: 12).strokeBorder(Ink.secondary(scheme).opacity(0.5)) } }
-                            }
-                            .accessibilityElement(children: .combine)
-                            if m.role != .user { Spacer(minLength: 40) }
-                        }
-                        .id(m.id)
-                        }
+                        Bubble(message: m, scheme: scheme)
                     }
                     if session.waitingOnYou {
                         Label("Waiting for your answer in the Codex prompt", systemImage: "hand.raised")
@@ -622,7 +637,6 @@ private struct FollowsBottom: ViewModifier {
 }
 
 struct OverlayView: View {
-    @ObservedObject private var session = CodexPetSession.shared
     @ObservedObject var state: AppState
     var onSize: ((CGSize) -> Void)? = nil
     var onDrag: ((CGPoint) -> Void)? = nil
@@ -697,32 +711,7 @@ struct OverlayView: View {
             : AnyLayout(HStackLayout(alignment: .top, spacing: expanded ? 18 : 10))
         return layout {
             if state.showsPet {
-                VStack(spacing: 6) {
-                    Button { togglePet(voice: NSApp.currentEvent?.modifierFlags.contains(.command) == true) } label: {
-                        CodexPet(size: expanded ? 52 : 28, animateIdle: expanded)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { itemFrames["pet"] = $0 }
-                    .accessibilityLabel("Codex pet — chat and voice")
-                    .accessibilityValue(session.voiceState == .off ? "Voice off" : session.voiceState == .connecting ? "Connecting"
-                                        : session.microphonePaused ? "Voice on, microphone paused" : "Recording")
-                    .accessibilityAction(named: "Start or end voice session") { togglePet(voice: true) }
-                    .help("Click to chat. Command-click to start or end voice.")
-                    if expanded {
-                        Button { togglePet(voice: true) } label: {
-                            Image(systemName: session.voiceState == .off ? "waveform.circle" : "waveform.circle.fill")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(session.voiceTint ?? (state.isLight ? Color.black : Color.white))
-                                .symbolEffect(.variableColor.iterative, isActive: session.voiceState == .connecting)
-                                .frame(width: 52)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(session.voiceState == .off ? "Start live voice" : "End live voice")
-                        .help(session.voiceState == .off ? "Start live voice" : "End live voice")
-                    }
-                }
+                PetRailItem(expanded: expanded, isLight: state.isLight, onFrame: { itemFrames["pet"] = $0 }, toggle: togglePet)
             }
             ForEach(state.enabledAccounts) { id in
                 let windows = state.snapshots[id]?.windows ?? []
@@ -754,10 +743,47 @@ struct OverlayView: View {
         .help("Drag to any screen edge")
     }
 
+    private struct PetRailItem: View {
+        @ObservedObject private var session = CodexPetSession.shared
+        let expanded: Bool
+        let isLight: Bool
+        let onFrame: (CGRect) -> Void
+        let toggle: (Bool) -> Void
+
+        var body: some View {
+            VStack(spacing: 6) {
+                Button { toggle(NSApp.currentEvent?.modifierFlags.contains(.command) == true) } label: {
+                    CodexPet(size: expanded ? 52 : 28, animateIdle: expanded)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onFrame($0) }
+                .accessibilityLabel("Codex pet — chat and voice")
+                .accessibilityValue(session.voiceState == .off ? "Voice off" : session.voiceState == .connecting ? "Connecting"
+                                    : session.microphonePaused ? "Voice on, microphone paused" : "Recording")
+                .accessibilityAction(named: "Start or end voice session") { toggle(true) }
+                .help("Click to chat. Command-click to start or end voice.")
+                if expanded {
+                    Button { toggle(true) } label: {
+                        Image(systemName: session.voiceState == .off ? "waveform.circle" : "waveform.circle.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(session.voiceTint ?? (isLight ? Color.black : Color.white))
+                            .symbolEffect(.variableColor.iterative, isActive: session.voiceState == .connecting)
+                            .frame(width: 52)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(session.voiceState == .off ? "Start live voice" : "End live voice")
+                    .help(session.voiceState == .off ? "Start live voice" : "End live voice")
+                }
+            }
+        }
+    }
+
     private func togglePet(voice: Bool = false) {
         guard !state.dragging else { return }
         if voice {
-            session.toggleVoice()
+            CodexPetSession.shared.toggleVoice()
         } else {
             state.cardVisible = false
             state.petVisible.toggle()
