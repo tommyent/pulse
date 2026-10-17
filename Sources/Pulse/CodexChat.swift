@@ -429,8 +429,8 @@ final class CodexPetSession: ObservableObject {
     private var voiceInputs: [String: Int] = [:]           // this call's utterances: transcript item ID → place in line
     private var voiceResults: [String: (key: String, asks: Bool)] = [:]   // turn → its result
     private var spokenTurns: Set<String> = []
-    // Helpers: Codex sub-agents the pet started, seen through Pulse's one server. A helper's own first turn is
-    // its job and that turn's turn/completed its outcome. A finished helper doesn't wake the pet, so Pulse asks
+    // Helpers: Codex sub-agents the pet started, seen through Pulse's one server. A helper's own turns are
+    // its jobs and each turn's turn/completed its outcome. A finished helper doesn't wake the pet, so Pulse asks
     // the pet to report it, once the pet is free.
     private struct Helper {
         enum State { case running, finished, reporting, reported }
@@ -440,8 +440,8 @@ final class CodexPetSession: ObservableObject {
         var owner: Int?               // the call that asked for it; nil when typed or never proven: shown, not spoken
         var ownerCall: Int?           // a voice request not yet tied to its words: the call live when it started
         var parent: String?           // set for a helper's own helper, which Pulse stops on sight
-        var firstTurn: String?        // the work it was started for
         var currentTurn: String?
+        var completedTurns: Set<String> = []   // turns already ended or replaced, so each reports at most once
         var outcome: (status: String, final: String?)?
         var state = State.running
         var failedReports = 0         // reports superseded or cut short: one more spoken try, then chat only
@@ -776,7 +776,7 @@ final class CodexPetSession: ObservableObject {
         PetApprovals.shared.cancelAll()
         stops += 1
         stopHelpers()
-        if let queued = report, !queued.sent { report = nil; for job in queued.jobs { helpers[job]?.state = .finished } }
+        if let queued = report, !queued.sent { report = nil; for job in queued.jobs where helpers[job]?.state == .reporting { helpers[job]?.state = .finished } }
         report?.stopped = true   // one already sent is never spoken, even if it finishes before the interrupt lands
         forgetAsks()
         reportsHeld = true
@@ -1541,32 +1541,24 @@ final class CodexPetSession: ObservableObject {
         }
         switch method {
         case "turn/started":
-            guard let id = (p["turn"] as? [String: Any])?["id"] as? String else { return }
+            guard let id = (p["turn"] as? [String: Any])?["id"] as? String, !helper.completedTurns.contains(id) else { return }
+            if let old = helper.currentTurn, old != id { helper.completedTurns.insert(old) }
             helper.currentTurn = id
-            if helper.firstTurn == nil { helper.firstTurn = id }
             helpers[thread] = helper
             countHelpers()   // a later turn of a known helper is work too: Stop stays available for it
             if helper.stopping { stopHelperTurn(thread, id) }
         case "turn/completed":
             let turn = p["turn"] as? [String: Any]
             guard let id = turn?["id"] as? String else { return }
-            let endsCurrent = helper.currentTurn == id || helper.currentTurn == nil   // a repeat of an older end doesn't
-            if helper.currentTurn == id { helper.currentTurn = nil }
-            if helper.firstTurn == nil { helper.firstTurn = id }
+            let endsCurrent = helper.completedTurns.insert(id).inserted && (helper.currentTurn == id || helper.currentTurn == nil)
+            guard endsCurrent else { helpers[thread] = helper; return }
+            helper.currentTurn = nil
             let status = turn?["status"] as? String ?? "unknown"
-            // Only the work it was started for is its outcome; later turns aren't reported in this version, but a
-            // stop of one is confirmed by its own end.
-            guard id == helper.firstTurn, helper.outcome == nil else {
-                if endsCurrent, helper.stopping, status == "interrupted", helper.parent == nil { noteStopped(helper) }
-                if endsCurrent, helper.parent == nil { helper.stopping = false }   // the next piece of work isn't stopped in advance
-                helpers[thread] = helper.epoch != epoch && !helper.isWorking ? nil : helper
-                countHelpers()
-                return
-            }
             let final = (turn?["items"] as? [[String: Any]] ?? []).last {
                 $0["type"] as? String == "agentMessage" && !Self.isPrivateNote($0["text"] as? String ?? "", phase: $0["phase"] as? String)
             }?["text"] as? String
             helper.outcome = (status, final)
+            helper.failedReports = 0
             let stopped = helper.stopping && status == "interrupted"
             helper.state = stopped || helper.parent != nil || helper.epoch != epoch ? .reported : .finished
             helpers[thread] = helper
@@ -1742,7 +1734,7 @@ final class CodexPetSession: ObservableObject {
                 if !current() {
                     if earlyReportEnd?["id"] as? String == accepted { earlyReportEnd = nil }
                     if conversation == epoch {
-                        if report?.seq == seq { report = nil; for job in jobs { helpers[job]?.state = .finished } }
+                        if report?.seq == seq { report = nil; for job in jobs where helpers[job]?.state == .reporting { helpers[job]?.state = .finished } }
                         cancelledReports.insert(accepted)
                         releaseHeldItems()
                         stopHelpers(startedIn: accepted)
@@ -1780,7 +1772,7 @@ final class CodexPetSession: ObservableObject {
         report = nil
         if !mine.sent, !mine.asks.isEmpty { catchUpTriedAt = nil }   // it never reached Codex: not a try
         releaseHeldItems()
-        for job in mine.jobs { helpers[job]?.state = .finished }
+        for job in mine.jobs where helpers[job]?.state == .reporting { helpers[job]?.state = .finished }
         if mine.superseded { Task { try? await Task.sleep(for: .seconds(5)); reportIfIdle() } }
     }
 
@@ -1791,7 +1783,7 @@ final class CodexPetSession: ObservableObject {
         guard let mine = report, let id = turn["id"] as? String, mine.turn == id else { return }
         report = nil
         if turn["status"] as? String == "completed" && !mine.superseded {
-            for job in mine.jobs { helpers[job]?.state = .reported }
+            for job in mine.jobs where helpers[job]?.state == .reporting { helpers[job]?.state = .reported }
             let gates: [(ok: Bool, why: String)] = [
                 (!mine.stopped, "stopped"),
                 (mine.speak, "chat only"),
@@ -1810,11 +1802,11 @@ final class CodexPetSession: ObservableObject {
             }
         } else if mine.stopped {
             voiceLog.notice("report turn \(id, privacy: .public) stopped")
-            for job in mine.jobs { helpers[job]?.state = .finished }
+            for job in mine.jobs where helpers[job]?.state == .reporting { helpers[job]?.state = .finished }
         } else {
             // A chat-only report that didn't finish hasn't shown its result either: the same tries as a spoken one.
             voiceLog.notice("report turn \(id, privacy: .public) \(mine.superseded ? "superseded" : "cut short", privacy: .public)")
-            for job in mine.jobs {
+            for job in mine.jobs where helpers[job]?.state == .reporting {
                 helpers[job]?.failedReports += 1
                 if let tries = helpers[job]?.failedReports { helpers[job]?.state = tries > 2 ? .reported : .finished }
             }

@@ -1527,6 +1527,40 @@ enum CodexSessionChecks {
         childEnds("helper-6", "h6-work", "completed", "Photos sorted.")
         try await wait("an early end is settled (\(spoken()))") { spoken().last == "Reported early." }
 
+        // A redirected helper's later turn is reported once with its new final text; a repeated end is ignored.
+        ask("redirect", "Draft a packing note"); spawn("redirect", "helper-redirect", "/root/redirect"); childStarts("helper-redirect", "hr-1"); finish("redirect", "Drafting.")
+        childEnds("helper-redirect", "hr-1", "completed", "First draft done.")
+        try await wait("the first turn is reported (\(reports().count))") { reports().count == 10 }
+        finish("report-10", "The first draft is ready.")
+        try await wait("first turn report speaks") { spoken().last == "The first draft is ready." }
+        ask("redirect-2", "Change it to weekend only"); childStarts("helper-redirect", "hr-2"); finish("redirect-2", "Updated the helper's task.")
+        assert(session.helpersWorking == 1, "the redirected helper's second turn counts as working")
+        childEnds("helper-redirect", "hr-2", "completed", "Weekend packing note done.")
+        try await wait("the second turn is reported (\(reports().count))") { reports().count == 11 }
+        assert(session.helpersWorking == 0 && reports()[10].contains("/root/redirect: ended with status completed")
+               && reports()[10].contains(#"Its final message: "Weekend packing note done.""#),
+               "the second report carries the second turn's final text (got \(reports()[10]))")
+        finish("report-11", "The weekend packing note is ready.")
+        try await wait("the second turn's report speaks (\(spoken()))") { spoken().last == "The weekend packing note is ready." }
+        childEnds("helper-redirect", "hr-2", "completed", "Weekend packing note done.")
+        childEnds("helper-redirect", "hr-1", "completed", "First draft done.")
+        try await settle()
+        assert(reports().count == 11 && spoken().filter { $0 == "The weekend packing note is ready." }.count == 1, "repeated ends do not report twice")
+
+        // A later turn finishing while the previous turn's report is still running gets its own report once that report ends.
+        ask("overlap", "Write a summary"); spawn("overlap", "helper-overlap", "/root/overlap"); childStarts("helper-overlap", "ho-1"); finish("overlap", "Writing.")
+        childEnds("helper-overlap", "ho-1", "completed", "First summary done.")
+        try await wait("first summary report starts (\(reports().count))") { reports().count == 12 }
+        childStarts("helper-overlap", "ho-2")
+        childEnds("helper-overlap", "ho-2", "completed", "Revised summary done.")
+        finish("report-12", "The first summary is ready.")
+        try await wait("second summary report starts after the first report ends (\(reports().count))") { reports().count == 13 }
+        assert(reports()[12].contains("/root/overlap: ended with status completed")
+               && reports()[12].contains(#"Its final message: "Revised summary done.""#),
+               "the follow-up report carries the second turn's final text (got \(reports()[12]))")
+        finish("report-13", "The revised summary is ready.")
+        try await wait("the follow-up report speaks (\(spoken()))") { spoken().last == "The revised summary is ready." }
+
         // Stop stops the helpers, confirmed by their own ends; one whose turn isn't known yet is stopped when it is.
         ask("stopme", "Index my files"); childStarts("helper-7", "h7-work"); spawn("stopme", "helper-7", "/root/index")   // its turn beats its registration
         spawn("stopme", "helper-8", "/root/archive")
