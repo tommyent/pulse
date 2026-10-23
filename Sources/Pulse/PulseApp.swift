@@ -1,6 +1,5 @@
 import SwiftUI
 import Combine
-import UserNotifications
 
 extension Bundle {
     /// Packaged app keeps Pulse_Pulse.bundle in Contents/Resources, where SPM's
@@ -38,7 +37,6 @@ struct PulseApp: App {
         overlay = OverlayController(state: state)
         batteryAlerts = BatteryAlerts(state: state)
         NSApplication.shared.setActivationPolicy(.accessory)   // no Dock icon
-        if Bundle.main.bundleIdentifier != nil { UNUserNotificationCenter.current().delegate = BannerWhileActive.shared }
     }
 
     var body: some Scene {
@@ -56,15 +54,6 @@ struct PulseApp: App {
         Settings {
             SettingsView(state: state)
         }
-    }
-}
-
-/// Without this, macOS drops Pulse's notifications while Pulse is active (the pet card makes it so).
-private final class BannerWhileActive: NSObject, UNUserNotificationCenterDelegate {
-    static let shared = BannerWhileActive()
-    func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound]
     }
 }
 

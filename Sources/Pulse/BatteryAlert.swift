@@ -35,26 +35,8 @@ final class BatteryAlerts {
         close()
         let critical = level == .critical
         log.notice("alert: \(critical ? "critical" : "low", privacy: .public) at \(reading.percent)%\(reading.simulated ? " (simulated)" : "", privacy: .public)")
-        let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.level = .statusBar   // above the rings and other apps' floating windows
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.isReleasedWhenClosed = false
-        let hosting = OverlayHostingView(rootView: BatteryAlertView(level: level) { [weak self] in self?.close() }
-            .colorScheme(state.isLight ? .light : .dark)
-            .environment(\.glassTint, state.glassTint))
-        panel.contentView = hosting
-        panel.setContentSize(hosting.fittingSize)
-        if let screen = NSScreen.main?.visibleFrame {
-            panel.setFrameOrigin(CGPoint(x: screen.midX - panel.frame.width / 2, y: screen.midY - panel.frame.height / 2))
-        }
-        panel.orderFrontRegardless()   // shown without taking the keyboard, so typing can't dismiss it
-        self.panel = panel
         let title = Self.title(level, reading)
-        NSAccessibility.post(element: panel, notification: .announcementRequested,
-                             userInfo: [.announcement: title, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+        panel = AlertPanel.show(BatteryAlertView(level: level) { [weak self] in self?.close() }, announcing: title, state: state)
 
         sound = BatterySounds.sound(critical ? settings.criticalSound : settings.lowSound)
         sound?.loops = critical ? settings.criticalLoops : settings.lowLoops
@@ -146,11 +128,10 @@ struct BatteryAlertView: View {
     @ObservedObject private var battery = BatteryMonitor.shared
     let level: BatteryLevel
     let dismiss: () -> Void
-    @State private var armed = false   // the panel can appear under a click meant for something else
 
     var body: some View {
         let reading = battery.reading
-        VStack(spacing: 10) {
+        AlertCard(help: "Closes this alert and stops its sound. It also closes when the Mac is plugged in.", dismiss: dismiss) {
             Image(systemName: level == .critical ? "battery.0percent" : "battery.25percent")
                 .font(.system(size: 40, weight: .medium))
                 .foregroundStyle(level.color)
@@ -167,20 +148,6 @@ struct BatteryAlertView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Ink.secondary(scheme))
                 .fixedSize(horizontal: false, vertical: true)
-            Button("Dismiss", action: dismiss)
-                .controlSize(.large)
-                .disabled(!armed)
-                .padding(.top, 6)
-                .help("Closes this alert and stops its sound. It also closes when the Mac is plugged in.")
-        }
-        .padding(.horizontal, 28)
-        .padding(.vertical, 24)
-        .frame(width: 320)
-        .glassCard(in: RoundedRectangle(cornerRadius: 26))
-        .padding(12)   // room for the dark card's shadow
-        .task {
-            try? await Task.sleep(for: .seconds(1))
-            armed = true
         }
     }
 }

@@ -205,24 +205,19 @@ struct RingView: View {
             if showPercent {
                 Text(percent.map { "\(remaining ? 100 - Int($0) : Int($0))%" } ?? "—")   // 98.4 used is 98%, so 2% left
                     .font(.system(size: 15, weight: .semibold).monospacedDigit())
-                    .foregroundStyle((UsageWindow.nearLimitPercent..<100).contains(percent ?? 0) ? Color.red : Ink.primary(scheme))
+                    .foregroundStyle(Ink.primary(scheme))
             }
         }
     }
 
     private func shown(_ used: Double) -> Double { remaining ? 100 - used : used }
 
-    /// Near the limit the used part turns red: the arc itself, or, showing what's left, the track behind it.
-    /// Red warns from 98 until the window runs out; a spent window goes back to its colour and the badge says so.
+    /// Always the account's colour: near a limit the badge and Pulse's alert say so, not the arc.
     private func arc(_ used: Double, lineWidth: CGFloat) -> some View {
-        let near = (UsageWindow.nearLimitPercent..<100).contains(used)
-        return ZStack {
-            if near && remaining { Circle().stroke(Color.red, lineWidth: lineWidth) }
-            Circle()
-                .trim(from: 0, to: max(0, min(shown(used), 100)) / 100)
-                .stroke(near && !remaining ? Color.red : account.accent, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-        }
+        Circle()
+            .trim(from: 0, to: max(0, min(shown(used), 100)) / 100)
+            .stroke(account.accent, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+            .rotationEffect(.degrees(-90))
     }
 }
 
@@ -1060,7 +1055,7 @@ struct SettingsView: View {
                 Toggle("Tint the glass", isOn: state.glassTintBinding)
                     .help("Off shows plain Liquid Glass in both appearances, following the whole range of the Liquid Glass slider in System Settings → Appearance")
                 Toggle("Show what's left", isOn: state.showsRemainingBinding)
-                    .help("Rings, bars and percentages show what's left of each limit instead of what's used, emptying as you use it. Near a limit, the used part turns red.")
+                    .help("Rings, bars and percentages show what's left of each limit instead of what's used, emptying as you use it.")
             }
             Section("Battery") { BatterySettingsSection(settings: $state.persisted.battery) }
             Section("Codex pet") {
