@@ -7,6 +7,8 @@ trap 'rm -rf "$OUT"' EXIT
 export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"   # shared across runs, rebuilt only when sources change
 swiftc Sources/Pulse/DockGeometry.swift Sources/Pulse/Models.swift Checks/OverlayChecks.swift -o "$OUT/overlay"
 "$OUT/overlay"
+swiftc Sources/Pulse/Models.swift Checks/LimitAlertChecks.swift -o "$OUT/limit"
+"$OUT/limit"
 swiftc Sources/Pulse/CodexPetSprite.swift Checks/CodexPetChecks.swift -o "$OUT/pet"
 "$OUT/pet"
 swiftc Sources/Pulse/HotKey.swift Checks/VoiceShortcutChecks.swift -o "$OUT/voice-shortcut"

@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 @MainActor
 final class AppState: ObservableObject {
@@ -13,6 +14,7 @@ final class AppState: ObservableObject {
         var dock: DockEdge?
         var voiceHotKey: HotKeyCombo?   // nil = the default shortcut
         var showPet: Bool?   // nil = shown; independent of the Codex usage switch
+        var limitAlerts: [String: Date]?   // "account.window" → the reset already announced near its limit
     }
 
     var showsPet: Bool { persisted.showPet ?? true }
@@ -110,12 +112,44 @@ final class AppState: ObservableObject {
                     } else {
                         snapshots[snap.id] = snap
                     }
+                    announceNearLimit(snap)
                 }
             }
         } while refreshRequested
         refreshing = false
         try? FileManager.default.createDirectory(at: Self.dir, withIntermediateDirectories: true)
         try? JSONEncoder().encode(snapshots).write(to: Self.snapshotsURL, options: .atomic)
+    }
+
+    /// One notification per account per poll, naming the windows that just crossed 98%.
+    private func announceNearLimit(_ snap: AccountSnapshot) {
+        let before = persisted.limitAlerts ?? [:]
+        var alerted = before
+        let crossed = snap.newlyNearLimit(alerted: &alerted)
+        if alerted != before { persisted.limitAlerts = alerted }   // marked now, so the next poll doesn't ask again mid-prompt
+        guard !crossed.isEmpty, Bundle.main.bundleIdentifier != nil else { return }   // a bare dev binary has no notification center
+        let title = crossed.contains { ($0.percentUsed ?? 0) >= 100 }
+            ? "\(snap.displayName) hit a limit" : "\(snap.displayName) is near a limit"
+        let body = crossed.map { w in
+            let reset = resetLabel(w.resetsAt)
+            return "\(w.label) is at \(Int(w.percentUsed ?? 0))%." + (reset.isEmpty ? "" : " \(reset).")
+        }.joined(separator: "\n")
+        Task {
+            let center = UNUserNotificationCenter.current()
+            var posted = false
+            // asked on the first real crossing, not at launch; macOS remembers the answer
+            if (try? await center.requestAuthorization(options: [.alert, .sound])) == true {
+                let content = UNMutableNotificationContent()
+                content.title = title
+                content.body = body
+                content.sound = .default
+                posted = (try? await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))) != nil
+            }
+            // Not shown (denied or failed): unmark, so turning notifications on later still announces this period.
+            // shortcut: while denied this marks and unmarks every poll (two tiny state.json writes); check authorizationStatus first if that matters
+            guard !posted else { return }
+            for w in crossed { persisted.limitAlerts?[snap.alertKey(w)] = before[snap.alertKey(w)] }
+        }
     }
 
     func isEnabled(_ id: AccountID) -> Binding<Bool> {

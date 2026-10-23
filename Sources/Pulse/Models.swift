@@ -39,6 +39,9 @@ struct UsageWindow: Codable, Identifiable {
     var label: String
     var percentUsed: Double?   // 0–100
     var resetsAt: Date?
+
+    static let nearLimitPercent: Double = 98
+    var isNearLimit: Bool { (percentUsed ?? 0) >= Self.nearLimitPercent }
 }
 
 struct AccountSnapshot: Codable, Identifiable {
@@ -58,6 +61,26 @@ struct AccountSnapshot: Codable, Identifiable {
         stale.detail = detail
         return stale
     }
+
+    /// Windows that just crossed 98%, each announced once per reset period. `alerted` maps
+    /// "account.window" to the reset already announced; dropping under 95% rearms the window.
+    func newlyNearLimit(alerted: inout [String: Date]) -> [UsageWindow] {
+        guard health == .ok else { return [] }   // cached and stale numbers never alert
+        var crossed: [UsageWindow] = []
+        for w in windows {
+            guard let p = w.percentUsed else { continue }
+            let key = alertKey(w)
+            if p < 95 { alerted[key] = nil; continue }
+            let reset = w.resetsAt ?? .distantPast
+            // within 15 min is the same period: Claude's resets carry sub-second noise, Codex may rebuild it from seconds left
+            if !w.isNearLimit || alerted[key].map({ abs($0.timeIntervalSince(reset)) < 15 * 60 }) == true { continue }
+            alerted[key] = reset
+            crossed.append(w)
+        }
+        return crossed
+    }
+
+    func alertKey(_ w: UsageWindow) -> String { "\(id.rawValue).\(w.id)" }
 
     /// Tightest window = the one nearest lockout.
     var tightestPercent: Double? {

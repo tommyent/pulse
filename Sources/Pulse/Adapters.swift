@@ -638,28 +638,35 @@ enum AntigravityAdapter {
         return !version[r].split(separator: ".").compactMap { Int($0) }.lexicographicallyPrecedes([1, 1, 11])
     }
 
-    /// `command.data.groups[]` are separate pools (Gemini; Claude and GPT), each with a 5-hour and a
-    /// weekly bucket. The pool nearest its limit leads, so the ring shows it; the card lists both.
+    /// `command.data.groups[]` are pools ("Gemini Models", "Claude and GPT models"), each with a 5-hour and a
+    /// weekly bucket, plus groups named for one model ("Gemini 4 Argon") that cap only that model.
+    /// The pool nearest its limit leads, so the ring shows it; model caps come last, as the ring's dimmed tail.
     static func windows(from json: [String: Any]) -> [UsageWindow] {
         guard json["status"] as? String == "SUCCESS",
               let command = json["command"] as? [String: Any], command["name"] as? String == "usage",
               let groups = (command["data"] as? [String: Any])?["groups"] as? [[String: Any]] else { return [] }
-        let pools: [[UsageWindow]] = groups.map { group in
-            let pool = (group["name"] as? String ?? "Quota")
-                .replacingOccurrences(of: " models", with: "", options: .caseInsensitive)
-            return (group["buckets"] as? [[String: Any]] ?? []).compactMap { b -> UsageWindow? in
+        var pools: [[UsageWindow]] = [], caps: [UsageWindow] = []
+        for group in groups {
+            let name = group["name"] as? String ?? "Quota"
+            let isPool = name.range(of: "models", options: .caseInsensitive) != nil
+            let pool = name.replacingOccurrences(of: " models", with: "", options: .caseInsensitive)
+            let windows = (group["buckets"] as? [[String: Any]] ?? []).compactMap { b -> UsageWindow? in
                 guard let id = b["id"] as? String, b["disabled"] as? Bool != true else { return nil }
                 let window = b["window"] as? String
                 let label = window == "5h" ? "5-hour" : window == "weekly" ? "weekly" : b["name"] as? String ?? id
-                return UsageWindow(id: id, label: "\(pool) · \(label)",
+                return UsageWindow(id: isPool ? id : "weekly_model_\(id)", label: "\(pool) · \(label)",
                                    percentUsed: (b["remaining_fraction"] as? Double).map { (1 - $0) * 100 },
                                    resetsAt: (b["reset_time"] as? String).flatMap(parseISO))
             }
-            .sorted { $0.label.hasSuffix("5-hour") && !$1.label.hasSuffix("5-hour") }   // session first, like Codex
+            if isPool {
+                pools.append(windows.sorted { $0.label.hasSuffix("5-hour") && !$1.label.hasSuffix("5-hour") })   // session first, like Codex
+            } else {
+                caps += windows
+            }
         }
         return pools.filter { !$0.isEmpty }
             .sorted { ($0.compactMap(\.percentUsed).max() ?? 0) > ($1.compactMap(\.percentUsed).max() ?? 0) }
-            .flatMap { $0 }
+            .flatMap { $0 } + caps.sorted { ($0.percentUsed ?? 0) > ($1.percentUsed ?? 0) }
     }
 
     /// Only consulted when the report had no usage: agy also prints "not signed in" briefly while it

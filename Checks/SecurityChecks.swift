@@ -64,7 +64,11 @@ enum SecurityChecks {
         for (v, ok) in [("1.2.9\n", true), ("1.1.11", true), ("agy 2.0.0", true), ("1.1.10", false), ("0.9.99", false), ("", false)] {
             assert(AntigravityAdapter.supportsUsageReport(v) == ok, "agy version \(v)")
         }
-        func report(_ gemini: Double, _ thirdParty: Double) -> [String: Any] {
+        func report(_ gemini: Double, _ thirdParty: Double, argon: Double? = nil) -> [String: Any] {
+            let cap = argon.map { """
+            ,{"name":"Gemini 4 Argon","buckets":[
+              {"id":"gemini-argon-wtu-weekly","name":"Gemini 4 Argon Weekly Limit","window":"weekly","remaining_fraction":\($0),"reset_time":"2026-09-26T00:44:58Z"}]}
+            """ } ?? ""
             let json = """
             {"conversation_id":"","status":"SUCCESS","num_turns":0,"command":{"name":"usage","data":{"groups":[
              {"name":"Gemini Models","buckets":[
@@ -72,7 +76,7 @@ enum SecurityChecks {
               {"id":"gemini-5h","name":"Five Hour Limit Remaining","window":"5h","remaining_fraction":1,"reset_time":"2026-09-24T00:46:21Z"}]},
              {"name":"Claude and GPT models","buckets":[
               {"id":"3p-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":1,"reset_time":"2026-09-30T19:46:21Z"},
-              {"id":"3p-5h","name":"Five Hour Limit Remaining","window":"5h","remaining_fraction":\(thirdParty),"reset_time":"2026-09-24T00:46:21Z"}]}]}}}
+              {"id":"3p-5h","name":"Five Hour Limit Remaining","window":"5h","remaining_fraction":\(thirdParty),"reset_time":"2026-09-24T00:46:21Z"}]}\(cap)]}}}
             """
             return try! JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
         }
@@ -81,6 +85,10 @@ enum SecurityChecks {
         assert(ag[1].label == "Gemini · weekly" && ag[1].percentUsed == 25 && ag[1].resetsAt != nil)
         assert(ag[2].label == "Claude and GPT · 5-hour" && ag[2].percentUsed == 0)
         assert(AntigravityAdapter.windows(from: report(1, 0.5)).first?.id == "3p-5h", "the pool nearest its limit leads")
+        let capped = AntigravityAdapter.windows(from: report(0.97, 1, argon: 0))
+        assert(capped.map(\.id) == ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly", "weekly_model_gemini-argon-wtu-weekly"],
+               "a full model cap never leads: \(capped.map(\.id))")
+        assert(capped[4].label == "Gemini 4 Argon · weekly" && capped[4].percentUsed == 100)
         var failed = report(0.5, 0.5); failed["status"] = "ERROR"
         assert(AntigravityAdapter.windows(from: failed).isEmpty)
         let prompted: [String: Any] = ["status": "SUCCESS", "response": "Here is your usage…", "num_turns": 1]

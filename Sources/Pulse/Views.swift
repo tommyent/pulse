@@ -158,6 +158,7 @@ struct RingView: View {
     var tertiary: Double? = nil    // third window (Claude: the per-model weekly cap), innermost arc
     var size: CGFloat = 52
     var showPercent = true
+    var nearLimit = false   // any of the account's windows at 98%+, drawn or not
 
     var body: some View {
         VStack(spacing: 6) {
@@ -180,17 +181,31 @@ struct RingView: View {
                 BrandIcon(account: account, size: size * 0.4)
             }
             .frame(width: size, height: size)
+            // Claude's accent is nearly red, so a red arc alone wouldn't read: same badge style as the pet's paused mic
+            .overlay(alignment: .bottomTrailing) {
+                if nearLimit {
+                    Image(systemName: "exclamationmark")
+                        .font(.system(size: max(7, size * 0.17), weight: .heavy))
+                        .foregroundStyle(.white)
+                        .frame(width: max(11, size * 0.28), height: max(11, size * 0.28))
+                        .background(.red, in: Circle())
+                        .accessibilityHidden(true).allowsHitTesting(false)
+                }
+            }
             if showPercent {
                 Text(percent.map { "\(Int($0))%" } ?? "—")
                     .font(.system(size: 15, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(Ink.primary(scheme))
+                    .foregroundStyle((UsageWindow.nearLimitPercent..<100).contains(percent ?? 0) ? Color.red : Ink.primary(scheme))
             }
         }
     }
 
     private func arc(_ pct: Double, lineWidth: CGFloat, dimmed: Bool = false) -> some View {
         let frac = max(0, min(pct, 100)) / 100
-        let base = dimmed ? account.accent.opacity(0.6) : account.accent
+        // red warns from 98 until it runs out; a spent window goes back to its colour and the badge says so.
+        // Solid even for the dimmed tail, so it shows which window crossed.
+        let base = (UsageWindow.nearLimitPercent..<100).contains(pct) ? Color.red
+            : dimmed ? account.accent.opacity(0.6) : account.accent
         return Circle()
             .trim(from: 0, to: frac)
             .stroke(base, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
@@ -212,13 +227,14 @@ struct WindowRow: View {
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
                         Capsule().fill(scheme == .dark ? Color(white: 0.18) : Color.primary.opacity(0.25))
-                        Capsule().fill(tint)
+                        Capsule().fill(window.isNearLimit ? .red : tint)
                             .frame(width: max(6, geo.size.width * min(p, 100) / 100))
                     }
                 }
                 .frame(height: 6)
                 HStack {
                     Text("\(Int(p))% Used").font(.caption)
+                        .foregroundStyle(window.isNearLimit ? Color.red : Ink.secondary(scheme))
                     Spacer()
                     Text(resetLabel(window.resetsAt)).font(.caption)
                 }
@@ -721,15 +737,19 @@ struct OverlayView: View {
                     RingView(account: id,
                              percent: windows.first?.percentUsed,
                              secondary: windows.dropFirst().first?.percentUsed,
-                             // Antigravity's third window is the other pool's 5-hour, not a per-model cap
-                             tertiary: id == .antigravity ? nil : windows.dropFirst(2).first?.percentUsed,
+                             // Antigravity's third window is the other pool's 5-hour; its per-model caps come last
+                             tertiary: (id == .antigravity ? windows.first { $0.id.hasPrefix("weekly_model") }
+                                        : windows.dropFirst(2).first)?.percentUsed,
                              size: expanded ? 52 : 28,
-                             showPercent: expanded)
+                             showPercent: expanded,
+                             nearLimit: windows.contains(where: \.isNearLimit))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { itemFrames[id.rawValue] = $0 }
                 .accessibilityLabel("\(id.displayName) usage")
+                .accessibilityValue(windows.filter(\.isNearLimit)
+                    .map { "\($0.label) at \(Int($0.percentUsed ?? 0))%, near its limit" }.joined(separator: "; "))
             }
         }
         .focusEffectDisabled()   // the panel can be key now (pet composer); no focus ring on the rail
