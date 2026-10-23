@@ -39,6 +39,8 @@ Releases are source only: download a tagged release or clone the repository, the
 
 Click the menu bar icon for Settings, where **Launch at login** starts Pulse when you log in. Drag the rings to any screen edge; top and bottom lay out horizontally. In the light appearance the rings and cards sit on Liquid Glass with a white wash; the dark appearance is opaque black. Turn off **Tint the glass** in Settings for plain Liquid Glass in either appearance, which follows the Liquid Glass slider in System Settings → Appearance. Click a ring for that account's windows and reset times.
 
+Each ring's outer arc is the account's leading window, usually the 5-hour session, and the inner arc the next, usually the weekly limit. A per-model cap, such as Claude's weekly limit for one model or an Antigravity model's own limit, fills the disc behind the logo with the track's gray, rising as it's used. Near a limit (98%), that window's used arc turns red and the ring gets a red badge; the disc stays gray. **Show what's left** in Settings turns the rings, bars and percentages around: they show what's left and empty as you use them, the disc falls instead of rising, and near a limit the emptied part of the ring turns red.
+
 ### Battery
 
 On a Mac with a battery, the last ring on the rail is the battery: at the bottom of a vertical rail, at the right end of a horizontal one. It's green, turns yellow at the low level and red at the critical level, and shows a bolt while the Mac is plugged in.

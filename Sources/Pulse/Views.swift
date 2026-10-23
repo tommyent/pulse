@@ -5,7 +5,14 @@ import UniformTypeIdentifiers
 private let cardBackground = Color.black
 
 private struct GlassTintKey: EnvironmentKey { static let defaultValue = true }
+private struct ShowsRemainingKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues {
+    /// Rings, bars and percentages show what's left of each limit instead of what's used.
+    var showsRemaining: Bool {
+        get { self[ShowsRemainingKey.self] }
+        set { self[ShowsRemainingKey.self] = newValue }
+    }
+
     /// Pulse's own finish: a white wash over the glass in light mode, opaque piano black in dark. Off
     /// leaves plain system glass in both, spanning the full Liquid Glass slider in System Settings → Appearance.
     var glassTint: Bool {
@@ -153,10 +160,11 @@ private struct CodexPet: View {
 
 struct RingView: View {
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.showsRemaining) private var remaining
     let account: AccountID
     let percent: Double?
     var secondary: Double? = nil
-    var tertiary: Double? = nil    // third window (Claude: the per-model weekly cap), innermost arc
+    var tertiary: Double? = nil    // third window, a per-model cap (Claude's, Antigravity's): the disc behind the icon
     var size: CGFloat = 52
     var showPercent = true
     var nearLimit = false   // any of the account's windows at 98%+, drawn or not
@@ -164,16 +172,17 @@ struct RingView: View {
     var body: some View {
         VStack(spacing: 6) {
             ZStack {
+                // the outer track's gray, never red: the level rises as the cap is used, or falls showing what's left
+                if let tertiary {
+                    let d = size * 0.61   // inside the inner track
+                    Rectangle().fill(Color.primary.opacity(0.18))
+                        .frame(width: d, height: d * max(0, min(shown(tertiary), 100)) / 100)
+                        .frame(width: d, height: d, alignment: .bottom)
+                        .clipShape(Circle())
+                }
                 Circle().stroke(Color.primary.opacity(0.18), lineWidth: size * 0.12)
                 if let percent {
                     arc(percent, lineWidth: size * 0.12)
-                }
-                // inner track carries two windows stacked: the third (Claude's per-model cap, always the
-                // larger) in the lighter shade behind, the second (all models) in full accent in front,
-                // so the lighter tail reads as the overshoot beyond all-models
-                if let tertiary {
-                    arc(tertiary, lineWidth: size * 0.07, dimmed: true)
-                        .padding(size * 0.16)
                 }
                 if let secondary {
                     arc(secondary, lineWidth: size * 0.07)
@@ -194,23 +203,26 @@ struct RingView: View {
                 }
             }
             if showPercent {
-                Text(percent.map { "\(Int($0))%" } ?? "—")
+                Text(percent.map { "\(remaining ? 100 - Int($0) : Int($0))%" } ?? "—")   // 98.4 used is 98%, so 2% left
                     .font(.system(size: 15, weight: .semibold).monospacedDigit())
                     .foregroundStyle((UsageWindow.nearLimitPercent..<100).contains(percent ?? 0) ? Color.red : Ink.primary(scheme))
             }
         }
     }
 
-    private func arc(_ pct: Double, lineWidth: CGFloat, dimmed: Bool = false) -> some View {
-        let frac = max(0, min(pct, 100)) / 100
-        // red warns from 98 until it runs out; a spent window goes back to its colour and the badge says so.
-        // Solid even for the dimmed tail, so it shows which window crossed.
-        let base = (UsageWindow.nearLimitPercent..<100).contains(pct) ? Color.red
-            : dimmed ? account.accent.opacity(0.6) : account.accent
-        return Circle()
-            .trim(from: 0, to: frac)
-            .stroke(base, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-            .rotationEffect(.degrees(-90))
+    private func shown(_ used: Double) -> Double { remaining ? 100 - used : used }
+
+    /// Near the limit the used part turns red: the arc itself, or, showing what's left, the track behind it.
+    /// Red warns from 98 until the window runs out; a spent window goes back to its colour and the badge says so.
+    private func arc(_ used: Double, lineWidth: CGFloat) -> some View {
+        let near = (UsageWindow.nearLimitPercent..<100).contains(used)
+        return ZStack {
+            if near && remaining { Circle().stroke(Color.red, lineWidth: lineWidth) }
+            Circle()
+                .trim(from: 0, to: max(0, min(shown(used), 100)) / 100)
+                .stroke(near && !remaining ? Color.red : account.accent, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
     }
 }
 
@@ -256,6 +268,7 @@ struct BatteryRing: View {
 
 struct WindowRow: View {
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.showsRemaining) private var remaining
     let window: UsageWindow
     var tint: Color = .white
 
@@ -267,14 +280,15 @@ struct WindowRow: View {
             if let p = window.percentUsed {
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
-                        Capsule().fill(scheme == .dark ? Color(white: 0.18) : Color.primary.opacity(0.25))
-                        Capsule().fill(window.isNearLimit ? .red : tint)
-                            .frame(width: max(6, geo.size.width * min(p, 100) / 100))
+                        Capsule().fill(window.isNearLimit && remaining ? .red   // the used part turns red, as on the rings
+                                       : scheme == .dark ? Color(white: 0.18) : Color.primary.opacity(0.25))
+                        Capsule().fill(window.isNearLimit && !remaining ? .red : tint)
+                            .frame(width: max(6, geo.size.width * min(remaining ? 100 - p : p, 100) / 100))
                     }
                 }
                 .frame(height: 6)
                 HStack {
-                    Text("\(Int(p))% Used").font(.caption)
+                    Text(remaining ? "\(100 - Int(p))% Left" : "\(Int(p))% Used").font(.caption)
                         .foregroundStyle(window.isNearLimit ? Color.red : Ink.secondary(scheme))
                     Spacer()
                     Text(resetLabel(window.resetsAt)).font(.caption)
@@ -747,6 +761,7 @@ struct OverlayView: View {
         .onGeometryChange(for: CGSize.self) { $0.size } action: { onSize?($0) }
         .colorScheme(state.isLight ? .light : .dark)
         .environment(\.glassTint, state.glassTint)
+        .environment(\.showsRemaining, state.showsRemaining)
     }
 
     @ViewBuilder
@@ -779,9 +794,8 @@ struct OverlayView: View {
                     RingView(account: id,
                              percent: windows.first?.percentUsed,
                              secondary: windows.dropFirst().first?.percentUsed,
-                             // Antigravity's third window is the other pool's 5-hour; its per-model caps come last
-                             tertiary: (id == .antigravity ? windows.first { $0.id.hasPrefix("weekly_model") }
-                                        : windows.dropFirst(2).first)?.percentUsed,
+                             // only a per-model cap (Claude's, Antigravity's): Grok's products and Antigravity's other pool stay on the card
+                             tertiary: windows.first { $0.id.hasPrefix("weekly_model") }?.percentUsed,
                              size: expanded ? 52 : 28,
                              showPercent: expanded,
                              nearLimit: windows.contains(where: \.isNearLimit))
@@ -790,8 +804,11 @@ struct OverlayView: View {
                 .buttonStyle(.plain)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { itemFrames[id.rawValue] = $0 }
                 .accessibilityLabel("\(id.displayName) usage")
-                .accessibilityValue(windows.filter(\.isNearLimit)
-                    .map { "\($0.label) at \(Int($0.percentUsed ?? 0))%, near its limit" }.joined(separator: "; "))
+                .accessibilityValue(windows.filter(\.isNearLimit).map { w in
+                    let p = w.percentUsed ?? 0
+                    return state.showsRemaining ? "\(w.label) has \(100 - Int(p))% left, near its limit"
+                        : "\(w.label) at \(Int(p))%, near its limit"
+                }.joined(separator: "; "))
             }
             // last: the bottom of a vertical rail, the right end of a horizontal one
             if state.persisted.battery.showInRail, let reading = battery.reading {
@@ -931,6 +948,7 @@ struct MenuBarPopover: View {
         .frame(width: 300)
         .background(state.isLight ? Color(white: 0.95) : cardBackground)
         .colorScheme(state.isLight ? .light : .dark)   // drives .primary text and system controls
+        .environment(\.showsRemaining, state.showsRemaining)
     }
 }
 
@@ -1041,6 +1059,8 @@ struct SettingsView: View {
                 }
                 Toggle("Tint the glass", isOn: state.glassTintBinding)
                     .help("Off shows plain Liquid Glass in both appearances, following the whole range of the Liquid Glass slider in System Settings → Appearance")
+                Toggle("Show what's left", isOn: state.showsRemainingBinding)
+                    .help("Rings, bars and percentages show what's left of each limit instead of what's used, emptying as you use it. Near a limit, the used part turns red.")
             }
             Section("Battery") { BatterySettingsSection(settings: $state.persisted.battery) }
             Section("Codex pet") {

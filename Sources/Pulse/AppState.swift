@@ -14,6 +14,7 @@ final class AppState: ObservableObject {
         var dock: DockEdge?
         var voiceHotKey: HotKeyCombo?   // nil = the default shortcut
         var showPet: Bool?   // nil = shown; independent of the Codex usage switch
+        var showRemaining: Bool?   // nil = off: rings show what's used
         var limitAlerts: [String: Date]?   // "account.window" → the reset already announced near its limit
 
         var batterySettings: BatterySettings?   // nil = defaults
@@ -34,6 +35,11 @@ final class AppState: ObservableObject {
     }
 
     var dock: DockEdge { persisted.dock ?? .right }
+
+    var showsRemaining: Bool { persisted.showRemaining ?? false }
+    var showsRemainingBinding: Binding<Bool> {
+        Binding(get: { self.showsRemaining }, set: { self.persisted.showRemaining = $0 })
+    }
 
     var isLight: Bool { persisted.lightMode ?? false }
     var lightModeBinding: Binding<Bool> {
@@ -138,7 +144,9 @@ final class AppState: ObservableObject {
             ? "\(snap.displayName) hit a limit" : "\(snap.displayName) is near a limit"
         let body = crossed.map { w in
             let reset = resetLabel(w.resetsAt)
-            return "\(w.label) is at \(Int(w.percentUsed ?? 0))%." + (reset.isEmpty ? "" : " \(reset).")
+            let p = w.percentUsed ?? 0
+            return (showsRemaining ? "\(w.label) has \(100 - Int(p))% left." : "\(w.label) is at \(Int(p))%.")
+                + (reset.isEmpty ? "" : " \(reset).")
         }.joined(separator: "\n")
         Task {
             let center = UNUserNotificationCenter.current()
