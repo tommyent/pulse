@@ -13,6 +13,7 @@ extension Bundle {
 struct PulseApp: App {
     @StateObject private var state: AppState
     private let overlay: OverlayController
+    private let batteryAlerts: BatteryAlerts
 
     static let menuBarIcon: NSImage? = {
         guard let url = Bundle.pulseResources.url(forResource: "Resources/pulse", withExtension: "svg"),
@@ -35,6 +36,7 @@ struct PulseApp: App {
         let state = AppState()
         _state = StateObject(wrappedValue: state)   // the pet's folder waits for its first use: no Documents prompt at launch
         overlay = OverlayController(state: state)
+        batteryAlerts = BatteryAlerts(state: state)
         NSApplication.shared.setActivationPolicy(.accessory)   // no Dock icon
         if Bundle.main.bundleIdentifier != nil { UNUserNotificationCenter.current().delegate = BannerWhileActive.shared }
     }
@@ -73,7 +75,7 @@ private final class OverlayPanel: NSPanel {
 
 /// The panel is rarely key, and a first click on a non-key window only makes it key: the rail's drag would need a
 /// second click. Accepting the first mouse lets that first click reach the overlay too.
-private final class OverlayHostingView<Content: View>: NSHostingView<Content> {
+final class OverlayHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 

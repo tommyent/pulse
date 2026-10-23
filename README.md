@@ -39,6 +39,16 @@ Releases are source only: download a tagged release or clone the repository, the
 
 Click the menu bar icon for Settings, where **Launch at login** starts Pulse when you log in. Drag the rings to any screen edge; top and bottom lay out horizontally. In the light appearance the rings and cards sit on Liquid Glass with a white wash; the dark appearance is opaque black. Turn off **Tint the glass** in Settings for plain Liquid Glass in either appearance, which follows the Liquid Glass slider in System Settings → Appearance. Click a ring for that account's windows and reset times.
 
+### Battery
+
+On a Mac with a battery, the last ring on the rail is the battery: at the bottom of a vertical rail, at the right end of a horizontal one. It's green, turns yellow at the low level and red at the critical level, and shows a bolt while the Mac is plugged in.
+
+When the charge reaches either level, Pulse shows its own alert in the middle of the screen with the percentage and, when macOS has an estimate, the time left. It never uses Notification Center. The alert doesn't take the keyboard, ignores clicks for its first second, and stays until you click **Dismiss** or plug in; plugging in also stops its sound. Each level alerts once per discharge.
+
+**Settings → Battery** sets both levels (20% and 10% by default), a sound for each, and whether it loops until you act. The sounds are macOS's alert sounds, anything in `~/Library/Sounds`, and audio files you add with **Import Sounds…**, which copies them into `~/Library/Application Support/Pulse/Sounds`. If `~/.config/pushover.env` holds `PUSHOVER_USER` and `PUSHOVER_TOKEN` (and optionally `PUSHOVER_DEVICE`) for [Pushover](https://pushover.net), a critical alert is also pushed to your phone; **Send Test Push** checks the setup.
+
+To try the alerts without draining the battery, simulate a charge: `defaults write app.pulse simulatedBattery "8 25"` is 8% with 25 minutes left, `"8 ac"` is plugged in, and `defaults delete app.pulse simulatedBattery` returns to the real battery.
+
 ### The Codex pet
 
 Click the pet to chat. **Settings → Codex pet → Show the Codex pet** hides it, separately from the Codex usage ring. Hiding it, or the usage rings on the desktop, ends a call, frees the voice shortcut and starts nothing new; work already running finishes, then Pulse stops Codex until you open the pet again.
@@ -68,6 +78,7 @@ For bigger requests, such as building something, research or multi-step changes,
 - Pulse reads the current user's own CLI credentials: Claude Code's Keychain item (through Apple's `security` tool, so it never prompts) or `~/.claude/.credentials.json`, `~/.codex/auth.json`, and `~/.grok/auth.json`. Grok's file is refreshed in place with an atomic, owner-only write.
 - Web sign-ins made through **Connect** live in macOS WebKit storage; Grok's saved cookie header uses the Keychain service `app.pulse.auth`. Preferences and usage snapshots live in `~/Library/Application Support/Pulse`. The voice helper's error output goes to `pulse-voice.err` in your temporary folder, for diagnosing failed calls.
 - Antigravity usage comes from the CLI's own report: Pulse runs `agy -p /usage --output-format json` in a private temporary folder on each refresh and never reads the Google sign-in. The report is a local command, so it sends no prompt and uses no quota; agy writes its usual log file for each run. Before each run Pulse sends one empty HEAD request to `oauth2.googleapis.com` and skips agy when it gets no answer, because agy opens a browser sign-in when its token refresh hits a network error. If agy reports a sign-out or stalls, Pulse stops running it until you click **Refresh**.
+- Battery alerts read the battery through macOS's power-source API, which needs no permission. Pulse reads `~/.config/pushover.env` only to check it and to send a push, sends the keys only to `api.pushover.net`, and never saves or logs them.
 - Usage requests go straight to each provider over HTTPS. Authenticated responses are not cached to disk and redirects are refused, so a token is never forwarded off-host.
 - Pet chat and audio go through Codex and OpenAI under your Codex account, which may retain threads. The pet thread starts in `~/Documents/codex-pet` with workspace-write sandboxing and user-reviewed, on-request approvals. Pulse creates the folder and seeds an `AGENTS.md` there when it launches; existing files have only Pulse's original sentences updated, preserving your own instructions. The instructions require permission before working outside the inbox, and let the pet send, pay, book or contact someone only when you explicitly ask for that specific action, with the permission prompts as the check; the sandbox enforces write restrictions, while normal read access follows Codex's workspace-write policy. Supported approval, consent and question requests from the pet and its delegated agents are shown for review. Requests Pulse can't show are cancelled or left unanswered with a note in the chat, so they are never recorded as your refusal; other unknown requests are rejected. Your own Codex configuration and tools apply.
 
@@ -77,7 +88,7 @@ For bigger requests, such as building something, research or multi-step changes,
 ./scripts/check.sh
 ```
 
-Offline, no sign-ins or audio capture; needs Node.js 18 or later. Covers overlay geometry, reset labels, the pet sprite sheet, credential writes, redirect and cache policy, the voice shortcut, Grok parsing, the Antigravity report and its version guard, Codex startup, timeouts and broken pipes, the native voice protocol and lifecycle, voice sounds, a denied microphone, Codex Stop, refused messages, the pet's consent and questions, conversation recovery and the work-model choice.
+Offline, no sign-ins or audio capture; needs Node.js 18 or later. Covers overlay geometry, reset labels, battery levels, alerts and the Pushover request, the pet sprite sheet, credential writes, redirect and cache policy, the voice shortcut, Grok parsing, the Antigravity report and its version guard, Codex startup, timeouts and broken pipes, the native voice protocol and lifecycle, voice sounds, a denied microphone, Codex Stop, refused messages, the pet's consent and questions, conversation recovery and the work-model choice.
 
 Live checks that use your accounts: `./scripts/grok-check.sh` may refresh Grok credentials, and `./scripts/codex-chat-check.sh` opens a temporary conversation with the app's settings, sends one prompt and negotiates a voice session. Provider endpoints and the experimental realtime protocol can change without notice.
 

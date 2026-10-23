@@ -1,5 +1,6 @@
 import ServiceManagement
 import SwiftUI
+import UniformTypeIdentifiers
 
 private let cardBackground = Color.black
 
@@ -210,6 +211,46 @@ struct RingView: View {
             .trim(from: 0, to: frac)
             .stroke(base, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
             .rotationEffect(.degrees(-90))
+    }
+}
+
+/// The battery as the rail's last ring: green, yellow or red by charge, a bolt while plugged in.
+struct BatteryRing: View {
+    @Environment(\.colorScheme) private var scheme
+    let reading: BatteryReading
+    let level: BatteryLevel
+    var size: CGFloat = 52
+    var showPercent = true
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack {
+                Circle().stroke(Color.primary.opacity(0.18), lineWidth: size * 0.12)
+                Circle()
+                    .trim(from: 0, to: CGFloat(max(reading.percent, 1)) / 100)
+                    .stroke(level.color, style: StrokeStyle(lineWidth: size * 0.12, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Image(systemName: reading.onAC ? "bolt.fill" : "battery.\(min(100, (reading.percent + 12) / 25 * 25))percent")
+                    .font(.system(size: size * (reading.onAC ? 0.34 : 0.26), weight: .semibold))
+                    .foregroundStyle(Ink.primary(scheme))
+            }
+            .frame(width: size, height: size)
+            if showPercent {
+                Text("\(reading.percent)%")
+                    .font(.system(size: 15, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(level == .critical ? Color.red : Ink.primary(scheme))
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Battery")
+        .accessibilityAddTraits(.isImage)   // without a role, VoiceOver may skip it
+        .accessibilityValue(summary)
+        .help(summary)
+    }
+
+    private var summary: String {
+        "\(reading.percent)%" + (reading.onAC ? ", plugged in" : reading.minutesLeft.map { ", about \(batteryTimeLeft($0)) left" } ?? "")
+            + (reading.simulated ? " (simulated)" : "")
     }
 }
 
@@ -660,6 +701,7 @@ struct OverlayView: View {
     var onRailFrame: ((CGRect) -> Void)? = nil
     var onCardFrame: ((CGRect) -> Void)? = nil
     var pointerInside: (() -> Bool)? = nil   // whether the pointer is really over the panel
+    @ObservedObject private var battery = BatteryMonitor.shared
     @State private var exitWatch: Task<Void, Never>?
 
     private var expanded: Bool { state.hoveringOverlay || state.cardVisible || state.petVisible }
@@ -750,6 +792,11 @@ struct OverlayView: View {
                 .accessibilityLabel("\(id.displayName) usage")
                 .accessibilityValue(windows.filter(\.isNearLimit)
                     .map { "\($0.label) at \(Int($0.percentUsed ?? 0))%, near its limit" }.joined(separator: "; "))
+            }
+            // last: the bottom of a vertical rail, the right end of a horizontal one
+            if state.persisted.battery.showInRail, let reading = battery.reading {
+                BatteryRing(reading: reading, level: state.persisted.battery.level(reading.percent),
+                            size: expanded ? 52 : 28, showPercent: expanded)
             }
         }
         .focusEffectDisabled()   // the panel can be key now (pet composer); no focus ring on the rail
@@ -995,6 +1042,7 @@ struct SettingsView: View {
                 Toggle("Tint the glass", isOn: state.glassTintBinding)
                     .help("Off shows plain Liquid Glass in both appearances, following the whole range of the Liquid Glass slider in System Settings → Appearance")
             }
+            Section("Battery") { BatterySettingsSection(settings: $state.persisted.battery) }
             Section("Codex pet") {
                 Toggle("Show the Codex pet", isOn: state.showPetBinding)
                     .help("Chat and live voice with Codex, separate from the Codex usage ring. Off hides the pet, ends a call, frees the shortcut and starts nothing new; work already running finishes, then Codex stops.")
@@ -1013,5 +1061,92 @@ struct SettingsView: View {
         .onAppear { loginItem = SMAppService.mainApp.status }
         .frame(width: 420, height: 500)
         .preferredColorScheme(state.isLight ? .light : .dark)
+    }
+}
+
+/// Settings → Battery. A binding, not AppState, so it can be rendered on its own.
+struct BatterySettingsSection: View {
+    @Binding var settings: BatterySettings
+    @ObservedObject private var battery = BatteryMonitor.shared
+    @State private var sounds: [String] = []
+    @State private var importNote = ""
+    @State private var pushoverReady = false
+    @State private var pushNote = ""
+
+    var body: some View {
+        if battery.reading == nil {
+            Text("This Mac has no battery.").foregroundStyle(.secondary)
+        } else {
+            rows
+        }
+    }
+
+    @ViewBuilder private var rows: some View {
+        let b = settings
+        Toggle("Show the battery in the rail", isOn: $settings.showInRail)
+            .onAppear {
+                sounds = BatterySounds.all().map(\.name)
+                pushoverReady = Pushover.configured
+            }
+        Toggle("Alert when the battery is low", isOn: $settings.alerts)
+        LabeledContent("Yellow and low alert at") {
+            Stepper("\(b.lowPercent)%", value: $settings.lowPercent, in: (b.criticalPercent + 5)...90, step: 5)
+        }
+        LabeledContent("Red and critical alert at") {
+            Stepper("\(b.criticalPercent)%", value: $settings.criticalPercent, in: 5...(b.lowPercent - 5), step: 5)
+        }
+        soundRow("Low sound", sound: $settings.lowSound, loops: $settings.lowLoops)
+        soundRow("Critical sound", sound: $settings.criticalSound, loops: $settings.criticalLoops)
+        LabeledContent {
+            Button("Import Sounds…") {
+                let panel = NSOpenPanel()
+                panel.allowedContentTypes = [.audio]
+                panel.allowsMultipleSelection = true
+                guard panel.runModal() == .OK else { return }
+                let rejected = BatterySounds.importFiles(panel.urls)
+                sounds = BatterySounds.all().map(\.name)
+                importNote = rejected.isEmpty ? "" : "Couldn't import \(rejected.joined(separator: ", "))"
+            }
+        } label: {
+            Text("Your own sounds")
+            Text(importNote.isEmpty ? "Any audio file macOS plays. Copied into Pulse's folder." : importNote)
+        }
+        Toggle(isOn: Binding(get: { pushoverReady && b.pushover }, set: { settings.pushover = $0 })) {
+            Text("Push to your phone when critical")
+            Text(pushoverReady ? "Through Pushover, with the keys in ~/.config/pushover.env"
+                 : "Needs Pushover's PUSHOVER_USER and PUSHOVER_TOKEN in ~/.config/pushover.env")
+        }
+        .disabled(!pushoverReady)
+        if pushoverReady {
+            LabeledContent(pushNote) {
+                Button("Send Test Push") {
+                    pushNote = "Sending…"
+                    Task { pushNote = await BatteryAlerts.push(title: "Pulse test", message: "Battery alerts will reach you here.") ?? "Sent" }
+                }
+            }
+        }
+        Text("An alert stays on screen with its sound until you click Dismiss or plug in. It never goes to Notification Center.")
+            .font(.caption).foregroundStyle(.secondary)
+        if battery.reading?.simulated == true {
+            Text("Simulated battery. `defaults delete app.pulse simulatedBattery` returns to the real one.")
+                .font(.caption).foregroundStyle(.orange)
+        }
+    }
+
+    private func soundRow(_ title: String, sound: Binding<String?>, loops: Binding<Bool>) -> some View {
+        LabeledContent(title) {
+            Picker(title, selection: sound) {
+                Text("None").tag(String?.none)
+                ForEach(sounds, id: \.self) { Text($0).tag(String?.some($0)) }
+            }
+            .labelsHidden()
+            .fixedSize()
+            Button { BatterySounds.togglePreview(sound.wrappedValue) } label: { Image(systemName: "play.fill") }
+                .buttonStyle(.borderless)
+                .disabled(sound.wrappedValue == nil)
+                .help("Play this sound once; click again to stop")
+                .accessibilityLabel("Play \(title.lowercased())")
+            Toggle("Loop", isOn: loops).toggleStyle(.checkbox).disabled(sound.wrappedValue == nil)
+        }
     }
 }

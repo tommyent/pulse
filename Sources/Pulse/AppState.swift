@@ -15,6 +15,12 @@ final class AppState: ObservableObject {
         var voiceHotKey: HotKeyCombo?   // nil = the default shortcut
         var showPet: Bool?   // nil = shown; independent of the Codex usage switch
         var limitAlerts: [String: Date]?   // "account.window" → the reset already announced near its limit
+
+        var batterySettings: BatterySettings?   // nil = defaults
+        var battery: BatterySettings {
+            get { batterySettings ?? BatterySettings() }
+            set { batterySettings = newValue }
+        }
     }
 
     var showsPet: Bool { persisted.showPet ?? true }
