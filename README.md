@@ -51,6 +51,20 @@ When the charge reaches either level, Pulse shows its own alert in the middle of
 
 To try the alerts without draining the battery, simulate a charge: `defaults write app.pulse simulatedBattery "8 25"` is 8% with 25 minutes left, `"8 ac"` is plugged in, and `defaults delete app.pulse simulatedBattery` returns to the real battery.
 
+### Breaks
+
+Turn on **Settings → Breaks → Remind me to take breaks** for regular breaks from the screen: by default a 20-second micro break every 20 minutes and a 5-minute long break every hour, which takes the place of that hour's micro break. Both are set there, and the long break can be turned off.
+
+Thirty seconds before a break, a small countdown grows out of the middle of the rail: the seconds left in a ring that empties, and the break's length. Click it to start the break now; otherwise the break starts when the ring is empty. With the rings hidden, the countdown appears at the middle of the screen's right edge.
+
+The break covers every display: a dark screen with a coloured glow at its edges, the time left, and **Back to Work** (or Escape), **Pause** and **Snooze 5 min**. The colour is one of six presets or your own, picked with the colour well or typed as a hex value.
+
+- **Waiting and time away:** no break starts during a Pulse voice call; it comes once the call ends. Time away counts as a break: when the Mac has had no input, been locked or asleep for as long as a break, its clock starts over.
+- **Ideas:** with Apple Intelligence on, the on-device model suggests something to do that fits the break, under the timer. It builds on the interests you add in Settings (type a word and press Return; click × to remove it), at the level set by the slider from easy to adventurous. **Reroll** asks again; **Surprise me** ignores your interests for something odd you can do where you are. Without Apple Intelligence the line is hidden.
+- **Agents:** with **Show agents that are working** on, the Codex pet walks out along the bottom of the break screen. If you use [Rex](https://www.superlogical.com/rex), agents it reports as working join it: each Claude Code agent paces along the bottom, and Codex, Antigravity and Grok agents float around the edges. An agent waiting for you stands still with a "!". Hover over one for its pane and status. With Reduce Motion on, they stand still.
+
+To try it without waiting, turn breaks on and run `defaults write app.pulse simulatedBreak micro` (or `long`). `defaults write app.pulse simulatedAgents "claude-code working, codex blocked"` shows stand-in agents instead of Rex's; `defaults delete app.pulse simulatedAgents` goes back to Rex.
+
 ### The Codex pet
 
 Click the pet to chat. **Settings → Codex pet → Show the Codex pet** hides it, separately from the Codex usage ring. Hiding it, or the usage rings on the desktop, ends a call, frees the voice shortcut and starts nothing new; work already running finishes, then Pulse stops Codex until you open the pet again.
@@ -81,6 +95,7 @@ For bigger requests, such as building something, research or multi-step changes,
 - Web sign-ins made through **Connect** live in macOS WebKit storage; Grok's saved cookie header uses the Keychain service `app.pulse.auth`. Preferences and usage snapshots live in `~/Library/Application Support/Pulse`. The voice helper's error output goes to `pulse-voice.err` in your temporary folder, for diagnosing failed calls.
 - Antigravity usage comes from the CLI's own report: Pulse runs `agy -p /usage --output-format json` in a private temporary folder on each refresh and never reads the Google sign-in. The report is a local command, so it sends no prompt and uses no quota; agy writes its usual log file for each run. Before each run Pulse sends one empty HEAD request to `oauth2.googleapis.com` and skips agy when it gets no answer, because agy opens a browser sign-in when its token refresh hits a network error. If agy reports a sign-out or stalls, Pulse stops running it until you click **Refresh**.
 - Battery alerts read the battery through macOS's power-source API, which needs no permission. Pulse reads `~/.config/pushover.env` only to check it and to send a push, sends the keys only to `api.pushover.net`, and never saves or logs them.
+- Break ideas are written on this Mac by Apple Intelligence's on-device model; your interests aren't sent anywhere. Pulse reads Rex only while a break is on screen, through the `rex` command with `--autostart=false`, so it never starts a Rex server; it reads each pane's label and status line and keeps nothing.
 - Usage requests go straight to each provider over HTTPS. Authenticated responses are not cached to disk and redirects are refused, so a token is never forwarded off-host.
 - Pet chat and audio go through Codex and OpenAI under your Codex account, which may retain threads. The pet thread starts in `~/Documents/codex-pet` with workspace-write sandboxing and on-request approvals decided by Codex's auto-review. Pulse creates the folder and seeds an `AGENTS.md` there when it launches; existing files have only Pulse's original sentences updated, preserving your own instructions. The instructions let the pet read other folders without asking but require permission before it writes to or acts in them, and let it send, pay, book or contact someone only when you explicitly ask for that specific action; an approved permission request doesn't count as asking. The sandbox enforces write restrictions, while normal read access follows Codex's workspace-write policy. Supported approval, consent and question requests that Codex sends to you from the pet and its delegated agents are shown for review. Requests Pulse can't show are cancelled or left unanswered with a note in the chat, so they are never recorded as your refusal; other unknown requests are rejected. Your own Codex configuration and tools apply.
 
@@ -90,7 +105,7 @@ For bigger requests, such as building something, research or multi-step changes,
 ./scripts/check.sh
 ```
 
-Offline, no sign-ins or audio capture; needs Node.js 18 or later. Covers overlay geometry, reset labels, battery levels, alerts and the Pushover request, the pet sprite sheet, credential writes, redirect and cache policy, the voice shortcut, Grok parsing, the Antigravity report and its version guard, Codex startup, timeouts and broken pipes, the native voice protocol and lifecycle, voice sounds, a denied microphone, Codex Stop, refused messages, the pet's consent and questions, conversation recovery and the work-model choice.
+Offline, no sign-ins or audio capture; needs Node.js 18 or later. Covers overlay geometry, reset labels, battery levels, alerts and the Pushover request, the pet sprite sheet, credential writes, redirect and cache policy, the voice shortcut, Grok parsing, the Antigravity report and its version guard, Codex startup, timeouts and broken pipes, the native voice protocol and lifecycle, voice sounds, a denied microphone, Codex Stop, refused messages, the pet's consent and questions, conversation recovery and the work-model choice, the break schedule (micro and long breaks, the countdown, pause, snooze, time away and voice calls), interests, the idea prompt, Rex's status and events, and that settings saved by an older Pulse load unchanged.
 
 Live checks that use your accounts: `./scripts/grok-check.sh` may refresh Grok credentials, and `./scripts/codex-chat-check.sh` opens a temporary conversation with the app's settings, sends one prompt and negotiates a voice session. Provider endpoints and the experimental realtime protocol can change without notice.
 
@@ -106,6 +121,11 @@ Live checks that use your accounts: `./scripts/grok-check.sh` may refresh Grok c
 | `PetApprovals.swift` | native approval, consent and question prompts, scoped replies and cancellation |
 | `HotKey.swift` | global shortcut registration and the Settings recorder |
 | `Views.swift` | rail, rings, usage cards, pet card, Settings |
+| `Breaks.swift` | break settings, schedule, interests, colours and the idea prompt |
+| `BreakController.swift` | the break clock, idle and lock detection, the overlay windows |
+| `BreakViews.swift` | the countdown, the break screen, its agents and Settings → Breaks |
+| `BreakIdeas.swift` | ideas from Apple Intelligence's on-device model |
+| `RexAgents.swift` | which agents Rex reports as working |
 | `PulseApp.swift` | app entry, overlay panel, shortcut binding |
 | `AppState.swift` | persisted settings, refresh loop, snapshots |
 | `Models.swift` | account IDs, usage windows, snapshots and their health |

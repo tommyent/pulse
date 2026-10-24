@@ -21,6 +21,12 @@ final class AppState: ObservableObject {
             get { batterySettings ?? BatterySettings() }
             set { batterySettings = newValue }
         }
+
+        var breakSettings: BreakSettings?   // nil = defaults
+        var breaks: BreakSettings {
+            get { breakSettings ?? BreakSettings() }
+            set { breakSettings = newValue }
+        }
     }
 
     var showsPet: Bool { persisted.showPet ?? true }

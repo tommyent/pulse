@@ -711,6 +711,8 @@ struct OverlayView: View {
     var onCardFrame: ((CGRect) -> Void)? = nil
     var pointerInside: (() -> Bool)? = nil   // whether the pointer is really over the panel
     @ObservedObject private var battery = BatteryMonitor.shared
+    @ObservedObject private var breaks = BreakController.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var exitWatch: Task<Void, Never>?
 
     private var expanded: Bool { state.hoveringOverlay || state.cardVisible || state.petVisible }
@@ -759,8 +761,21 @@ struct OverlayView: View {
         .environment(\.showsRemaining, state.showsRemaining)
     }
 
+    /// A break's countdown grows out of the rail's middle; an open card moves along beside it.
     @ViewBuilder
     private func card(tail: Edge) -> some View {
+        let beside = state.dock.isVertical
+            ? AnyLayout(VStackLayout(alignment: tail == .leading ? .leading : .trailing, spacing: 10))
+            : AnyLayout(HStackLayout(alignment: tail == .top ? .top : .bottom, spacing: 10))
+        beside {
+            BreakPill(controller: breaks, tail: tail)
+            usageOrPetCard(tail: tail)
+        }
+        .animation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.45, bounce: 0.3), value: breaks.phase.isCountdown)
+    }
+
+    @ViewBuilder
+    private func usageOrPetCard(tail: Edge) -> some View {
         if state.petVisible {
             PetCard(tailEdge: tail, tailAt: tailAt("pet"), showUsage: state.persisted.enabled.contains(.codex) ? { toggleCard(.codex) } : nil)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
@@ -981,101 +996,121 @@ struct SettingsView: View {
     // owned by macOS, not state.json, so a change in System Settings → Login Items shows here too
     @State private var loginItem = SMAppService.mainApp.status
 
+    /// One tab per group. Only the layout is grouped: every value is saved where it always was.
     var body: some View {
-        Form {
-            Section("General") {
-                Toggle("Launch at login", isOn: Binding(
-                    get: { loginItem == .enabled },
-                    set: { on in
-                        try? on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
-                        loginItem = SMAppService.mainApp.status
-                    }))
-                if loginItem == .requiresApproval {
-                    Button("Allow Pulse in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
+        TabView {
+            tab("General", "gearshape", height: 210) {
+                Section {
+                    Toggle("Launch at login", isOn: Binding(
+                        get: { loginItem == .enabled },
+                        set: { on in
+                            try? on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
+                            loginItem = SMAppService.mainApp.status
+                        }))
+                    if loginItem == .requiresApproval {
+                        Button("Allow Pulse in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
+                    }
+                    LabeledContent("Appearance") {
+                        AppearanceToggle(light: state.lightModeBinding)
+                    }
+                    Toggle("Tint the glass", isOn: state.glassTintBinding)
+                        .help("Off shows plain Liquid Glass in both appearances, following the whole range of the Liquid Glass slider in System Settings → Appearance")
                 }
             }
-            Section("Accounts") {
-                ForEach(AccountID.allCases) { id in
-                    LabeledContent {
-                        if id == .claude {
-                            if state.snapshots[id]?.source == .officialProtocol, state.snapshots[id]?.health == .ok {
-                                Text("via Claude Code").font(.caption).foregroundStyle(.secondary)
-                                    .help("Reads Claude Code's own sign-in from the Keychain; no separate login needed")
-                            } else if state.snapshots[id]?.source == .officialUsagePage, state.snapshots[id]?.health == .ok {
-                                Button("Disconnect") {
-                                    Task { await ClaudeWeb.shared.clearSession(); await state.refreshAll() }
+            tab("Accounts", "person.crop.circle", height: 360) {
+                Section {
+                    ForEach(AccountID.allCases) { id in
+                        LabeledContent {
+                            if id == .claude {
+                                if state.snapshots[id]?.source == .officialProtocol, state.snapshots[id]?.health == .ok {
+                                    Text("via Claude Code").font(.caption).foregroundStyle(.secondary)
+                                        .help("Reads Claude Code's own sign-in from the Keychain; no separate login needed")
+                                } else if state.snapshots[id]?.source == .officialUsagePage, state.snapshots[id]?.health == .ok {
+                                    Button("Disconnect") {
+                                        Task { await ClaudeWeb.shared.clearSession(); await state.refreshAll() }
+                                    }
+                                } else {
+                                    Button("Connect…") {
+                                        WebLogin.presentClaude { Task { await state.refreshAll() } }
+                                    }
+                                    .help("Sign in to claude.ai once so Pulse stops needing the Claude Code Keychain item")
                                 }
-                            } else {
-                                Button("Connect…") {
-                                    WebLogin.presentClaude { Task { await state.refreshAll() } }
-                                }
-                                .help("Sign in to claude.ai once so Pulse stops needing the Claude Code Keychain item")
                             }
-                        }
-                        if id == .grok {
-                            if state.snapshots[id]?.health == .needsAuth || state.snapshots[id] == nil {
-                                Button("Reconnect…") {
-                                    WebLogin.presentGrok { Task { await state.refreshAll() } }
+                            if id == .grok {
+                                if state.snapshots[id]?.health == .needsAuth || state.snapshots[id] == nil {
+                                    Button("Reconnect…") {
+                                        WebLogin.presentGrok { Task { await state.refreshAll() } }
+                                    }
+                                } else if state.snapshots[id]?.health != .ok {
+                                    Button("Retry") { Task { await state.refreshAll() } }
+                                } else if state.snapshots[id]?.source == .officialUsagePage {
+                                    Button("Disconnect") {
+                                        Task { await WebLogin.disconnectGrok(); await state.refreshAll() }
+                                    }
+                                } else {
+                                    Text("via Grok CLI").font(.caption).foregroundStyle(.secondary)
                                 }
-                            } else if state.snapshots[id]?.health != .ok {
-                                Button("Retry") { Task { await state.refreshAll() } }
-                            } else if state.snapshots[id]?.source == .officialUsagePage {
-                                Button("Disconnect") {
-                                    Task { await WebLogin.disconnectGrok(); await state.refreshAll() }
-                                }
-                            } else {
-                                Text("via Grok CLI").font(.caption).foregroundStyle(.secondary)
                             }
-                        }
-                        if id == .codex {
-                            Text("via Codex CLI").font(.caption).foregroundStyle(.secondary)
-                                .help("Codex signs in through its own CLI (codex login)")
-                        }
-                        if id == .antigravity {
-                            Text("via Antigravity CLI").font(.caption).foregroundStyle(.secondary)
-                                .help("Reads agy's own /usage report; sign in by running agy once")
-                        }
-                        Toggle("Enable \(id.displayName)", isOn: state.isEnabled(id)).labelsHidden().toggleStyle(.switch)
-                    } label: {
-                        Text(id.displayName)
-                        if let snap = state.snapshots[id] {
-                            Text(snap.healthMessage ?? "\(snap.planLabel) · updated \(snap.fetchedAt.formatted(date: .omitted, time: .shortened))")
+                            if id == .codex {
+                                Text("via Codex CLI").font(.caption).foregroundStyle(.secondary)
+                                    .help("Codex signs in through its own CLI (codex login)")
+                            }
+                            if id == .antigravity {
+                                Text("via Antigravity CLI").font(.caption).foregroundStyle(.secondary)
+                                    .help("Reads agy's own /usage report; sign in by running agy once")
+                            }
+                            Toggle("Enable \(id.displayName)", isOn: state.isEnabled(id)).labelsHidden().toggleStyle(.switch)
+                        } label: {
+                            Text(id.displayName)
+                            if let snap = state.snapshots[id] {
+                                Text(snap.healthMessage ?? "\(snap.planLabel) · updated \(snap.fetchedAt.formatted(date: .omitted, time: .shortened))")
+                            }
                         }
                     }
                 }
-            }
-            Section("Overlay") {
-                Toggle("Show usage rings on desktop", isOn: $state.persisted.showOverlay)
-                Toggle("Always on top", isOn: $state.persisted.alwaysOnTop)
-                Text("Drag the usage rings to any screen edge. Top and bottom arrange horizontally.")
-                    .font(.caption).foregroundStyle(.secondary)
-                LabeledContent("Appearance") {
-                    AppearanceToggle(light: state.lightModeBinding)
+                Section {
+                    Text("Subscription accounts only. API keys are not supported.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                Toggle("Tint the glass", isOn: state.glassTintBinding)
-                    .help("Off shows plain Liquid Glass in both appearances, following the whole range of the Liquid Glass slider in System Settings → Appearance")
-                Toggle("Show what's left", isOn: state.showsRemainingBinding)
-                    .help("Rings, bars and percentages show what's left of each limit instead of what's used, emptying as you use it.")
             }
-            Section("Battery") { BatterySettingsSection(settings: $state.persisted.battery) }
-            Section("Codex pet") {
-                Toggle("Show the Codex pet", isOn: state.showPetBinding)
-                    .help("Chat and live voice with Codex, separate from the Codex usage ring. Off hides the pet, ends a call, frees the shortcut and starts nothing new; work already running finishes, then Codex stops.")
-                LabeledContent("Shortcut") { HotKeyRecorder(combo: state.voiceHotKeyBinding) }.disabled(!state.showsPet)
-                Text("Tap to start hands-free voice; tap again to pause or resume the microphone. Hold to talk; letting go pauses the microphone while replies keep playing. Double-tap to end the call; Escape also ends it and closes the card.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button("Reset remembered approvals") { PetApprovals.shared.resetRemembered() }
-                    .help("Ask again for future command and folder-access requests. Current task grants expire when that task ends.")
+            tab("Rings", "circle.circle", height: 240) {
+                Section {
+                    Toggle("Show usage rings on desktop", isOn: $state.persisted.showOverlay)
+                    Toggle("Always on top", isOn: $state.persisted.alwaysOnTop)
+                    Text("Drag the usage rings to any screen edge. Top and bottom arrange horizontally.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Toggle("Show what's left", isOn: state.showsRemainingBinding)
+                        .help("Rings, bars and percentages show what's left of each limit instead of what's used, emptying as you use it.")
+                }
             }
-            Section {
-                Text("Subscription accounts only. API keys are not supported.")
-                    .font(.caption).foregroundStyle(.secondary)
+            tab("Battery", "battery.75percent", height: 540) {
+                Section { BatterySettingsSection(settings: $state.persisted.battery) }
+            }
+            tab("Codex pet", "pawprint", height: 290) {
+                Section {
+                    Toggle("Show the Codex pet", isOn: state.showPetBinding)
+                        .help("Chat and live voice with Codex, separate from the Codex usage ring. Off hides the pet, ends a call, frees the shortcut and starts nothing new; work already running finishes, then Codex stops.")
+                    LabeledContent("Shortcut") { HotKeyRecorder(combo: state.voiceHotKeyBinding) }.disabled(!state.showsPet)
+                    Text("Tap to start hands-free voice; tap again to pause or resume the microphone. Hold to talk; letting go pauses the microphone while replies keep playing. Double-tap to end the call; Escape also ends it and closes the card.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Reset remembered approvals") { PetApprovals.shared.resetRemembered() }
+                        .help("Ask again for future command and folder-access requests. Current task grants expire when that task ends.")
+                }
+            }
+            tab("Breaks", "cup.and.saucer", height: 720) {
+                BreakSettingsSection(settings: $state.persisted.breaks)
             }
         }
-        .formStyle(.grouped)
         .onAppear { loginItem = SMAppService.mainApp.status }
-        .frame(width: 420, height: 500)
         .preferredColorScheme(state.isLight ? .light : .dark)
+    }
+
+    private func tab<Content: View>(_ title: String, _ symbol: String, height: CGFloat,
+                                    @ViewBuilder _ content: () -> Content) -> some View {
+        Form { content() }
+            .formStyle(.grouped)
+            .frame(width: 460, height: height)
+            .tabItem { Label(title, systemImage: symbol) }
     }
 }
 

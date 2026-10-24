@@ -36,6 +36,7 @@ struct PulseApp: App {
         _state = StateObject(wrappedValue: state)   // the pet's folder waits for its first use: no Documents prompt at launch
         overlay = OverlayController(state: state)
         batteryAlerts = BatteryAlerts(state: state)
+        BreakController.shared.attach(state)
         NSApplication.shared.setActivationPolicy(.accessory)   // no Dock icon
     }
 

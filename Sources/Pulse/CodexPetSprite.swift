@@ -3,7 +3,7 @@ import AppKit
 /// The Codex pet sheet (8 columns × 11 rows of 192×208 cells, as the Codex app and CLI draw it).
 /// Rows are named animations; each state lists its frame durations along its row.
 enum CodexPetSprite {
-    enum State: CaseIterable { case idle, waving, waiting, running }
+    enum State: CaseIterable { case idle, waving, waiting, running, walkRight, walkLeft, jump }
 
     static let columns = 8, rows = 11
 
@@ -14,6 +14,9 @@ enum CodexPetSprite {
         case .waving:  (3, [0.14, 0.14, 0.14, 0.28])
         case .waiting: (6, [0.15, 0.15, 0.15, 0.15, 0.15, 0.26])
         case .running: (7, [0.12, 0.12, 0.12, 0.12, 0.12, 0.22])
+        case .walkRight: (1, Array(repeating: 0.1, count: 8))   // the break screen's pacing
+        case .walkLeft: (2, Array(repeating: 0.1, count: 8))
+        case .jump: (4, [0.12, 0.12, 0.16, 0.12, 0.2])
         }
     }
 
