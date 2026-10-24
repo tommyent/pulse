@@ -718,11 +718,26 @@ struct OverlayView: View {
     private var expanded: Bool { state.hoveringOverlay || state.cardVisible || state.petVisible }
     @State private var itemFrames: [String: CGRect] = [:]   // the pet and each ring, so a card's tail points at its own
     @State private var cardFrame = CGRect.zero
+    @State private var railFrame = CGRect.zero
 
     /// The tail's position along the card's edge: at the rail item that opened the card.
     private func tailAt(_ item: String) -> CGFloat? {
         guard let target = itemFrames[item], cardFrame != .zero else { return nil }
-        return state.dock.isVertical ? target.midY - cardFrame.minY : target.midX - cardFrame.minX
+        return state.dock.isVertical ? ringCentre(target) - cardFrame.minY : target.midX - cardFrame.minX
+    }
+
+    /// On a vertical rail an item is its ring with the percentage under it: the tail points at the ring.
+    private func ringCentre(_ item: CGRect) -> CGFloat { item.minY + min(item.width, item.height) / 2 }
+
+    /// How far along the rail an open card moves so its tail lands on the item that opened it. A card centred on a
+    /// long rail couldn't reach the items near its ends. It stays within the rail's length, so inside the panel, and
+    /// doesn't move while a break's countdown shares its column.
+    private func cardShift(_ item: String) -> CGFloat {
+        guard let target = itemFrames[item], cardFrame != .zero, railFrame != .zero, !breaks.phase.isCountdown else { return 0 }
+        let vertical = state.dock.isVertical
+        let room = (vertical ? railFrame.height - cardFrame.height : railFrame.width - cardFrame.width) / 2
+        guard room > 0 else { return 0 }
+        return min(max(vertical ? ringCentre(target) - railFrame.midY : target.midX - railFrame.midX, -room), room)
     }
 
     var body: some View {
@@ -769,7 +784,9 @@ struct OverlayView: View {
             : AnyLayout(HStackLayout(alignment: tail == .top ? .top : .bottom, spacing: 10))
         beside {
             BreakPill(controller: breaks, tail: tail)
+            let shift = cardShift(state.petVisible ? "pet" : state.selected.rawValue)
             usageOrPetCard(tail: tail)
+                .offset(x: state.dock.isVertical ? 0 : shift, y: state.dock.isVertical ? shift : 0)
         }
         .animation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.45, bounce: 0.3), value: breaks.phase.isCountdown)
     }
@@ -830,7 +847,7 @@ struct OverlayView: View {
         .padding(state.dock.isVertical ? .vertical : .horizontal, expanded ? 16 : 10)
         .padding(state.dock.isVertical ? .horizontal : .vertical, expanded ? 12 : 8)
         .glassCard(in: RoundedRectangle(cornerRadius: expanded ? 26 : 18))
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onRailFrame?($0) }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { railFrame = $0; onRailFrame?($0) }
         .simultaneousGesture(DragGesture(minimumDistance: 4, coordinateSpace: .global)
             .onChanged { onDrag?($0.location) }
             .onEnded { onDrop?($0.location) })
