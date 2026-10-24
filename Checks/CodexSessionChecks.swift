@@ -103,7 +103,7 @@ enum CodexSessionChecks {
           if (m.method === 'initialize') setTimeout(() => send({ id: m.id, result: {} }), process.env.PULSE_CHECK_SLOW_START ? 600 : 0);
           if (m.method === 'thread/start') {
             assert.equal(m.params.approvalPolicy, 'on-request');
-            assert.equal(m.params.approvalsReviewer, 'user');
+            assert.equal(m.params.approvalsReviewer, 'auto_review');
             assert.equal(m.params.sandbox, 'workspace-write');
             assert(!m.params.runtimeWorkspaceRoots, 'no extra folders are permanently granted');
             log('thread');
@@ -215,7 +215,7 @@ enum CodexSessionChecks {
             log('resume-model:' + (m.params.model || ''));
             const config = m.params.config || {}, hint = config['features.multi_agent_v2.multi_agent_mode_hint_text'] || '';
             log('resume-talk:' + (config.model_reasoning_effort || 'none') + ':' + ((/Pass reasoning_effort "([a-z]+)"/.exec(hint) || [])[1] || ''));
-            for (const [k, v] of [['approvalPolicy', 'on-request'], ['approvalsReviewer', 'user'], ['sandbox', 'workspace-write']]) assert.equal(m.params[k], v);
+            for (const [k, v] of [['approvalPolicy', 'on-request'], ['approvalsReviewer', 'auto_review'], ['sandbox', 'workspace-write']]) assert.equal(m.params[k], v);
             log('resume:' + m.params.threadId + (m.params.excludeTurns ? ':reconnect' : ':history'));
             log('resume-rule:' + (((m.params.config || {})['features.multi_agent_v2.multi_agent_mode_hint_text'] || '').includes('fork_turns')));
             if (m.params.threadId === 'missing-thread') send({ id: m.id, error: { message: 'no rollout found' } });
@@ -2458,11 +2458,26 @@ enum CodexSessionChecks {
             + "- Tracking only: note bills, deadlines, and follow-ups. Do not send email, pay, book, or contact\n  anyone. If an item needs action outside this folder, add it to `todos.md` tagged `#needs-agent`.\n"
         let loosened = updatedPetInstructions(original)
         assert(loosened.hasPrefix("My own line\nThis is your default working\nfolder.") && loosened.contains("pay only when the owner explicitly asks for that payment")
-               && loosened.contains("contact anyone on your own:\n  do that only when the owner explicitly asks for that specific action, and let Pulse's permission\n  prompts confirm it. For work in other folders, request permission")
-               && !loosened.contains("#needs-agent") && !loosened.contains("Tracking only") && !loosened.contains("never pay"),
-               "every older seed reaches today's rules: permission for other folders, and sending, paying or booking only on an explicit request (got \(loosened))")
+               && loosened.contains("folder. You may read other folders (commonly ~/Projects or ~/Downloads) without asking. Before\nwriting to or acting in")
+               && loosened.contains("contact anyone on your own:\n  do that only when the owner explicitly asks for that specific action. This rule is yours to keep:\n  an approved permission request doesn't count as the owner asking.")
+               && !loosened.contains("#needs-agent") && !loosened.contains("Tracking only") && !loosened.contains("never pay")
+               && !loosened.contains("before accessing them") && !loosened.contains("prompts confirm it"),
+               "every older seed reaches today's rules: reads anywhere, permission before writing elsewhere, and sending, paying or booking only on an explicit request (got \(loosened))")
         assert(updatedPetInstructions(loosened) == loosened && updatedPetInstructions("Do not pay. My rules.") == "Do not pay. My rules.",
                "only the original sentences change; the owner's own wording stays")
+        // The seed before auto-review (what existing pets have) must become today's seed exactly.
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("pulse-pet-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let seed = try String(contentsOf: CodexPetSession.petHome(at: home).appendingPathComponent("AGENTS.md"), encoding: .utf8)
+        var previous = seed
+        for (now, before) in [("You may read other folders (commonly ~/Projects or ~/Downloads) without asking. Before\nwriting to or acting in a folder outside this one, request permission for the needed paths. Use the\npermission request tool when available; otherwise request command approval. Work only within the\napproved action or task scope.",
+                               "When asked to work elsewhere (commonly ~/Projects or ~/Downloads), request permission\nfor the needed paths before accessing them. Use the permission request tool when available;\notherwise request command approval. Work only within the approved action or task scope."),
+                              ("do that only when the owner explicitly asks for that specific action. This rule is yours to keep:\n  an approved permission request doesn't count as the owner asking. Before writing to or acting in\n  other folders, request permission and carry out the requested task after approval, including\n  through available agents and tools.",
+                               "do that only when the owner explicitly asks for that specific action, and let Pulse's permission\n  prompts confirm it. For work in other folders, request permission\n  and carry out the requested task after approval, including through available agents and tools.")] {
+            assert(seed.contains(now), "the seed carries today's sentence: \(now)")
+            previous = previous.replacingOccurrences(of: now, with: before)
+        }
+        assert(updatedPetInstructions(previous) == seed, "a pet seeded before auto-review gets today's seed exactly (got \(updatedPetInstructions(previous)))")
         print("Approval checks passed: once/turn/always scope, persistence and reset, deny, child requests, stale resolution, unsupported requests and instruction migration")
     }
 

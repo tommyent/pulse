@@ -264,9 +264,10 @@ private let petAgentsMD = """
 
 This folder is a personal inbox: todos, reminders, bills, ideas, research, and any other junk the
 owner wants off their head. You are the assistant that keeps it tidy. This is your default working
-folder. When asked to work elsewhere (commonly ~/Projects or ~/Downloads), request permission
-for the needed paths before accessing them. Use the permission request tool when available;
-otherwise request command approval. Work only within the approved action or task scope.
+folder. You may read other folders (commonly ~/Projects or ~/Downloads) without asking. Before
+writing to or acting in a folder outside this one, request permission for the needed paths. Use the
+permission request tool when available; otherwise request command approval. Work only within the
+approved action or task scope.
 
 ## Layout
 
@@ -284,9 +285,10 @@ otherwise request command approval. Work only within the approved action or task
   the right file, or in `inbox/` if unsure. Keep it short and date-stamp it.
 - When asked to organize, sweep `inbox/` into the files above and report what moved.
 - Note bills, deadlines, and follow-ups. Don't send email, pay, book, or contact anyone on your own:
-  do that only when the owner explicitly asks for that specific action, and let Pulse's permission
-  prompts confirm it. For work in other folders, request permission
-  and carry out the requested task after approval, including through available agents and tools.
+  do that only when the owner explicitly asks for that specific action. This rule is yours to keep:
+  an approved permission request doesn't count as the owner asking. Before writing to or acting in
+  other folders, request permission and carry out the requested task after approval, including
+  through available agents and tools.
 - Never delete the owner's words; rewrite for brevity only when asked.
 - On every open, if `reminders.md` has anything due today or overdue, say so first.
 """
@@ -301,6 +303,11 @@ func updatedPetInstructions(_ text: String) -> String {
         .replacingOccurrences(of: "whether it is paid; never pay anything", with: "whether it is paid; pay only when the owner explicitly asks for that payment")
         .replacingOccurrences(of: "- Tracking only: note bills, deadlines, and follow-ups. Do not send email, pay, book, or contact\n  anyone.", with:
         "- Note bills, deadlines, and follow-ups. Don't send email, pay, book, or contact anyone on your own:\n  do that only when the owner explicitly asks for that specific action, and let Pulse's permission\n  prompts confirm it.")
+        // Codex's auto-review now decides approvals: reads need no request, and the explicit ask is the pet's own rule.
+        .replacingOccurrences(of: "When asked to work elsewhere (commonly ~/Projects or ~/Downloads), request permission\nfor the needed paths before accessing them. Use the permission request tool when available;\notherwise request command approval. Work only within the approved action or task scope.", with:
+        "You may read other folders (commonly ~/Projects or ~/Downloads) without asking. Before\nwriting to or acting in a folder outside this one, request permission for the needed paths. Use the\npermission request tool when available; otherwise request command approval. Work only within the\napproved action or task scope.")
+        .replacingOccurrences(of: "do that only when the owner explicitly asks for that specific action, and let Pulse's permission\n  prompts confirm it. For work in other folders, request permission\n  and carry out the requested task after approval, including through available agents and tools.", with:
+        "do that only when the owner explicitly asks for that specific action. This rule is yours to keep:\n  an approved permission request doesn't count as the owner asking. Before writing to or acting in\n  other folders, request permission and carry out the requested task after approval, including\n  through available agents and tools.")
 }
 
 @MainActor
@@ -1013,7 +1020,7 @@ final class CodexPetSession: ObservableObject {
 
     /// How every Pulse conversation opens; the live check opens its own with these too.
     static func threadParams(cwd: String) -> [String: Any] {
-        ["cwd": cwd, "approvalPolicy": "on-request", "approvalsReviewer": "user", "sandbox": "workspace-write"]
+        ["cwd": cwd, "approvalPolicy": "on-request", "approvalsReviewer": "auto_review", "sandbox": "workspace-write"]
     }
 
     /// Continues the pet's conversation (after a lost server, after a restart, or once, the newest
