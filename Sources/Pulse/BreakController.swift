@@ -2,6 +2,9 @@ import AppKit
 import Combine
 import CoreGraphics
 import SwiftUI
+import os
+
+private let log = Logger(subsystem: "app.pulse", category: "breaks")
 
 extension UserDefaults {
     /// Starts a countdown at once, for testing: `defaults write app.pulse simulatedBreak long` (or `micro`). Breaks
@@ -33,6 +36,8 @@ final class BreakController: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
     private var observers: [NSObjectProtocol] = []
     private var simulation: NSKeyValueObservation?
+    private var awayLevel = 0        // what time away is holding now: 0 nothing, 1 the micro clock, 2 both; logged as it rises
+    private var heldForCall = false  // a due break waiting for a Pulse voice call, logged when it starts and stops
 
     var settings: BreakSettings { schedule.settings }
     func remaining(_ now: Date) -> (left: TimeInterval, total: TimeInterval) { schedule.remaining(now) ?? (0, 1) }
@@ -46,12 +51,19 @@ final class BreakController: ObservableObject {
     func attach(_ state: AppState) {
         self.state = state
         schedule = BreakSchedule(settings: state.persisted.breaks, now: .now)
+        let atLaunch = Self.describe(schedule.settings)
+        if schedule.settings.enabled { log.notice("breaks on at launch, clocks start now: \(atLaunch, privacy: .public)") }
         state.$persisted.map(\.breaks).removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [weak self] new in
                 guard let self else { return }
-                if new.enabled && !schedule.settings.enabled { schedule = BreakSchedule(settings: new, now: .now) }
-                else { schedule.settings = new }
+                if new.enabled && !schedule.settings.enabled {
+                    schedule = BreakSchedule(settings: new, now: .now)
+                    log.notice("breaks turned on, clocks start now: \(Self.describe(new), privacy: .public)")
+                } else {
+                    if !new.enabled && schedule.settings.enabled { log.notice("breaks turned off") }
+                    schedule.settings = new
+                }
                 tick()
                 updateClock()
             }
@@ -83,13 +95,31 @@ final class BreakController: ObservableObject {
     }
 
     private func cameBack(from key: ReferenceWritableKeyPath<BreakController, Date?>) {
-        if let since = self[keyPath: key] { schedule.away(Date().timeIntervalSince(since), now: .now) }
+        if let since = self[keyPath: key] {
+            let before = clocks, away = Date().timeIntervalSince(since)
+            schedule.away(away, now: .now)
+            logResets(since: before, "away: \(key == \BreakController.lockedAt ? "locked" : "asleep") for \(Int(away)) s")
+        }
         self[keyPath: key] = nil
+    }
+
+    private var clocks: (micro: Date, long: Date) { (schedule.lastMicro, schedule.lastLong) }
+
+    /// Logs the clocks that really restarted, and why. A clock off with its switch, which only follows the time, isn't.
+    private func logResets(since before: (micro: Date, long: Date), _ why: String) {
+        let s = schedule.settings
+        let micro = schedule.lastMicro != before.micro, long = s.longEnabled && schedule.lastLong != before.long
+        guard s.enabled, micro || long else { return }
+        log.notice("clock reset (\(why, privacy: .public)): \(long ? "micro and long" : "micro", privacy: .public); next micro in \(Int(s.microEvery)) s\(long ? ", long in \(Int(s.longEvery)) s" : "", privacy: .public)")
+    }
+
+    private static func describe(_ s: BreakSettings) -> String {
+        "micro every \(Int(s.microEvery)) s for \(Int(s.microLength)) s, long " + (s.longEnabled ? "every \(Int(s.longEvery)) s for \(Int(s.longLength)) s" : "off")
     }
 
     private func simulate() {
         guard let name = UserDefaults.standard.simulatedBreak, let kind = BreakKind(rawValue: name), schedule.settings.enabled else { return }
-        if let e = schedule.begin(kind, now: .now) { handle(e) }
+        if let e = schedule.begin(kind, now: .now) { handle(e, why: "simulatedBreak") }
         updateClock()
     }
 
@@ -114,14 +144,44 @@ final class BreakController: ObservableObject {
         let input = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
         let idle = max(input, lockedAt.map { now.timeIntervalSince($0) } ?? 0)
         let voice = CodexPetSession.shared.voiceState != .off
+        let before = clocks, previous = schedule.phase, enabled = schedule.settings.enabled
+        let held = voice && previous == .working && enabled && schedule.due(at: now) != nil
         let event = schedule.tick(now: now, idle: idle, voiceActive: voice)
-        if let event { handle(event) } else { publish() }
+        if held != heldForCall {
+            if held { log.notice("break due but held: a Pulse voice call is on") } else { log.notice("voice hold over") }
+            heldForCall = held
+        }
+        // time away restarts the clocks on every tick it lasts: log only when it starts holding one more of them
+        if enabled, previous == .working, event == nil {
+            let level = schedule.settings.longEnabled && schedule.lastLong != before.long ? 2 : schedule.lastMicro != before.micro ? 1 : 0
+            if level > awayLevel { logResets(since: before, "away: no input or locked for \(Int(idle)) s") }
+            else if level == 0, awayLevel > 0 { log.notice("back from time away: the clocks run again") }
+            awayLevel = level
+        }
+        guard let event else { return publish() }
+        let why = switch (event, previous) {
+        case (.start, _): "the countdown ran out"
+        case (.end, .onBreak): "finished"
+        case (.end, .countdown) where voice: "a Pulse voice call started"
+        case (.end, _): "breaks turned off"
+        default: ""
+        }
+        handle(event, why: why, clocksBefore: before)
     }
 
     private func publish() { if phase != schedule.phase { phase = schedule.phase } }
 
-    private func handle(_ event: BreakSchedule.Event) {
+    private func handle(_ event: BreakSchedule.Event, why: String = "", clocksBefore: (micro: Date, long: Date)? = nil) {
+        let ended = kind
         publish()
+        switch event {
+        case let .countdown(k): log.notice("countdown: \(k.rawValue, privacy: .public) break in \(Int(BreakSchedule.countdown)) s\(why.isEmpty ? "" : " (" + why + ")", privacy: .public)")
+        case let .start(k):
+            let length = Int(schedule.settings.length(k))
+            log.notice("break started: \(k.rawValue, privacy: .public) for \(length) s (\(why, privacy: .public))")
+        case .end: log.notice("break ended: \(ended?.rawValue ?? "?", privacy: .public) (\(why, privacy: .public))")
+        }
+        if let clocksBefore { logResets(since: clocksBefore, why) }
         switch event {
         case .countdown:
             shownIdeas = []
@@ -142,11 +202,11 @@ final class BreakController: ObservableObject {
 
     // MARK: actions from the pill and the overlay
 
-    func startNow() { if let e = schedule.startNow(.now) { handle(e) } }
-    func pause() { schedule.pause(.now); publish() }
-    func resume() { schedule.resume(.now); publish() }
-    func snooze() { if let e = schedule.snooze(.now) { handle(e) } }
-    func backToWork() { if let e = schedule.backToWork(.now) { handle(e) } }
+    func startNow() { if let e = schedule.startNow(.now) { handle(e, why: "clicked") } }
+    func pause() { schedule.pause(.now); publish(); log.notice("paused") }
+    func resume() { schedule.resume(.now); publish(); log.notice("resumed") }
+    func snooze() { if let e = schedule.snooze(.now) { handle(e, why: "snoozed, back in \(Int(BreakSchedule.snooze)) s") } }
+    func backToWork() { let before = clocks; if let e = schedule.backToWork(.now) { handle(e, why: "Back to Work", clocksBefore: before) } }
     func reroll() { requestIdea(surprise: false) }
     func surprise() { requestIdea(surprise: true) }
 
