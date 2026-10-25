@@ -139,8 +139,14 @@ struct BreakOverlayView: View {
                 HStack(spacing: 16 * s) {
                     Button("Back to Work") { controller.backToWork() }
                         .buttonStyle(OverlayButtonStyle(primary: true, s: s))
-                        .keyboardShortcut(.cancelAction)
-                        .help("End the break (Escape)")
+                        .help("End the break early")
+                        .background {
+                            // Escape skips the break; the history keeps it apart from ending it early
+                            Button("Skip this break") { controller.skip() }
+                                .keyboardShortcut(.cancelAction)
+                                .opacity(0)
+                                .accessibilityHidden(true)
+                        }
                     Button { paused ? controller.resume() : controller.pause() } label: {
                         Label(paused ? "Resume" : "Pause", systemImage: paused ? "play.fill" : "pause.fill")
                     }
@@ -475,8 +481,10 @@ struct FlowLayout: Layout {
 /// Settings → Breaks. A binding, not AppState, so it can be rendered on its own.
 struct BreakSettingsSection: View {
     @Binding var settings: BreakSettings
+    @ObservedObject private var controller = BreakController.shared
     @State private var draft = ""
     @State private var hex = ""
+    @State private var sounds: [String] = []
     private let ideasAvailable = BreakIdeas.available
 
     var body: some View {
@@ -499,7 +507,12 @@ struct BreakSettingsSection: View {
                     Toggle("Long break", isOn: $settings.longEnabled).labelsHidden().toggleStyle(.switch)
                 }
             }
-            Text("A long break takes the place of the micro break due at the same time. A break waits while a Pulse voice call is on, and time away from the Mac counts as a break.")
+            Picker("Time away counts as a break", selection: $settings.awayMode) {
+                Text("When locked, asleep or idle for 5 minutes").tag(BreakAwayMode.idle)
+                Text("Only when locked or asleep (fixed schedule)").tag(BreakAwayMode.fixed)
+            }
+            .pickerStyle(.radioGroup)
+            Text("Breaks keep to their times: every 10 minutes means every 10 minutes, however long each break takes. A long break takes the place of a micro break due within two minutes of it. A break waits while the screen is locked or a Pulse voice call is on. Choose a fixed schedule if you watch the screen without touching the keyboard or mouse.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         Section("Break screen") {
@@ -534,6 +547,9 @@ struct BreakSettingsSection: View {
             }
             .onAppear { hex = BreakColor.rgb(hex: settings.color).map(BreakColor.hex) ?? "" }
             .onChange(of: settings.color) { _, new in hex = BreakColor.rgb(hex: new).map(BreakColor.hex) ?? "" }
+            LabeledContent("Sound at start") { SoundChoice(title: "Sound at start", sound: soundBinding(\.startSound), sounds: sounds) }
+            LabeledContent("Sound at end") { SoundChoice(title: "Sound at end", sound: soundBinding(\.endSound), sounds: sounds) }
+                .onAppear { sounds = BatterySounds.all().map(\.name) }
             Toggle(isOn: $settings.showAgents) {
                 Text("Show agents that are working")
                 Text("The Codex pet, and agents Rex reports as working or waiting for you")
@@ -588,6 +604,13 @@ struct BreakSettingsSection: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .disabled(!ideasAvailable)
+        BreakHistorySection(history: controller.history)
+    }
+
+    /// "" in the settings is None in the picker.
+    private func soundBinding(_ key: WritableKeyPath<BreakSettings, String>) -> Binding<String?> {
+        Binding(get: { settings[keyPath: key].isEmpty ? nil : settings[keyPath: key] },
+                set: { settings[keyPath: key] = $0 ?? "" })
     }
 
     private var customColor: Binding<Color> {
@@ -611,5 +634,60 @@ struct BreakSettingsSection: View {
             ForEach(options, id: \.self) { Text("\($0) s").tag(TimeInterval($0)) }
         }
         .labelsHidden().fixedSize()
+    }
+}
+
+/// Settings → Breaks → History: today's and this week's breaks by how they ended, and the latest few.
+struct BreakHistorySection: View {
+    let history: BreakHistory
+
+    var body: some View {
+        Section("History") {
+            let cal = Calendar.current, now = Date()
+            let week = cal.dateInterval(of: .weekOfYear, for: now)?.start ?? cal.startOfDay(for: now)
+            LabeledContent("Today", value: BreakHistory.summary(history.counts(since: cal.startOfDay(for: now))))
+            LabeledContent("This week", value: BreakHistory.summary(history.counts(since: week)))
+            let recent = history.records.suffix(6).reversed()
+            if recent.isEmpty {
+                Text("No breaks yet.").foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(recent.enumerated()), id: \.offset) { _, r in
+                        HStack {
+                            Text(r.at.formatted(.dateTime.weekday(.abbreviated).hour().minute()))
+                                .monospacedDigit().foregroundStyle(.secondary)
+                                .frame(width: 92, alignment: .leading)
+                            Text(r.kind == .micro ? "Micro break" : "Long break")
+                            Spacer()
+                            Text(r.outcome.label.prefix(1).uppercased() + r.outcome.label.dropFirst()).foregroundStyle(r.outcome == .taken ? .primary : .secondary)
+                        }
+                        .font(.callout)
+                    }
+                }
+            }
+            Text("Kept on this Mac for 90 days. Skipped means dismissed with Escape, or breaks turned off during one.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// On hover, beside the rail: when the next breaks come.
+struct NextBreakHint: View {
+    @ObservedObject var controller: BreakController
+    var tail: Edge = .trailing
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 20)) { context in
+            if let text = controller.nextText(context.date) {
+                Label(text, systemImage: "cup.and.saucer")
+                    .font(.system(size: 12.5, weight: .medium))
+                    .fixedSize()
+                    .padding(.horizontal, 14)
+                    .frame(height: 34)
+                    .padding(Edge.Set(tail), PillShape.tailWidth)
+                    .glassCard(in: PillShape(edge: tail))
+                    .accessibilityElement(children: .combine)
+            }
+        }
     }
 }

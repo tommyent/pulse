@@ -5,6 +5,10 @@ import Foundation
 
 enum BreakKind: String, Codable { case micro, long }
 
+/// What counts as a break taken without one on screen. `idle`: the screen locked, the Mac asleep, or 5 minutes with
+/// no input. `fixed`: only locked or asleep, for people who watch the screen without touching it.
+enum BreakAwayMode: String, Codable, CaseIterable { case idle, fixed }
+
 struct BreakSettings: Codable, Equatable {
     var enabled = false   // an overlay over every screen is opt-in
     var microEvery: TimeInterval = 20 * 60
@@ -17,6 +21,9 @@ struct BreakSettings: Codable, Equatable {
     var ideas = true
     var level = 1   // 0 easy … 4 adventurous
     var interests: [String] = []
+    var awayMode = BreakAwayMode.idle
+    var startSound = "Blow"   // a sound's name, as Battery's pickers list them; "" is None
+    var endSound = "Glass"
 
     static let levels = ["Easy", "Gentle", "Playful", "Bold", "Adventurous"]
 
@@ -39,6 +46,20 @@ struct BreakSettings: Codable, Equatable {
         ideas = try c.decodeIfPresent(Bool.self, forKey: .ideas) ?? d.ideas
         level = min(4, max(0, try c.decodeIfPresent(Int.self, forKey: .level) ?? d.level))
         interests = try c.decodeIfPresent([String].self, forKey: .interests) ?? d.interests
+        awayMode = (try? c.decodeIfPresent(BreakAwayMode.self, forKey: .awayMode)) ?? d.awayMode
+        startSound = try c.decodeIfPresent(String.self, forKey: .startSound) ?? d.startSound
+        endSound = try c.decodeIfPresent(String.self, forKey: .endSound) ?? d.endSound
+    }
+
+    /// The sound a break event plays: one as a break starts, another when it runs its full length, so it can be taken
+    /// with the eyes closed. Nothing for Snooze, Escape or Back to Work: then you're looking already.
+    func sound(for event: BreakSchedule.Event) -> String? {
+        let name: String = switch event {
+        case .start: startSound
+        case .end(_, .taken, _): endSound
+        default: ""
+        }
+        return name.isEmpty ? nil : name
     }
 }
 
@@ -95,6 +116,10 @@ enum BreakColor {
 }
 
 /// When breaks come and what they're doing. Time is passed in, so the checks can run a day in a millisecond.
+///
+/// Each kind has a due time on a fixed grid: the next one is due one interval after the previous one was *due*, so
+/// "every 10 minutes" means every 10 minutes, however long the break, its countdown or a hold took. Slots that passed
+/// meanwhile are skipped, never stacked.
 struct BreakSchedule {
     enum Phase: Equatable {
         case working
@@ -104,70 +129,115 @@ struct BreakSchedule {
 
         var isCountdown: Bool { if case .countdown = self { true } else { false } }
         var isPaused: Bool { if case .paused = self { true } else { false } }
+        var isWorking: Bool { self == .working }
     }
-    enum Event: Equatable { case countdown(BreakKind), start(BreakKind), end }
+    /// How a break ended, as the history keeps it.
+    enum Outcome: String, Codable, CaseIterable { case taken, endedEarly, snoozed, skipped, away }
+    enum Event: Equatable {
+        case countdown(BreakKind)
+        case start(BreakKind)
+        /// `outcome` nil: interrupted (a voice call, a locked screen) and still due, so it comes back.
+        case end(BreakKind, BreakSchedule.Outcome?, due: Date)
+        /// Time away counted as these breaks, each with the time it was due.
+        case away([BreakKind: Date])
+    }
 
     static let countdown: TimeInterval = 30
     static let snooze: TimeInterval = 5 * 60
+    static let idleAway: TimeInterval = 5 * 60   // no input this long counts as time away, unless the mode is fixed
+    static let merge: TimeInterval = 2 * 60      // a long break due this soon takes the place of a due micro break
 
     var settings: BreakSettings
     private(set) var phase = Phase.working
-    private(set) var lastMicro: Date
-    private(set) var lastLong: Date
+    private(set) var nextMicro: Date
+    private(set) var nextLong: Date
     private(set) var snoozedUntil: Date?
+    private var currentDue: Date?                 // when the break counting down or on screen was due
+    private var counts = true                     // false for a simulatedBreak, which leaves the clocks alone
+    private var awayCounted: Set<BreakKind> = []  // what the current time away already counted, to report it once
 
     init(settings: BreakSettings, now: Date) {
         self.settings = settings
-        lastMicro = now
-        lastLong = now
+        nextMicro = now.addingTimeInterval(settings.microEvery)
+        nextLong = now.addingTimeInterval(settings.longEvery)
     }
 
-    /// The break that's due now, if any. The long one takes the place of a micro break due at the same time.
+    /// The break that's due now, if any. A long break due within `merge` takes the place of a due micro break.
     func due(at now: Date) -> BreakKind? {
         if let s = snoozedUntil, now < s { return nil }
-        if settings.longEnabled, now.timeIntervalSince(lastLong) >= settings.longEvery { return .long }
-        if now.timeIntervalSince(lastMicro) >= settings.microEvery { return .micro }
-        return nil
+        if settings.longEnabled, now >= nextLong { return .long }
+        guard now >= nextMicro else { return nil }
+        return settings.longEnabled && nextLong.timeIntervalSince(now) <= Self.merge ? .long : .micro
     }
 
-    /// Called about once a second. `idle` is how long the Mac has had no input or been locked; `voiceActive` holds
-    /// new breaks back during a Pulse voice call.
-    mutating func tick(now: Date, idle: TimeInterval, voiceActive: Bool) -> Event? {
+    /// When each kind comes next, a snooze included; nil for the long break when it's off.
+    func upcoming(_ now: Date) -> (micro: Date, long: Date?) {
+        let s = snoozedUntil ?? .distantPast
+        return (max(nextMicro, s), settings.longEnabled ? max(nextLong, s) : nil)
+    }
+
+    /// Called about once a second. `idle`: seconds with no input; `locked`: the screen is locked (no countdown or
+    /// overlay then; the controller reports how long when it unlocks); `voiceActive` holds new breaks back.
+    mutating func tick(now: Date, idle: TimeInterval, locked: Bool = false, voiceActive: Bool) -> Event? {
         guard settings.enabled else {
-            lastMicro = now; lastLong = now; snoozedUntil = nil   // turning breaks on starts the clock then
-            if phase == .working { return nil }
-            phase = .working
-            return .end
+            nextMicro = now.addingTimeInterval(settings.microEvery)   // turning breaks on starts the clocks then
+            nextLong = now.addingTimeInterval(settings.longEvery)
+            snoozedUntil = nil
+            awayCounted = []
+            return interrupt(.skipped)
         }
-        if !settings.longEnabled { lastLong = now }
+        if !settings.longEnabled { nextLong = now.addingTimeInterval(settings.longEvery) }
+        // a shorter interval chosen in Settings applies at once
+        nextMicro = min(nextMicro, now.addingTimeInterval(settings.microEvery))
+        nextLong = min(nextLong, now.addingTimeInterval(settings.longEvery))
         switch phase {
         case .working:
-            away(idle, now: now)
-            guard !voiceActive, let kind = due(at: now) else { return nil }
+            if settings.awayMode == .idle, idle >= Self.idleAway, !locked {
+                if let e = away(idle, now: now) { return e }
+            } else if !locked {
+                awayCounted = []
+            }
+            guard !voiceActive, !locked, let kind = due(at: now) else { return nil }
             snoozedUntil = nil
+            currentDue = kind == .long ? nextLong : nextMicro
+            counts = true
             phase = .countdown(kind, endsAt: now.addingTimeInterval(Self.countdown))
             return .countdown(kind)
         case let .countdown(kind, endsAt):
-            if voiceActive { phase = .working; return .end }   // it comes back when the call ends
+            if voiceActive || locked { return interrupt(nil) }   // still due: it comes back after the call or the lock
             return now >= endsAt ? start(kind, now: now) : nil
         case let .onBreak(kind, endsAt):
-            return now >= endsAt ? finish(kind, now: now) : nil
+            if locked { return interrupt(nil) }   // the lock decides: long enough counts as time away
+            return now >= endsAt ? finish(kind, .taken, now: now) : nil
         case .paused:
-            return nil
+            return locked ? interrupt(nil) : nil
         }
     }
 
-    /// Time away counts as a break: away for a micro break's length restarts the micro clock, for a long break's
-    /// length both. The sleep that just ended comes in here too.
-    mutating func away(_ seconds: TimeInterval, now: Date) {
-        guard phase == .working else { return }
-        if seconds >= settings.longLength { lastLong = now; lastMicro = now }
-        else if seconds >= settings.microLength { lastMicro = now }
+    /// Time away counts as a break: as long as a micro break counts as one, as long as a long break as both. The
+    /// clocks then restart from now. Called with the idle time on every tick it lasts, and once for a lock or sleep.
+    mutating func away(_ seconds: TimeInterval, now: Date) -> Event? {
+        guard settings.enabled, phase == .working else { return nil }
+        var counted: [BreakKind: Date] = [:]
+        if seconds >= settings.microLength {
+            if !awayCounted.contains(.micro) { counted[.micro] = nextMicro }
+            nextMicro = now.addingTimeInterval(settings.microEvery)
+        }
+        if settings.longEnabled, seconds >= settings.longLength {
+            if !awayCounted.contains(.long) { counted[.long] = nextLong }
+            nextLong = now.addingTimeInterval(settings.longEvery)
+        }
+        guard !counted.isEmpty else { return nil }
+        snoozedUntil = nil
+        awayCounted.formUnion(counted.keys)
+        return .away(counted)
     }
 
-    /// A countdown right now, whatever is due: the `simulatedBreak` test hook.
+    /// A countdown right now, whatever is due: the `simulatedBreak` test hook. It leaves the clocks as they are.
     mutating func begin(_ kind: BreakKind, now: Date) -> Event? {
         guard settings.enabled, phase == .working else { return nil }
+        currentDue = now
+        counts = false
         phase = .countdown(kind, endsAt: now.addingTimeInterval(Self.countdown))
         return .countdown(kind)
     }
@@ -188,20 +258,28 @@ struct BreakSchedule {
         phase = .onBreak(kind, endsAt: now.addingTimeInterval(remaining))
     }
 
-    /// The same break comes back in five minutes.
+    /// The same break comes back in five minutes; the ones after it keep their grid.
     mutating func snooze(_ now: Date) -> Event? {
-        guard phase != .working else { return nil }
+        guard let kind = activeKind else { return nil }
+        let due = currentDue ?? now
         phase = .working
         snoozedUntil = now.addingTimeInterval(Self.snooze)
-        return .end
+        currentDue = nil
+        return .end(kind, .snoozed, due: due)
     }
 
-    /// Ends the break as taken.
+    /// Back to Work: ends the break as taken, early.
     mutating func backToWork(_ now: Date) -> Event? {
         switch phase {
-        case let .onBreak(kind, _), let .paused(kind, _): return finish(kind, now: now)
-        default: return nil
+        case let .onBreak(kind, _), let .paused(kind, _): finish(kind, .endedEarly, now: now)
+        default: nil
         }
+    }
+
+    /// Escape: dismisses the break without taking it. The next one keeps its grid.
+    mutating func skip(_ now: Date) -> Event? {
+        guard let kind = activeKind else { return nil }
+        return finish(kind, .skipped, now: now)
     }
 
     /// Seconds left on the countdown or the break, and how long that whole span is.
@@ -214,18 +292,150 @@ struct BreakSchedule {
         }
     }
 
+    // MARK: surviving a restart
+
+    var clocks: BreakClocks { BreakClocks(nextMicro: nextMicro, nextLong: nextLong) }
+
+    /// Carries on from the clocks saved before Pulse quit. `quitFor` is how long Pulse wasn't running, `downFor` how
+    /// much of that the Mac was off or asleep. Asleep or off counts as time away in both modes; the rest counts only
+    /// in the idle mode and only from 5 minutes, as no input would. At most one break is left due, never a burst.
+    mutating func restore(_ saved: BreakClocks, now: Date, quitFor: TimeInterval, downFor: TimeInterval) -> Event? {
+        guard settings.enabled, phase == .working else { return nil }
+        // a saved time further off than one interval (a shorter interval since, a clock change) restarts from now
+        nextMicro = min(saved.nextMicro, now.addingTimeInterval(settings.microEvery))
+        nextLong = settings.longEnabled ? min(saved.nextLong, now.addingTimeInterval(settings.longEvery))
+                                        : now.addingTimeInterval(settings.longEvery)
+        let awayFor = settings.awayMode == .idle && quitFor >= Self.idleAway ? quitFor : downFor
+        let event = awayFor > 0 ? away(awayFor, now: now) : nil
+        awayCounted = []
+        // overdue: only one break comes, the long one if both are due; an overdue micro moves to its next slot
+        if due(at: now) == .long, nextMicro <= now {
+            nextMicro = Self.slot(after: nextMicro, every: settings.microEvery, past: now)
+        }
+        return event
+    }
+
+    // MARK: internals
+
+    private var activeKind: BreakKind? {
+        switch phase {
+        case .working: nil
+        case let .countdown(k, _), let .onBreak(k, _), let .paused(k, _): k
+        }
+    }
+
+    /// The first slot of a grid starting at `due` that's later than `now`, at least one interval on.
+    static func slot(after due: Date, every: TimeInterval, past now: Date) -> Date {
+        guard every > 0 else { return now }
+        let k = max(1, Int(floor(now.timeIntervalSince(due) / every)) + 1)
+        return due.addingTimeInterval(Double(k) * every)
+    }
+
+    private mutating func interrupt(_ outcome: Outcome?) -> Event? {
+        guard let kind = activeKind else { return nil }
+        let due = currentDue ?? .distantPast
+        phase = .working
+        if outcome != nil { currentDue = nil }
+        return .end(kind, outcome, due: due)
+    }
+
     private mutating func start(_ kind: BreakKind, now: Date) -> Event {
         phase = .onBreak(kind, endsAt: now.addingTimeInterval(settings.length(kind)))
         return .start(kind)
     }
 
-    private mutating func finish(_ kind: BreakKind, now: Date) -> Event {
-        if kind == .long { lastLong = now }
-        lastMicro = now
-        snoozedUntil = nil
+    private mutating func finish(_ kind: BreakKind, _ outcome: Outcome, now: Date) -> Event {
+        let due = currentDue ?? now
+        if counts {
+            if kind == .long {
+                nextLong = Self.slot(after: due, every: settings.longEvery, past: now)
+                // the micro slot it took the place of, and any that passed during it
+                if nextMicro <= now.addingTimeInterval(Self.merge) {
+                    nextMicro = Self.slot(after: nextMicro, every: settings.microEvery, past: now)
+                }
+            } else {
+                nextMicro = Self.slot(after: due, every: settings.microEvery, past: now)
+            }
+        }
+        counts = true
         phase = .working
-        return .end
+        snoozedUntil = nil
+        currentDue = nil
+        return .end(kind, outcome, due: due)
     }
+}
+
+/// The due times saved across a restart.
+struct BreakClocks: Codable, Equatable {
+    var nextMicro: Date
+    var nextLong: Date
+    var savedAt = Date()
+}
+
+/// Every break and how it ended, kept on this Mac for 90 days, one JSON object per line.
+struct BreakRecord: Codable, Equatable {
+    var kind: BreakKind
+    var due: Date
+    var at: Date
+    var outcome: BreakSchedule.Outcome
+}
+
+struct BreakHistory {
+    static let keep: TimeInterval = 90 * 86400
+    private(set) var records: [BreakRecord] = []
+
+    init(records: [BreakRecord] = []) { self.records = records }
+
+    /// Lines that don't decode (a partial write) are skipped.
+    init(jsonLines data: Data) {
+        let d = JSONDecoder()
+        records = data.split(separator: 0x0A).compactMap { try? d.decode(BreakRecord.self, from: Data($0)) }
+    }
+
+    static func line(_ r: BreakRecord) -> Data { ((try? JSONEncoder().encode(r)) ?? Data()) + Data([0x0A]) }
+    var jsonLines: Data { records.reduce(into: Data()) { $0 += Self.line($1) } }
+
+    mutating func add(_ r: BreakRecord) { records.append(r) }
+
+    /// Drops what's older than 90 days; true when anything went.
+    mutating func prune(now: Date) -> Bool {
+        let before = records.count
+        records.removeAll { now.timeIntervalSince($0.at) > Self.keep }
+        return records.count != before
+    }
+
+    func counts(since start: Date) -> [BreakSchedule.Outcome: Int] {
+        records.filter { $0.at >= start }.reduce(into: [:]) { $0[$1.outcome, default: 0] += 1 }
+    }
+
+    /// "5 taken · 1 skipped · 2 snoozed", in a fixed order; "none" when empty.
+    static func summary(_ counts: [BreakSchedule.Outcome: Int]) -> String {
+        let parts = BreakSchedule.Outcome.allCases.compactMap { o in counts[o].map { "\($0) \(o.label)" } }
+        return parts.isEmpty ? "none" : parts.joined(separator: " · ")
+    }
+}
+
+extension BreakSchedule.Outcome {
+    var label: String {
+        switch self {
+        case .taken: "taken"
+        case .endedEarly: "ended early"
+        case .snoozed: "snoozed"
+        case .skipped: "skipped"
+        case .away: "away"
+        }
+    }
+}
+
+/// "Next: micro in 7 min · long in 42 min".
+func nextBreakText(micro: Date, long: Date?, now: Date) -> String {
+    func until(_ d: Date) -> String {
+        let s = max(0, d.timeIntervalSince(now))
+        if s < 60 { return "under a minute" }
+        let m = Int((s / 60).rounded(.up))
+        return m < 60 ? "\(m) min" : m % 60 == 0 ? "\(m / 60) h" : "\(m / 60) h \(m % 60) min"
+    }
+    return "Next: micro in \(until(micro))" + (long.map { " · long in \(until($0))" } ?? "")
 }
 
 /// What the on-device model is asked for. Reroll keeps the interests and level; Surprise me drops the interests.

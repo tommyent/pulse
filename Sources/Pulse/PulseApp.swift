@@ -230,6 +230,9 @@ final class OverlayController {
             dockScreen = panel.screen
         }
         panel.setFrameAutosaveName("PulseOverlay")
+        // A frame saved while a card or the hover hint widened the panel would otherwise keep the rail off its edge
+        // until its size next changed: place it from the content's own size now.
+        contentSized(hosting.fittingSize)
 
         let clicks: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: clicks) { [weak self] event in

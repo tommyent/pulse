@@ -784,6 +784,10 @@ struct OverlayView: View {
             : AnyLayout(HStackLayout(alignment: tail == .top ? .top : .bottom, spacing: 10))
         beside {
             BreakPill(controller: breaks, tail: tail)
+            // hovering the rail with nothing else open: when the next breaks come
+            if state.hoveringOverlay, !state.cardVisible, !state.petVisible, breaks.phase.isWorking, breaks.settings.enabled {
+                NextBreakHint(controller: breaks, tail: tail).transition(.opacity)
+            }
             let shift = cardShift(state.petVisible ? "pet" : state.selected.rawValue)
             usageOrPetCard(tail: tail)
                 .offset(x: state.dock.isVertical ? 0 : shift, y: state.dock.isVertical ? shift : 0)
@@ -950,6 +954,14 @@ struct MenuBarPopover: View {
                 Text("All accounts disabled").foregroundStyle(.secondary)
             }
             Divider()
+            if state.persisted.breaks.enabled {
+                TimelineView(.periodic(from: .now, by: 20)) { context in
+                    if let text = BreakController.shared.nextText(context.date) {
+                        Label(text, systemImage: "cup.and.saucer").foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)   // wraps rather than cutting off "long in …"
+                    }
+                }
+            }
             Toggle("Show usage rings on desktop", isOn: $state.persisted.showOverlay).toggleStyle(.checkbox)
             HStack {
                 Button {
@@ -1202,18 +1214,29 @@ struct BatterySettingsSection: View {
 
     private func soundRow(_ title: String, sound: Binding<String?>, loops: Binding<Bool>) -> some View {
         LabeledContent(title) {
-            Picker(title, selection: sound) {
-                Text("None").tag(String?.none)
-                ForEach(sounds, id: \.self) { Text($0).tag(String?.some($0)) }
-            }
-            .labelsHidden()
-            .fixedSize()
-            Button { BatterySounds.togglePreview(sound.wrappedValue) } label: { Image(systemName: "play.fill") }
-                .buttonStyle(.borderless)
-                .disabled(sound.wrappedValue == nil)
-                .help("Play this sound once; click again to stop")
-                .accessibilityLabel("Play \(title.lowercased())")
+            SoundChoice(title: title, sound: sound, sounds: sounds)
             Toggle("Loop", isOn: loops).toggleStyle(.checkbox).disabled(sound.wrappedValue == nil)
         }
+    }
+}
+
+/// A sound picker with None and a play button, for Battery's alerts and the breaks.
+struct SoundChoice: View {
+    let title: String
+    @Binding var sound: String?
+    let sounds: [String]
+
+    var body: some View {
+        Picker(title, selection: $sound) {
+            Text("None").tag(String?.none)
+            ForEach(sounds, id: \.self) { Text($0).tag(String?.some($0)) }
+        }
+        .labelsHidden()
+        .fixedSize()
+        Button { BatterySounds.togglePreview(sound) } label: { Image(systemName: "play.fill") }
+            .buttonStyle(.borderless)
+            .disabled(sound == nil)
+            .help("Play this sound once; click again to stop")
+            .accessibilityLabel("Play \(title.lowercased())")
     }
 }
