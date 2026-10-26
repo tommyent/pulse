@@ -22,35 +22,28 @@ enum BreakIdeas {
         return false
     }
 
+    /// `recent`: the ideas shown lately, oldest first; an answer too close to one of them is asked again.
     @MainActor
     static func generate(length: TimeInterval, level: Int, interests: [String], surprise: Bool,
-                         avoid: [String] = [], timeout: TimeInterval = 10) async -> String? {
+                         recent: [String] = [], timeout: TimeInterval = 10) async -> String? {
         #if canImport(FoundationModels)
         guard #available(macOS 26, *), available else { return nil }
         var rng = SystemRandomNumberGenerator()
         let focus = surprise ? nil : BreakIdeaPrompt.focus(from: interests, after: lastFocus, using: &rng)
         lastFocus = focus ?? lastFocus
-        let prompt = BreakIdeaPrompt.prompt(length: length, level: level, focus: focus,
-                                            angle: BreakIdeaPrompt.angles(level: surprise ? 2 : level).randomElement(using: &rng)!,
-                                            avoid: avoid)
-        return await withTaskGroup(of: String?.self) { group in
-            group.addTask {
-                let session = LanguageModelSession(instructions: BreakIdeaPrompt.instructions)
-                let options = GenerationOptions(temperature: surprise ? 1.2 : 0.9, maximumResponseTokens: 120)
-                guard let reply = try? await session.respond(to: prompt, generating: GeneratedBreakIdea.self, options: options)
-                else { return nil }
-                // plain text only: the model sometimes adds Markdown emphasis or quotes
-                let text = reply.content.idea.replacingOccurrences(of: "*", with: "")
-                    .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"“”")))
-                return text.isEmpty ? nil : text
-            }
-            group.addTask {
-                try? await Task.sleep(for: .seconds(timeout))
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first
+        let angles = BreakIdeaPrompt.angles(level: surprise ? 2 : level).shuffled(using: &rng)   // a new one each try
+        return await BreakIdeaPrompt.fresh(recent: recent, timeout: timeout) { avoid, attempt in
+            let prompt = BreakIdeaPrompt.prompt(length: length, level: level, focus: focus,
+                                                angle: angles[attempt % angles.count], avoid: avoid)
+            let session = LanguageModelSession(instructions: BreakIdeaPrompt.instructions)
+            // Apple documents temperature as 0 to 1
+            let options = GenerationOptions(temperature: surprise ? 1 : 0.9, maximumResponseTokens: 120)
+            guard let reply = try? await session.respond(to: prompt, generating: GeneratedBreakIdea.self, options: options)
+            else { return nil }
+            // plain text only: the model sometimes adds Markdown emphasis or quotes
+            let text = reply.content.idea.replacingOccurrences(of: "*", with: "")
+                .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"“”")))
+            return text.isEmpty ? nil : text
         }
         #else
         return nil

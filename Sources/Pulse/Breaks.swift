@@ -18,6 +18,7 @@ struct BreakSettings: Codable, Equatable {
     var longLength: TimeInterval = 5 * 60
     var color = BreakColor.presets[0].name   // a preset's name, or "#RRGGBB"
     var showAgents = true
+    var holidays = true   // a holiday's video behind the countdown
     var ideas = true
     var level = 1   // 0 easy … 4 adventurous
     var interests: [String] = []
@@ -43,6 +44,7 @@ struct BreakSettings: Codable, Equatable {
         longLength = try c.decodeIfPresent(TimeInterval.self, forKey: .longLength) ?? d.longLength
         color = try c.decodeIfPresent(String.self, forKey: .color) ?? d.color
         showAgents = try c.decodeIfPresent(Bool.self, forKey: .showAgents) ?? d.showAgents
+        holidays = try c.decodeIfPresent(Bool.self, forKey: .holidays) ?? d.holidays
         ideas = try c.decodeIfPresent(Bool.self, forKey: .ideas) ?? d.ideas
         level = min(4, max(0, try c.decodeIfPresent(Int.self, forKey: .level) ?? d.level))
         interests = try c.decodeIfPresent([String].self, forKey: .interests) ?? d.interests
@@ -60,6 +62,38 @@ struct BreakSettings: Codable, Equatable {
         default: ""
         }
         return name.isEmpty ? nil : name
+    }
+}
+
+/// A holiday that dresses the break screen: its video plays muted behind the countdown, its colours light the edges.
+struct BreakHoliday: Equatable {
+    let name: String
+    let video: String           // Resources/<video>.mp4, and <video>-poster.jpg for Reduce Motion
+    let glow: UInt32, bar: UInt32
+    let matches: @Sendable (DateComponents) -> Bool
+
+    static func == (a: Self, b: Self) -> Bool { a.name == b.name }
+
+    static let all = [
+        BreakHoliday(name: "halloween", video: "holiday-halloween", glow: 0xE8822A, bar: 0xFFB050) {
+            $0.month == 10 && $0.day == 31
+        },
+        // US Thanksgiving: the fourth Thursday of November
+        BreakHoliday(name: "thanksgiving", video: "holiday-thanksgiving", glow: 0xC8553D, bar: 0xE8B04A) {
+            $0.month == 11 && $0.weekday == 5 && $0.weekdayOrdinal == 4
+        },
+    ]
+
+    /// The holiday on `date`, or the one named by `simulated` (for testing on any day).
+    static func on(_ date: Date, calendar: Calendar = Calendar(identifier: .gregorian), simulated: String? = nil) -> BreakHoliday? {
+        if let simulated { return all.first { $0.name == simulated } }
+        let c = calendar.dateComponents([.month, .day, .weekday, .weekdayOrdinal], from: date)
+        return all.first { $0.matches(c) }
+    }
+
+    /// Where a break's video starts: with less time left than the video runs, its last part, so the ending is seen.
+    static func start(duration: TimeInterval, left: TimeInterval) -> TimeInterval {
+        max(0, duration - left)
     }
 }
 
@@ -276,7 +310,7 @@ struct BreakSchedule {
         }
     }
 
-    /// Escape: dismisses the break without taking it. The next one keeps its grid.
+    /// Escape, or the countdown's ×: dismisses the break without taking it. The next one keeps its grid.
     mutating func skip(_ now: Date) -> Event? {
         guard let kind = activeKind else { return nil }
         return finish(kind, .skipped, now: now)
@@ -427,7 +461,7 @@ extension BreakSchedule.Outcome {
     }
 }
 
-/// "Next: micro in 7 min · long in 42 min".
+/// "Next: micro in 7 min", or "Next: long in 7 min" when the long break comes first or takes the micro's place.
 func nextBreakText(micro: Date, long: Date?, now: Date) -> String {
     func until(_ d: Date) -> String {
         let s = max(0, d.timeIntervalSince(now))
@@ -435,7 +469,8 @@ func nextBreakText(micro: Date, long: Date?, now: Date) -> String {
         let m = Int((s / 60).rounded(.up))
         return m < 60 ? "\(m) min" : m % 60 == 0 ? "\(m / 60) h" : "\(m / 60) h \(m % 60) min"
     }
-    return "Next: micro in \(until(micro))" + (long.map { " · long in \(until($0))" } ?? "")
+    if let long, long.timeIntervalSince(micro) <= BreakSchedule.merge { return "Next: long in \(until(min(micro, long)))" }
+    return "Next: micro in \(until(micro))"
 }
 
 /// What the on-device model is asked for. Reroll keeps the interests and level; Surprise me drops the interests.
@@ -459,9 +494,12 @@ enum BreakIdeaPrompt {
     /// Calm levels get calm kinds, bold levels active ones.
     static func angles(level: Int) -> [String] {
         switch level {
-        case ...1: ["something to notice with the senses", "something to tidy or arrange", "something calm to make or draw"]
-        case 2: ["something silly to make or draw", "something to play", "a small game"]
-        default: ["something that moves the whole body", "a small dare or challenge", "something to try for the first time"]
+        case ...1: ["something to notice with the senses", "something to tidy or arrange", "something calm to make or draw",
+                    "something to listen to", "something gentle for the hands", "a slow breathing exercise", "a small kindness for later"]
+        case 2: ["something silly to make or draw", "something to play", "a small game", "a tiny performance",
+                 "something to build from what's around", "a made-up challenge", "something to invent or imagine"]
+        default: ["something that moves the whole body", "a small dare or challenge", "something to try for the first time",
+                  "a balance or coordination test", "a short burst of exercise", "something to learn by doing", "a quick physical game"]
         }
     }
 
@@ -477,11 +515,110 @@ enum BreakIdeaPrompt {
             lines.append("It must be clearly about their interest \"\(focus)\", and name it.")
             lines.append("Make it \(angle). Level: \(levelWords[min(4, max(0, level))]).")
         } else {
-            lines.append("Make it odd, random, quirky and fun, something they'd never expect, like \"draw a frog sitting on top of a doghouse\" or \"walk barefoot across the yard\". Make it \(angle).")
+            // no example ideas: the small model tends to hand them back
+            lines.append("Make it odd, random, quirky and fun, something they'd never expect. Make it \(angle).")
         }
         lines.append("Be specific and concrete. Don't suggest stretching unless the interest is stretching.")
         if !avoid.isEmpty { lines.append("Don't repeat or reword any of these: \(avoid.joined(separator: " | "))") }
         return lines.joined(separator: "\n")
+    }
+
+    /// How many shown ideas Pulse remembers, across breaks and restarts.
+    static let keep = 40
+
+    /// `list` with `idea` as its newest entry, at most `keep` long.
+    static func remember(_ idea: String, in list: [String]) -> [String] {
+        Array((list.filter { $0 != idea } + [idea]).suffix(keep))
+    }
+
+    /// The newest ideas that fit in the prompt, newest first. The on-device model's 4,096-token window holds the
+    /// instructions, the prompt, the schema and the answer, so the list stays near 1,500 characters (~400 tokens).
+    static func avoidList(_ recent: [String], budget: Int = 1500) -> [String] {
+        var out: [String] = [], used = 0
+        for idea in recent.reversed() {
+            used += idea.count + 3
+            if used > budget { break }
+            out.append(idea)
+        }
+        return out
+    }
+
+    private static let smallWords: Set<String> = ["a", "an", "the", "and", "or", "of", "to", "for", "with", "in", "on", "at",
+                                                  "by", "your", "you", "it", "its", "some", "into", "up", "out", "then", "from", "as"]
+
+    /// A sentence's content words, lowercased, small words dropped and plurals folded ("plants" counts as "plant").
+    static func words(_ idea: String) -> Set<String> {
+        Set(idea.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
+            .filter { !smallWords.contains($0) }
+            .map { $0.count > 3 && $0.hasSuffix("s") && !$0.hasSuffix("ss") ? String($0.dropLast()) : $0 })
+    }
+
+    /// True when `idea` rewords one of `recent`: at least 70% of their content words shared (overlap over union), or
+    /// all of one's words (two or more) inside the other's. One changed subject in a short idea ("sounds" for
+    /// "colours") is new.
+    static func isRepeat(_ idea: String, of recent: [String]) -> Bool {
+        let w = words(idea)
+        return !w.isEmpty && recent.contains { r in
+            let o = words(r), shared = w.intersection(o).count
+            return Double(shared) / Double(w.union(o).count) >= 0.7 || (shared == min(w.count, o.count) && shared >= 2)
+        }
+    }
+
+    /// Asks up to `attempts` times, all within one `timeout`, for an idea that isn't a repeat of `recent`. Each
+    /// rejected answer joins the next try's avoid list. nil when the model fails, every answer repeats, or time runs
+    /// out; the deadline holds even when the model ignores cancellation, and its late answer is dropped.
+    static func fresh(recent: [String], attempts: Int = 3, timeout: TimeInterval,
+                      ask: @escaping @Sendable (_ avoid: [String], _ attempt: Int) async -> String?) async -> String? {
+        let work = Task<String?, Never> {
+            var rejected: [String] = []
+            for attempt in 0..<attempts {
+                guard !Task.isCancelled, let text = await ask(rejected.reversed() + avoidList(recent), attempt),
+                      !Task.isCancelled else { return nil }
+                if !isRepeat(text, of: recent + rejected) { return text }
+                rejected.append(text)
+            }
+            return nil
+        }
+        let race = Race()
+        let timer = Task {
+            do { try await Task.sleep(for: .seconds(timeout)) } catch { return }   // cancelled: the answer came first
+            work.cancel()
+            race.finish(nil)
+        }
+        Task {
+            let text = await work.value
+            race.finish(text)   // claimed before the timer stops, so a timer waking in between can't take its place
+            timer.cancel()
+        }
+        // the deadline, the answer and a cancelled caller each end the wait; whichever comes first wins
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { race.wait($0) }
+        } onCancel: {
+            work.cancel()
+            race.finish(nil)
+        }
+    }
+
+    /// One result for a continuation that several racers may try to finish, possibly before it's waited on.
+    private final class Race: @unchecked Sendable {
+        private let lock = NSLock()
+        private var waiting: CheckedContinuation<String?, Never>?
+        private var result: String??   // set once: the winner's value
+
+        func wait(_ c: CheckedContinuation<String?, Never>) {
+            let ready: String?? = lock.withLock { if result == nil { waiting = c }; return result }
+            if let ready { c.resume(returning: ready) }
+        }
+
+        func finish(_ value: String?) {
+            let c: CheckedContinuation<String?, Never>? = lock.withLock {
+                guard result == nil else { return nil }
+                result = .some(value)
+                defer { waiting = nil }
+                return waiting
+            }
+            c?.resume(returning: value)
+        }
     }
 
     /// The interest to build on: any but the one used last, so rerolls move between them.

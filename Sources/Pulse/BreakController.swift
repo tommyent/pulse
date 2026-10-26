@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import Combine
 import CoreGraphics
@@ -13,6 +14,8 @@ extension UserDefaults {
     /// Shows this text as the break's idea instead of asking Apple Intelligence, for testing on a Mac without it:
     /// `defaults write app.pulse simulatedIdea "…"`.
     var simulatedIdea: String? { string(forKey: "simulatedIdea") }
+    /// Dresses every break as this holiday, for testing on any day: `defaults write app.pulse simulatedHoliday halloween`.
+    var simulatedHoliday: String? { string(forKey: "simulatedHoliday") }
 }
 
 /// Runs the break schedule: a one-second clock while breaks are on, the countdown beside the rail, the overlay on
@@ -26,6 +29,13 @@ final class BreakController: ObservableObject {
     @Published private(set) var phase = BreakSchedule.Phase.working
     @Published private(set) var idea = Idea.hidden
     @Published private(set) var history = BreakHistory()
+    /// The holiday dressing this break's main screen, and its player once the video has loaded (or its still, with
+    /// Reduce Motion on).
+    @Published private(set) var holiday: BreakHoliday?
+    @Published private(set) var holidayPlayer: AVPlayer?
+    @Published private(set) var holidayStill: NSImage?
+    private var holidayLooper: AVPlayerLooper?
+    private var holidayWatch: NSKeyValueObservation?
     let rex = RexAgents()
     private(set) var breakStarted = Date()
     private var schedule = BreakSchedule(settings: BreakSettings(), now: .now)
@@ -34,7 +44,7 @@ final class BreakController: ObservableObject {
     private var panels: [NSPanel] = []
     private var pillPanel: NSPanel?   // only while the rings are hidden
     private var ideaTask: Task<Void, Never>?
-    private var shownIdeas: [String] = []
+    private var recentIdeas: [String] = []   // break-ideas.json: the ideas last shown, oldest first
     private var lockedAt: Date?
     private var sleptAt: Date?
     private var cancellables: Set<AnyCancellable> = []
@@ -49,6 +59,7 @@ final class BreakController: ObservableObject {
         .appending(path: "Pulse")
     private static let clocksURL = dir.appending(path: "break-clock.json")
     private static let historyURL = dir.appending(path: "break-history.jsonl")
+    private static let ideasURL = dir.appending(path: "break-ideas.json")
 
     var settings: BreakSettings { schedule.settings }
     func remaining(_ now: Date) -> (left: TimeInterval, total: TimeInterval) { schedule.remaining(now) ?? (0, 1) }
@@ -59,7 +70,7 @@ final class BreakController: ObservableObject {
         }
     }
 
-    /// For the rail on hover and the menu: "Next: micro in 7 min · long in 42 min". nil while breaks are off.
+    /// For the rail on hover and the menu: "Next: micro in 7 min". nil while breaks are off.
     func nextText(_ now: Date) -> String? {
         guard schedule.settings.enabled else { return nil }
         if !phase.isWorking { return "Break now" }
@@ -74,6 +85,7 @@ final class BreakController: ObservableObject {
         var loaded = BreakHistory(jsonLines: (try? Data(contentsOf: Self.historyURL)) ?? Data())
         if loaded.prune(now: now) { try? loaded.jsonLines.write(to: Self.historyURL, options: .atomic) }
         history = loaded
+        recentIdeas = (try? JSONDecoder().decode([String].self, from: Data(contentsOf: Self.ideasURL))) ?? []
         schedule = BreakSchedule(settings: state.persisted.breaks, now: now)
         if schedule.settings.enabled { restoreClocks(now) }
         state.$persisted.map(\.breaks).removeDuplicates()
@@ -257,7 +269,6 @@ final class BreakController: ObservableObject {
         switch event {
         case let .countdown(k):
             log.notice("countdown: \(k.rawValue, privacy: .public) break in \(Int(BreakSchedule.countdown)) s\(why.isEmpty ? "" : " (" + why + ")", privacy: .public)")
-            shownIdeas = []
             requestIdea(surprise: false)
             placePill()
         case let .start(k):
@@ -276,7 +287,6 @@ final class BreakController: ObservableObject {
             hideOverlay()
             ideaTask?.cancel()
             idea = .hidden
-            shownIdeas = []
         case let .away(counted):
             for k in [BreakKind.micro, .long] { if let due = counted[k] { record(k, due: due, .away) } }
             let kinds = counted.keys.map(\.rawValue).sorted().joined(separator: " and ")
@@ -296,11 +306,16 @@ final class BreakController: ObservableObject {
     // MARK: actions from the pill and the overlay
 
     func startNow() { if let e = schedule.startNow(.now) { handle(e, why: "clicked") } }
-    func pause() { schedule.pause(.now); publish(); log.notice("paused") }
-    func resume() { schedule.resume(.now); publish(); log.notice("resumed") }
+    func pause() { schedule.pause(.now); publish(); holidayPlayer?.pause(); log.notice("paused") }
+    func resume() {
+        schedule.resume(.now)
+        publish()
+        if holidayLooper != nil { holidayPlayer?.play() }   // with Reduce Motion the still stays still
+        log.notice("resumed")
+    }
     func snooze() { if let e = schedule.snooze(.now) { handle(e, why: "snoozed, back in \(Int(BreakSchedule.snooze)) s") } }
     func backToWork() { if let e = schedule.backToWork(.now) { handle(e, why: "Back to Work") } }
-    func skip() { if let e = schedule.skip(.now) { handle(e, why: "Escape") } }
+    func skip(why: String = "Escape") { if let e = schedule.skip(.now) { handle(e, why: why) } }
     func reroll() { requestIdea(surprise: false) }
     func surprise() { requestIdea(surprise: true) }
 
@@ -313,18 +328,26 @@ final class BreakController: ObservableObject {
         let previous = idea
         ideaTask?.cancel()
         idea = .loading
-        let avoid = shownIdeas
+        let recent = recentIdeas
         ideaTask = Task { [weak self] in
             let text = await BreakIdeas.generate(length: s.length(kind), level: s.level, interests: s.interests,
-                                                 surprise: surprise, avoid: avoid)
+                                                 surprise: surprise, recent: recent)
             guard !Task.isCancelled, let self else { return }
             if let text {
                 idea = .shown(text)
-                shownIdeas.append(text)
+                rememberShownIdea()
             } else {
                 idea = previous == .loading ? .hidden : previous
             }
         }
+    }
+
+    /// Saves the idea once it's on the break screen: one written during a countdown that was skipped never counts.
+    /// A `simulatedIdea` isn't saved.
+    private func rememberShownIdea() {
+        guard !panels.isEmpty, case let .shown(text) = idea, UserDefaults.standard.simulatedIdea == nil else { return }
+        recentIdeas = BreakIdeaPrompt.remember(text, in: recentIdeas)
+        if let data = try? JSONEncoder().encode(recentIdeas) { try? data.write(to: Self.ideasURL, options: .atomic) }
     }
 
     // MARK: the countdown when the rings are hidden
@@ -365,6 +388,8 @@ final class BreakController: ObservableObject {
         if agents { rex.start() }
         let petOnRight = state?.dock != .left
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        holiday = s.holidays ? BreakHoliday.on(.now, simulated: UserDefaults.standard.simulatedHoliday) : nil
+        if let holiday { startHoliday(holiday, still: reduceMotion) }
         for screen in NSScreen.screens {
             let panel = BreakPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             panel.isOpaque = false
@@ -375,7 +400,8 @@ final class BreakController: ObservableObject {
             panel.isReleasedWhenClosed = false
             panel.contentView = NSHostingView(rootView: BreakOverlayView(
                 controller: self, size: screen.frame.size,
-                agents: agents && screen == main, showPet: state?.showsPet ?? true, petOnRight: petOnRight))
+                agents: agents && screen == main, holidayScreen: screen == main, showPet: state?.showsPet ?? true,
+                petOnRight: petOnRight))
             panel.setFrame(screen.frame, display: false)
             panel.alphaValue = reduceMotion ? 1 : 0
             panel.orderFrontRegardless()
@@ -384,6 +410,7 @@ final class BreakController: ObservableObject {
                 NSAnimationContext.runAnimationGroup { $0.duration = 0.6; panel.animator().alphaValue = 1 }
             }
         }
+        rememberShownIdea()
         // the keyboard, so Escape can end the break
         NSApp.activate(ignoringOtherApps: true)
         (panels.first { $0.screen == main } ?? panels.first)?.makeKey()
@@ -395,8 +422,71 @@ final class BreakController: ObservableObject {
         }
     }
 
+    /// Loads the holiday's video, then loops it from where the time left should start (a short break plays the
+    /// ending). With Reduce Motion on, its still instead. If anything fails the break looks as on any other day.
+    private func startHoliday(_ h: BreakHoliday, still: Bool) {
+        func file(_ name: String, _ type: String) -> URL? { Bundle.pulseResources.url(forResource: "Resources/\(name)", withExtension: type) }
+        if still {
+            holidayStill = file("\(h.video)-poster", "jpg").flatMap(NSImage.init(contentsOf:))
+            if holidayStill == nil { holiday = nil }
+            log.notice("holiday \(h.name, privacy: .public): \(self.holidayStill == nil ? "no still in the app" : "its still, Reduce Motion is on", privacy: .public)")
+            return
+        }
+        guard let url = file(h.video, "mp4") else {
+            log.notice("holiday \(h.name, privacy: .public): its video isn't in the app")
+            holiday = nil
+            return
+        }
+        let started = breakStarted
+        Task { [weak self] in
+            let asset = AVURLAsset(url: url)
+            let duration = try? await asset.load(.duration)
+            guard let self, breakStarted == started, holiday == h, !panels.isEmpty else { return }
+            guard let duration, duration.isNumeric, duration.seconds > 1 else {
+                log.notice("holiday \(h.name, privacy: .public): the video didn't load")
+                holiday = nil
+                return
+            }
+            // from the time left now, not the break's length: loading took some of it
+            let from = BreakHoliday.start(duration: duration.seconds, left: remaining(.now).left)
+            // AVPlayerLooper throws on a range outside the item, so the range is built from its loaded duration
+            let range = from > 0 ? CMTimeRange(start: CMTime(seconds: from, preferredTimescale: duration.timescale), end: duration) : .invalid
+            let player = AVQueuePlayer()
+            player.isMuted = true
+            player.preventsDisplaySleepDuringVideoPlayback = false
+            let looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(asset: asset), timeRange: range)
+            // .initial: it may have failed already
+            holidayWatch = looper.observe(\.status, options: [.initial]) { looper, _ in
+                guard looper.status == .failed else { return }
+                Task { @MainActor in BreakController.shared.holidayFailed(looper) }
+            }
+            holidayLooper = looper
+            if !phase.isPaused { player.play() }
+            withAnimation(.easeOut(duration: 1.2)) { self.holidayPlayer = player }
+            log.notice("holiday \(h.name, privacy: .public): the video plays from \(Int(from)) s")
+        }
+    }
+
+    /// Only this break's looper counts: a failure queued by an earlier break's is ignored.
+    private func holidayFailed(_ looper: AVPlayerLooper) {
+        guard holidayLooper === looper else { return }
+        log.notice("holiday video failed, the break carries on without it: \(looper.error?.localizedDescription ?? "no reason given", privacy: .public)")
+        stopHoliday()
+    }
+
+    private func stopHoliday() {
+        holidayWatch = nil
+        holidayLooper?.disableLooping()
+        holidayPlayer?.pause()
+        holidayLooper = nil
+        holidayPlayer = nil
+        holidayStill = nil
+        holiday = nil
+    }
+
     private func hideOverlay() {
         rex.stop()
+        stopHoliday()
         guard !panels.isEmpty else { return }
         let closing = panels
         panels = []

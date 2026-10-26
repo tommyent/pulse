@@ -3,7 +3,7 @@ import AppKit
 /// The Codex pet sheet (8 columns × 11 rows of 192×208 cells, as the Codex app and CLI draw it).
 /// Rows are named animations; each state lists its frame durations along its row.
 enum CodexPetSprite {
-    enum State: CaseIterable { case idle, waving, waiting, running, walkRight, walkLeft, jump }
+    enum State: CaseIterable { case idle, waving, waiting, running, walkRight, walkLeft, jump, happy, oops, turn, turnBack }
 
     static let columns = 8, rows = 11
 
@@ -17,7 +17,21 @@ enum CodexPetSprite {
         case .walkRight: (1, Array(repeating: 0.1, count: 8))   // the break screen's pacing
         case .walkLeft: (2, Array(repeating: 0.1, count: 8))
         case .jump: (4, [0.12, 0.12, 0.16, 0.12, 0.2])
+        // the break screen's tricks: a happy dance, an oops after a flip, and a turn-around in two rows
+        case .happy: (8, [0.14, 0.14, 0.14, 0.14, 0.14, 0.2])
+        case .oops: (5, Array(repeating: 0.12, count: 8))
+        case .turn: (9, Array(repeating: 0.07, count: 8))
+        case .turnBack: (10, Array(repeating: 0.07, count: 8))
         }
+    }
+
+    /// The share of a cell's height below the feet (measured on the sheet: feet at y 198 of 208, 188 when turning).
+    static func footMargin(_ state: State) -> Double { state == .turn || state == .turnBack ? 20.0 / 208 : 10.0 / 208 }
+
+    /// A turn-around at `progress` 0…1: row 9's eight frames, then row 10's.
+    static func spin(_ progress: Double) -> (state: State, frame: Int) {
+        let i = min(15, max(0, Int(progress * 16)))
+        return i < 8 ? (.turn, i) : (.turnBack, i - 8)
     }
 
     static func frame(_ state: State, at elapsed: TimeInterval) -> Int {

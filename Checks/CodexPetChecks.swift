@@ -28,6 +28,18 @@ enum CodexPetChecks {
             }
             assert(CodexPetSprite.frame(state, at: -1) == 0)
         }
+        // the turn-around plays row 9 then row 10, every frame once, in order
+        let spin = stride(from: 0.0, to: 1.0, by: 1.0 / 64).map { CodexPetSprite.spin($0) }
+        assert(spin.first! == (.turn, 0) && spin.last! == (.turnBack, 7))
+        var steps: [String] = []
+        for s in spin where steps.last != "\(s.state)\(s.frame)" { steps.append("\(s.state)\(s.frame)") }
+        assert(steps == (0..<8).map { "turn\($0)" } + (0..<8).map { "turnBack\($0)" })
+        assert(CodexPetSprite.spin(-1) == (.turn, 0) && CodexPetSprite.spin(2) == (.turnBack, 7))
+        // every new row has art in each of its frames
+        for state in [CodexPetSprite.State.happy, .oops, .turn, .turnBack] {
+            for frame in tracks[state]! { assert(NSBitmapImageRep(cgImage: frame).colorAt(x: 96, y: 120)!.alphaComponent > 0.5, "\(state)") }
+        }
+        assert(CodexPetSprite.footMargin(.idle) < CodexPetSprite.footMargin(.turn))
         assert(CodexPetSprite.frames(from: URL(fileURLWithPath: "/nonexistent-codex-pet.webp")).isEmpty)
         print("Pet checks passed: decoding, idle frames, transparency, timing and missing-asset fallback")
     }

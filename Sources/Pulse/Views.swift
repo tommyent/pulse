@@ -958,7 +958,7 @@ struct MenuBarPopover: View {
                 TimelineView(.periodic(from: .now, by: 20)) { context in
                     if let text = BreakController.shared.nextText(context.date) {
                         Label(text, systemImage: "cup.and.saucer").foregroundStyle(.primary)
-                            .fixedSize(horizontal: false, vertical: true)   // wraps rather than cutting off "long in …"
+                            .fixedSize(horizontal: false, vertical: true)   // wraps rather than cutting off "a break is waiting for …"
                     }
                 }
             }

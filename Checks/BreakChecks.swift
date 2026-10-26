@@ -1,18 +1,22 @@
-// Run from the project: swiftc Sources/Pulse/Breaks.swift Sources/Pulse/RexAgents.swift Checks/BreakChecks.swift -o /tmp/pulse-break-check && /tmp/pulse-break-check
+// Run from the project: swiftc Sources/Pulse/Breaks.swift Sources/Pulse/BreakTricks.swift Sources/Pulse/RexAgents.swift Checks/BreakChecks.swift -o /tmp/pulse-break-check && /tmp/pulse-break-check
 import Foundation
 
 @main
 enum BreakChecks {
-    static func main() {
+    static func main() async {
         schedule()
         restore()
         history()
         interests()
         prompt()
+        repeats()
+        await retries()
+        holidays()
+        tricks()
         colours()
         settingsDecoding()
         rex()
-        print("Break checks passed: due-based schedule, countdown, pause, snooze, voice hold, both away modes, locks, restore, history, sounds, interests, prompt, colours, settings and Rex parsing")
+        print("Break checks passed: due-based schedule, countdown, pause, snooze, voice hold, both away modes, locks, restore, history, sounds, interests, prompt, repeats, retries, holidays, tricks, colours, settings and Rex parsing")
     }
 
     static func schedule() {
@@ -119,6 +123,9 @@ enum BreakChecks {
         assert(s.tick(now: at(20), idle: 0, voiceActive: false) == .countdown(.micro))
         assert(s.tick(now: at(20.5), idle: 0, voiceActive: false) == .start(.micro))
         assert(s.skip(at(20.6)) == .end(.micro, .skipped, due: at(20)) && next(s, 21).0 == at(40))
+        var dismissed = BreakSchedule(settings: on, now: t0)   // the countdown's × skips before the break starts
+        assert(dismissed.tick(now: at(20), idle: 0, voiceActive: false) == .countdown(.micro))
+        assert(dismissed.skip(at(20.2)) == .end(.micro, .skipped, due: at(20)) && next(dismissed, 21).0 == at(40))
         assert(s.tick(now: at(40), idle: 0, voiceActive: false) == .countdown(.micro))
         var off = on; off.enabled = false
         s.settings = off
@@ -156,10 +163,13 @@ enum BreakChecks {
         assert(BreakSchedule.slot(after: at(20), every: 600, past: at(45)) == at(50))
         assert(breakLengthLabel(300) == "5-min break" && breakLengthLabel(20) == "20-sec break")
         let now = at(100)
-        assert(nextBreakText(micro: at(107), long: at(142), now: now) == "Next: micro in 7 min · long in 42 min")
+        assert(nextBreakText(micro: at(107), long: at(142), now: now) == "Next: micro in 7 min")
         assert(nextBreakText(micro: at(100.5), long: nil, now: now) == "Next: micro in under a minute")
         assert(nextBreakText(micro: at(165), long: nil, now: now) == "Next: micro in 1 h 5 min")
-        assert(nextBreakText(micro: at(110), long: at(160), now: now) == "Next: micro in 10 min · long in 1 h")
+        // the long break takes the micro's place when they fall together, and goes first when it's sooner
+        assert(nextBreakText(micro: at(107), long: at(107), now: now) == "Next: long in 7 min")
+        assert(nextBreakText(micro: at(107), long: at(108.5), now: now) == "Next: long in 7 min")
+        assert(nextBreakText(micro: at(120), long: at(105), now: now) == "Next: long in 5 min")
     }
 
     static func restore() {
@@ -247,7 +257,7 @@ enum BreakChecks {
         let micro = BreakIdeaPrompt.prompt(length: 20, level: 0, focus: "tea", angle: "something for the body")
         assert(micro.contains("20 seconds") && micro.contains("very short") && micro.contains("easy") && micro.contains("\"tea\""))
         let odd = BreakIdeaPrompt.prompt(length: 300, level: 2, focus: nil, angle: "something to make or draw")
-        assert(odd.contains("odd") && odd.contains("frog") && !odd.contains("Level:") && !odd.contains("interest \""))
+        assert(odd.contains("odd") && !odd.contains("like \"") && !odd.contains("Level:") && !odd.contains("interest \""))
         assert(BreakIdeaPrompt.duration(60) == "1 minute" && BreakIdeaPrompt.duration(120) == "2 minutes")
         assert(BreakIdeaPrompt.instructions.contains("travel") && BreakIdeaPrompt.instructions.contains("money"))
         for level in 0...4 { assert(BreakIdeaPrompt.prompt(length: 60, level: level, focus: "x", angle: "a").contains(BreakIdeaPrompt.levelWords[level])) }
@@ -266,6 +276,243 @@ enum BreakChecks {
         assert(BreakIdeaPrompt.interestsUsed("Go bird watching at the window", from: ["bird watching"]) == ["bird watching"])
         assert(BreakIdeaPrompt.interestsUsed("Stretch your arms", from: ["tea"]).isEmpty)
         assert(BreakIdeaPrompt.interestsUsed("Teach the cat a trick", from: ["tea"]).isEmpty)   // whole words, not any substring
+    }
+
+    static func repeats() {
+        let r = BreakIdeaPrompt.isRepeat
+        assert(r("Drink a glass of water slowly", ["Slowly drink a glass of water by the window"]))   // reworded
+        assert(r("Water your plants", ["water the plant"]))                                            // plural, case
+        assert(r("Hum your favourite song", ["Hum your favourite song."]))
+        assert(!r("Draw a cat on paper", ["Draw a dog on paper"]))
+        assert(!r("Stretch your arms", ["Stretch your legs"]))
+        assert(!r("Hum your favourite song while tidying your desk", ["Hum your favourite song while you water a plant"]))
+        assert(!r("Name three sounds nearby", ["Name three colors nearby"]))   // one changed subject is a new idea
+        assert(!r("Count five birds outside", ["Count five clouds outside"]))
+        assert(r("Quietly hum your favourite song", ["Hum your favourite song quietly"]))
+        assert(r("Water the plants", ["Water the plants by the window"]) && r("Draw a cat wearing a hat", ["Draw a cat"]))
+        assert(!r("Stretch", ["Stretch your arms slowly"]))   // one shared word isn't enough
+        assert(!r("Anything", []) && !r("", ["a the"]))
+        assert(BreakIdeaPrompt.words("The plants, the GLASS and its sides") == ["plant", "glass", "side"])
+
+        var list: [String] = []
+        for i in 0..<45 { list = BreakIdeaPrompt.remember("idea \(i)", in: list) }
+        assert(list.count == BreakIdeaPrompt.keep && list.first == "idea 5" && list.last == "idea 44")
+        list = BreakIdeaPrompt.remember("idea 10", in: list)   // shown again: moves to the newest end, once
+        assert(list.count == BreakIdeaPrompt.keep && list.last == "idea 10" && list.filter { $0 == "idea 10" }.count == 1)
+        let avoid = BreakIdeaPrompt.avoidList(list, budget: 30)
+        assert(avoid.first == "idea 10" && avoid.count == 3 && BreakIdeaPrompt.avoidList([], budget: 30).isEmpty)
+    }
+
+    /// The idea retries against a stand-in model: at most three asks, one deadline for all of them.
+    static func retries() async {
+        final class Asks: @unchecked Sendable {
+            private let lock = NSLock()
+            private var seen: [[String]] = []
+            func add(_ avoid: [String]) -> Int { lock.withLock { seen.append(avoid); return seen.count } }
+            var all: [[String]] { lock.withLock { seen } }
+        }
+        let recent = ["Water the plants by the window"]
+        func run(_ answers: [String?], delay: Double = 0, timeout: Double = 5) async -> (String?, Asks, Double) {
+            let asks = Asks(), start = Date()
+            let out = await BreakIdeaPrompt.fresh(recent: recent, timeout: timeout) { avoid, _ in
+                let n = asks.add(avoid)
+                if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+                return answers[min(n, answers.count) - 1]
+            }
+            return (out, asks, Date().timeIntervalSince(start))
+        }
+        var (out, asks, _) = await run(["Hum a song"])
+        assert(out == "Hum a song" && asks.all.count == 1 && asks.all[0] == recent)
+        (out, asks, _) = await run(["Water the plants", "Water plants by the window", "Juggle two socks"])
+        assert(out == "Juggle two socks" && asks.all.count == 3)
+        assert(asks.all[2].prefix(2) == ["Water plants by the window", "Water the plants"])   // rejected ones are avoided next
+        (out, asks, _) = await run(["Water the plants"])
+        assert(out == nil && asks.all.count == 3)
+        (out, asks, _) = await run([nil])
+        assert(out == nil && asks.all.count == 1)
+        let (late, slow, took) = await run(["Water the plants", "Water the plants", "Hum"], delay: 0.2, timeout: 0.3)
+        assert(late == nil && slow.all.count <= 2 && took < 1, "\(took)")
+        // a model that ignores cancellation still can't hold the idea past its deadline
+        let begun = Date()
+        let stuck = await BreakIdeaPrompt.fresh(recent: [], timeout: 0.1) { _, _ in
+            await withCheckedContinuation { c in DispatchQueue.global().asyncAfter(deadline: .now() + 1) { c.resume() } }
+            return "Hum a song"
+        }
+        assert(stuck == nil && Date().timeIntervalSince(begun) < 0.5, "\(Date().timeIntervalSince(begun))")
+        // a cancelled caller (Reroll, the break ending) stops waiting at once, not at the deadline
+        let called = Date()
+        let caller = Task {
+            await BreakIdeaPrompt.fresh(recent: [], timeout: 2) { _, _ in
+                await withCheckedContinuation { c in DispatchQueue.global().asyncAfter(deadline: .now() + 1) { c.resume() } }
+                return "Hum a song"
+            }
+        }
+        try? await Task.sleep(for: .seconds(0.05))
+        caller.cancel()
+        let dropped = await caller.value
+        assert(dropped == nil && Date().timeIntervalSince(called) < 0.4, "\(Date().timeIntervalSince(called))")
+        // an answer that comes at once is never lost to the timer
+        for _ in 0..<2000 {
+            let quick = await BreakIdeaPrompt.fresh(recent: [], timeout: 1) { _, _ in "Hum a song" }
+            assert(quick == "Hum a song")
+        }
+    }
+
+    static func holidays() {
+        let cal = Calendar(identifier: .gregorian)
+        func day(_ y: Int, _ m: Int, _ d: Int) -> Date { cal.date(from: DateComponents(year: y, month: m, day: d, hour: 9))! }
+        assert(BreakHoliday.on(day(2026, 10, 31), calendar: cal)?.name == "halloween")
+        assert(BreakHoliday.on(day(2026, 10, 30), calendar: cal) == nil && BreakHoliday.on(day(2026, 11, 1), calendar: cal) == nil)
+        assert(BreakHoliday.on(day(2026, 11, 26), calendar: cal)?.name == "thanksgiving")   // fourth Thursday
+        assert(BreakHoliday.on(day(2025, 11, 27), calendar: cal)?.name == "thanksgiving")
+        assert(BreakHoliday.on(day(2026, 11, 19), calendar: cal) == nil && BreakHoliday.on(day(2026, 11, 27), calendar: cal) == nil)
+        assert(BreakHoliday.on(day(2026, 3, 3), calendar: cal, simulated: "halloween")?.name == "halloween")
+        assert(BreakHoliday.on(day(2026, 10, 31), calendar: cal, simulated: "nope") == nil)
+        assert(BreakHoliday.start(duration: 25.8, left: 20) == 25.8 - 20 && BreakHoliday.start(duration: 25.8, left: 300) == 0)
+        assert(BreakHoliday.start(duration: 25.8, left: 14.5) == 25.8 - 14.5)   // the video loaded late: still the ending
+        assert(Set(BreakHoliday.all.map(\.name)).count == BreakHoliday.all.count)
+        let off = try! JSONDecoder().decode(BreakSettings.self, from: Data(#"{"holidays":false}"#.utf8))
+        assert(!off.holidays && BreakSettings().holidays)
+    }
+
+    static func tricks() {
+        let W = 1440.0, floor = 882.0
+        func actor(_ kind: TrickActor.Kind, home: Double, still: Bool = false) -> TrickActor {
+            TrickActor(kind: kind, home: home, span: -86, width: 100, height: 108, footMargin: 10.0 / 208, still: still)
+        }
+        // never the same trick twice in a row, across rounds too, and every trick comes up
+        for kind in [TrickActor.Kind.pet, .crab, .codex] {
+            for seed in UInt64(0)..<20 {
+                let a = actor(kind, home: 700)
+                let picks = (0..<200).map { BreakTricks.pick(a, index: Int(seed % 3), cycle: $0, seed: seed)! }
+                assert(zip(picks, picks.dropFirst()).allSatisfy { $0 != $1 }, "\(kind) \(seed)")
+                assert(Set(picks.prefix(a.tricks.count).map { "\($0)" }).count == a.tricks.count)
+            }
+        }
+        let button = CGRect(x: 640, y: 700, width: 160, height: 52), row = CGRect(x: 600, y: 520, width: 240, height: 60)
+        let perches = [BreakPerch(kind: .button, rect: button), BreakPerch(kind: .ideaRow, rect: row)]
+        // a still actor stays home on the floor, and the poses are a pure function of their inputs
+        let still = actor(.crab, home: 300, still: true)
+        assert(BreakTricks.poses([still], t: 50, floor: floor, width: W, perches: perches, seed: 1)
+               == [TrickPose(x: 300, feet: floor - 10.0 / 208 * 108)])
+        let pet = actor(.pet, home: 760)
+        assert(BreakTricks.poses([pet], t: 33.3, floor: floor, width: W, perches: perches, seed: 7)
+               == BreakTricks.poses([pet], t: 33.3, floor: floor, width: W, perches: perches, seed: 7))
+        // the pet's perch cycle: on the button, feet on its top edge and its artwork's bottom just below it
+        let perchCycle = (0..<100).first { BreakTricks.pick(pet, index: 0, cycle: $0, seed: 7) == .perch }!
+        let run = abs(BreakTricks.landing(760, on: button, width: 100) - 760) / (0.08 * W)
+        let onTop = BreakTricks.poses([pet], t: Double(perchCycle) * 12 + run + 0.6 + 1, floor: floor, width: W, perches: perches, seed: 7)[0]
+        assert(onTop.feet == 700 && onTop.overControl && onTop.x >= 690 && onTop.x <= 750, "\(onTop)")
+        assert(BreakTricks.spriteRect(pet, onTop).maxY == 700 + 10.0 / 208 * 108)
+        // the climb ends up on the idea row; without one it's a plain perch
+        let climbCycle = (0..<100).first { BreakTricks.pick(pet, index: 0, cycle: $0, seed: 7) == .climb }!
+        let side = abs(Double(row.maxX) + 54 - BreakTricks.landing(760, on: button, width: 100)) / (0.08 * W)
+        let high = BreakTricks.poses([pet], t: Double(climbCycle) * 12 + run + 0.6 + 0.6 + side + 0.6 + 0.35 + 0.5, floor: floor, width: W, perches: perches, seed: 7)[0]
+        assert(high.feet == 520 && high.move == .wave, "\(high)")
+        let noRow = BreakTricks.poses([pet], t: Double(climbCycle) * 12 + run + 0.6 + 1, floor: floor, width: W,
+                                      perches: [perches[0]], seed: 7)[0]
+        assert(noRow.feet == 700)
+        // out of reach: a stroll instead, never over a control
+        let far = actor(.pet, home: 100)
+        for t in stride(from: 0.0, to: 600, by: 0.25) {
+            assert(!BreakTricks.poses([far], t: t, floor: floor, width: W, perches: perches, seed: 7)[0].overControl)
+        }
+        // two actors near one button: only the nearer one may jump on it
+        let owners = BreakTricks.owners([actor(.crab, home: 690), actor(.crab, home: 740), actor(.crab, home: 720, still: true)],
+                                        perches: perches, reach: 0.28 * W)
+        assert(owners == [1: button])
+        // a button too close under the idea for the sprite to stand on is nobody's
+        let cramped = [BreakPerch(kind: .button, rect: button), BreakPerch(kind: .ideaRow, rect: CGRect(x: 600, y: 610, width: 240, height: 24))]
+        assert(BreakTricks.owners([actor(.crab, home: 720)], perches: cramped, reach: 0.28 * W).isEmpty)
+        assert(BreakTricks.owners([actor(.crab, home: 720)], perches: [cramped[0]], reach: 0.28 * W).count == 1)
+        // words over part of a button: it stands only on the clear stretch, and strolls only along it
+        let reroll = CGRect(x: 600, y: 640, width: 60, height: 20)
+        assert(BreakTricks.footing(on: button, for: pet, clear: [reroll], near: 700) == 710...750)
+        assert(BreakTricks.footing(on: button, for: pet, clear: [], near: 700) == 690...750)
+        assert(BreakTricks.footing(on: button, for: pet, clear: [CGRect(x: 600, y: 200, width: 400, height: 20)], near: 700) == 690...750)   // far above
+        for k in stride(from: 0.0, to: 12, by: 0.05) {
+            let p = BreakTricks.perchPose(pet, k: k, ground: floor, speed: 0.08 * W, button: button, row: nil, footing: 710...750)
+            if p.feet == 700 { assert(p.x >= 710 && p.x <= 750 && !BreakTricks.spriteRect(pet, p).intersects(reroll), "\(k) \(p)") }
+        }
+        let split = [BreakPerch(kind: .button, rect: button), BreakPerch(kind: .text, rect: reroll)]
+        assert(BreakTricks.poses([pet], t: Double(perchCycle) * 12 + 1.5, floor: floor, width: W, perches: split, seed: 7)[0].overControl)
+        // a walker nearest two buttons takes the nearer; the other goes to the next nearest, here the pet
+        let pause = CGRect(x: 820, y: 700, width: 120, height: 52)
+        let pair = BreakTricks.owners([actor(.crab, home: 700), actor(.pet, home: 1100)],
+                                      perches: [BreakPerch(kind: .button, rect: button), BreakPerch(kind: .button, rect: pause)], reach: 0.28 * W)
+        assert(pair == [0: button, 1: pause], "\(pair)")
+        // jumps start and end where they should and clear the top edge going up
+        assert(BreakTricks.arc(882, 700, 0, apex: 80) == 882 && BreakTricks.arc(882, 700, 1, apex: 80) == 700)
+        let apex = (882.0 - 700) / 4 + 0.08 * 108
+        let lowest = stride(from: 0.0, through: 1, by: 0.01).map { BreakTricks.arc(882, 700, $0, apex: apex) }.min()!
+        assert(lowest < 700 && lowest > 700 - 4, "\(lowest)")   // clears the top, by a few points only
+        // from landing on the button, onward, it never pokes higher than standing on it
+        for k in stride(from: 0.0, to: run + 0.6, by: 0.01) {
+            let p = BreakTricks.perchPose(pet, k: k, ground: floor, speed: 0.08 * W, button: button, row: nil)
+            assert(p.feet > 700 - 4, "\(k) \(p)")
+        }
+        assert(BreakTricks.landing(500, on: button, width: 100) == 690 && BreakTricks.landing(900, on: button, width: 100) == 750)
+        assert(BreakTricks.landing(500, on: CGRect(x: 0, y: 0, width: 60, height: 10), width: 100) == 30)
+        // the climb comes in and goes out beside the sentence: never more than its feet inside it
+        for k in stride(from: run + 0.6, to: 12, by: 0.02) {   // from landing on the button
+            let p = BreakTricks.perchPose(pet, k: k, ground: floor - 10.0 / 208 * 108, speed: 0.08 * W, button: button, row: row)
+            let overlap = BreakTricks.spriteRect(pet, p).intersection(row)
+            assert(overlap.isNull || overlap.height <= 10.0 / 208 * 108 + 0.01, "k \(k): \(overlap)")
+        }
+        // a still actor over a button still lets clicks through
+        let parked = actor(.pet, home: 720, still: true)
+        assert(BreakTricks.poses([parked], t: 9, floor: 760, width: W, perches: perches, seed: 1)[0].overControl)
+        // every pose stays on screen, on both sides, at any moment
+        for home in [40.0, 1400] {
+            for kind in [TrickActor.Kind.pet, .crab, .codex] {
+                var a = actor(kind, home: home); a.span = home < 700 ? -86 : 86
+                for t in stride(from: 0.0, to: 240, by: 0.1) {
+                    let x = BreakTricks.poses([a], t: t, floor: floor, width: W, perches: perches, seed: 3)[0].x
+                    assert(x >= 50 && x <= W - 50, "\(kind) \(home) \(t): \(x)")
+                }
+            }
+        }
+        // a peek sinks out of sight and comes back up
+        let crab = actor(.crab, home: 300)
+        let peekCycle = (0..<100).first { BreakTricks.pick(crab, index: 0, cycle: $0, seed: 5) == .peek }!
+        let at = { (j: Double) in BreakTricks.poses([crab], t: Double(peekCycle) * 12 + 3 + j, floor: floor, width: W, perches: [], seed: 5)[0] }
+        assert(at(1.0).sunk > 100 && at(1.0).feet > at(0).feet && at(1.9).sunk == 0 && at(0).sunk == 0)
+        // a leapfrog goes over a neighbour standing still, and is a plain stroll without one
+        let nextDoor = actor(.crab, home: 300 - 86 + 190, still: true)
+        let frogCycle = (0..<100).first { BreakTricks.pick(crab, index: 0, cycle: $0, seed: 5) == .leapfrog }!
+        let mid = BreakTricks.poses([crab, nextDoor], t: Double(frogCycle) * 12 + 3 + 0.45, floor: floor, width: W, perches: [], seed: 5)[0]
+        let over = BreakTricks.poses([crab, nextDoor], t: Double(frogCycle) * 12 + 3 + 0.95, floor: floor, width: W, perches: [], seed: 5)[0]
+        assert(mid.move == .jump && mid.feet < floor - 108 && over.x > nextDoor.home, "\(mid) \(over)")
+        let alone = BreakTricks.poses([crab], t: Double(frogCycle) * 12 + 3 + 0.95, floor: floor, width: W, perches: [], seed: 5)[0]
+        assert(alone.move == .stand && alone.x == 300 - 86)
+        // a narrow screen with no room beside the idea, or words on the way there: a plain perch, never through the words
+        let narrowRow = CGRect(x: 54, y: 520, width: 532, height: 30), narrowButton = CGRect(x: 420, y: 700, width: 160, height: 52)
+        let narrow = actor(.pet, home: 560)
+        for k in stride(from: 0.0, to: 12, by: 0.02) {
+            let p = BreakTricks.perchPose(narrow, k: k, ground: floor, speed: 0.08 * 640, button: narrowButton, row: narrowRow,
+                                          clear: [narrowRow], screen: 640)
+            assert(p.feet != 520, "climbed with no room beside the idea: \(k)")
+        }
+        let words = CGRect(x: 820, y: 640, width: 80, height: 20)
+        let blocked = BreakTricks.perchPose(pet, k: 5, ground: floor, speed: 0.08 * W, button: button, row: row, clear: [words], screen: W)
+        assert(blocked == BreakTricks.perchPose(pet, k: 5, ground: floor, speed: 0.08 * W, button: button, row: nil))
+        // a flip at the screen's edge keeps its turned box on screen
+        var edge = actor(.crab, home: 1400); edge.span = 30
+        for t in stride(from: 0.0, to: 600, by: 0.05) {
+            let a = edge, p = BreakTricks.poses([a], t: t, floor: floor, width: W, perches: [], seed: 9)[0]
+            let half = (a.width * abs(cos(p.turn)) + a.height * abs(sin(p.turn))) / 2
+            assert(p.x + half <= W + 0.001 && p.x - half >= -0.001, "\(t) \(p)")
+        }
+        // the whole perch fits in its cycle at the farthest reach
+        let farthest = actor(.pet, home: Double(button.midX) + 0.28 * W)
+        let back = BreakTricks.perchPose(farthest, k: 11.99, ground: floor, speed: 0.08 * W, button: button, row: row)
+        assert(back.x == farthest.home && back.feet == floor, "\(back)")
+        // an idea far off to the side: the climb wouldn't fit its cycle, so it's a plain perch, home on time
+        let wide = CGRect(x: 0, y: 520, width: 100, height: 60)
+        let short = BreakTricks.perchPose(farthest, k: 11.99, ground: floor, speed: 0.08 * W, button: button, row: wide)
+        assert(short.x == farthest.home && short.feet == floor)
+        let noClimb = BreakTricks.perchPose(farthest, k: 6, ground: floor, speed: 0.08 * W, button: button, row: wide)
+        assert(noClimb == BreakTricks.perchPose(farthest, k: 6, ground: floor, speed: 0.08 * W, button: button, row: nil))
     }
 
     static func colours() {
@@ -307,7 +554,16 @@ enum BreakChecks {
         let status = json(#"{"records":[{"app":"claude-code","state":"working","msg":"Reading","updated_at":"x"},{"id":"build","state":"blocked","updated_at":"x"}]}"#)
         assert(RexAgents.agent(fromStatus: status, block: "b1") == BreakAgent(id: "b1", app: .claude, blocked: false, msg: "Reading"))
         assert(RexAgents.agent(fromStatus: json(#"{"records":[{"app":"codex","state":"blocked","kind":"permission","updated_at":"x"}]}"#), block: "b2")?.blocked == true)
-        assert(RexAgents.agent(fromStatus: json(#"{"records":[{"app":"claude-code","state":"done","updated_at":"x"}]}"#), block: "b") == nil)
+        assert(RexAgents.agent(fromStatus: json(#"{"records":[{"app":"claude-code","state":"done","updated_at":"x"}]}"#), block: "b")
+               == BreakAgent(id: "b", app: .claude, blocked: false, idle: true))
+        assert(RexAgents.agent(fromStatus: json(#"{"records":[{"app":"codex","state":"idle","updated_at":"x"}]}"#), block: "b")?.idle == true)
+        assert(RexAgents.agent(fromStatus: json(#"{"records":[{"app":"codex","state":"error","updated_at":"x"}]}"#), block: "b") == nil)
+        // Grok Build reports itself as grok-build (seen in Rex 2026-10-25)
+        assert(RexAgents.agent(fromStatus: json(#"{"records":[{"app":"grok-build","effective_app":"grok-build","state":"working","updated_at":"x"}]}"#), block: "b")?.app == .grok)
+        assert(BreakAgent.App(rex: "grok") == .grok && BreakAgent.App(rex: "codex") == .codex && BreakAgent.App(rex: "cargo") == nil)
+        let ranks = [BreakAgent(id: "i", app: .codex, blocked: false, idle: true), BreakAgent(id: "w", app: .codex, blocked: false),
+                     BreakAgent(id: "b", app: .claude, blocked: true)].map(\.rank)
+        assert(ranks == [2, 1, 0])
         assert(RexAgents.agent(fromStatus: json(#"{"records":[{"app":"cargo","state":"working","updated_at":"x"}]}"#), block: "b") == nil)
         assert(RexAgents.agent(fromStatus: json(#"{"records":[]}"#), block: "b") == nil)
         assert(RexAgents.agent(fromStatus: json("not json"), block: "b") == nil)
@@ -318,16 +574,70 @@ enum BreakChecks {
         let working = RexAgents.update(fromEvent: event("program_status_changed", #"{"id":"","record":{"state":"working","app":"antigravity","msg":"m"},"reason":"report"}"#))
         assert(working?.0 == "b9" && working?.1?.app == .antigravity && working?.1?.blocked == false)
         let idle = RexAgents.update(fromEvent: event("program_status_changed", #"{"id":"","record":{"state":"idle","app":"codex"},"reason":"report"}"#))
-        assert(idle?.0 == "b9" && idle?.1 == nil)
+        assert(idle?.0 == "b9" && idle?.1?.idle == true && idle?.1?.app == .codex)
         assert(RexAgents.update(fromEvent: event("program_status_changed", #"{"id":"child","record":{"state":"working","app":"codex"}}"#)) == nil)
         let removed = RexAgents.update(fromEvent: event("program_status_removed", #"{"ids":[""],"reason":"exit"}"#))
         assert(removed?.0 == "b9" && removed?.1 == nil)
         assert(RexAgents.update(fromEvent: event("title_changed", #"{"title":"x"}"#)) == nil)
+        // lines as `rex events --all --json` printed them on 2026-10-25
+        let real = RexAgents.update(fromEvent: json(#"{"type":"session_event","payload":{"session_id":"session:01a16d0f-261b-7c35-82d7-bda13076feab","event":{"type":"block_event","payload":{"block_id":"block:01a172a0-7669-763d-95f5-220283e9b039","creator_name":"com.superlogical.terminal","name":"program_status_changed","payload":{"id":"","record":{"state":"working","app":"claude-code","effective_app":"claude-code","msg":"Updating Rex parsing checks and rerunning the break checks","updated_at":"2026-10-25T08:06:28.040279-04:00","owner":{"pid":54978,"name":"2.1.310"}},"reason":"report"}}}}}"#))
+        assert(real?.0 == "block:01a172a0-7669-763d-95f5-220283e9b039" && real?.1?.app == .claude && real?.1?.msg.hasPrefix("Updating") == true)
+        let codexWorking = RexAgents.update(fromEvent: json(#"{"type":"session_event","payload":{"session_id":"session:01a16d0f-261b-7c35-82d7-bda13076feab","event":{"type":"block_event","payload":{"block_id":"block:01a172c2-9277-747c-9b98-6320420adfc1","creator_name":"com.superlogical.terminal","name":"program_status_changed","payload":{"id":"","record":{"state":"working","app":"codex","effective_app":"codex","updated_at":"2026-10-25T08:33:37.514381-04:00","owner":{"pid":80877,"name":"codex"}},"reason":"report"}}}}}"#))
+        let codexDone = RexAgents.update(fromEvent: json(#"{"type":"session_event","payload":{"session_id":"session:01a16d0f-261b-7c35-82d7-bda13076feab","event":{"type":"block_event","payload":{"block_id":"block:01a172c2-9277-747c-9b98-6320420adfc1","creator_name":"com.superlogical.terminal","name":"program_status_changed","payload":{"id":"","record":{"state":"done","app":"codex","effective_app":"codex","updated_at":"2026-10-25T08:38:32.670275-04:00","owner":{"pid":80877,"name":"codex"}},"reason":"report"}}}}}"#))
+        assert(codexWorking?.1?.app == .codex && codexWorking?.1?.idle == false && codexWorking?.1?.blocked == false)
+        assert(codexDone?.0 == codexWorking?.0 && codexDone?.1?.idle == true)
+
+        // who fits: five blocked Claude agents can't hide the one Codex agent, and the rest are counted
+        let crowd = (0..<5).map { BreakAgent(id: "c\($0)", app: .claude, blocked: true) }
+            + [BreakAgent(id: "x", app: .codex, blocked: false), BreakAgent(id: "g", app: .grok, blocked: false, idle: true)]
+        let fit = BreakAgent.onScreen(crowd, lanes: 5, slots: 6)
+        assert(fit.walkers.count == 5 && fit.walkers.contains { $0.app == .codex } && fit.walkers.first?.blocked == true)
+        // the floor's overflow floats as rings, after the other apps
+        assert(fit.floaters.map(\.id) == ["g", "c4"] && fit.hidden.isEmpty, "\(fit.floaters.map(\.id))")
+        assert(BreakAgent.onScreen(crowd, lanes: 5, slots: 6).walkers.map(\.id) == fit.walkers.map(\.id))   // steady lanes
+        let many = (0..<30).map { BreakAgent(id: String(format: "a%02d", $0), app: .claude, blocked: false, idle: true) }
+            + [BreakAgent(id: "z", app: .grok, blocked: false, idle: true)]
+        let full = BreakAgent.onScreen(many, lanes: 5, slots: 21)
+        assert(full.walkers.count == 5 && full.floaters.count == 21 && full.floaters.first?.id == "z" && full.hidden.count == 5)
+        // ring spots on narrow, ordinary, wide-short, ultrawide and tall screens: on screen, above the floor, clear of
+        // the words and buttons with drift and shadow, and far enough apart that drifting rings never meet
+        for (w, h, s) in [(1024.0, 640.0, 0.711), (1440, 900, 1), (2560, 1080, 1.3), (3440, 1440, 1.3), (1280, 1600, 0.889)] {
+            let d = 5 * 14.4 * s, floorTop = h - 1.2 * w / 100 - 8 * 14.4 * s
+            let words = [CGRect(x: w / 2 - 380 * s, y: h * 0.55, width: 760 * s, height: 30 * s),        // the idea
+                         CGRect(x: w / 2 - 260 * s, y: h * 0.75, width: 520 * s, height: 52 * s),        // the buttons
+                         CGRect(x: w / 2 - 250 * s, y: h * 0.15, width: 500 * s, height: 200 * s)]      // title and clock
+            let spots = BreakTricks.floatSpots(width: w, ring: d, obstacles: words, floorTop: floorTop)
+            let reach = d / 2 + BreakTricks.floatDrift * d + 0.18 * d
+            assert(!spots.isEmpty, "\(w)x\(h)")
+            for p in spots {
+                let box = CGRect(x: p.x - reach, y: p.y - reach, width: 2 * reach, height: 2 * reach)
+                assert(box.minX >= 0 && box.maxX <= w && box.minY >= 0 && box.maxY <= floorTop, "\(w)x\(h) \(p)")
+                assert(!words.contains { $0.intersects(box) }, "\(w)x\(h) \(p)")
+            }
+            for (i, p) in spots.enumerated() {
+                for q in spots[(i + 1)...] { assert(hypot(p.x - q.x, p.y - q.y) >= d * (1 + 2 * BreakTricks.floatDrift) - 0.001) }
+            }
+        }
+        // when rings run out the last spot counts the rest; with no spots at all, everyone not walking is counted
+        let thirty = (0..<30).map { BreakAgent(id: String(format: "b%02d", $0), app: .claude, blocked: false, idle: true) }
+        let roomy = BreakAgent.crowd(thirty, lanes: 5, spots: 30, helpers: 2)
+        assert(roomy.shown.floaters.count == 25 && roomy.helpers == 2 && roomy.more == 0)
+        let tight = BreakAgent.crowd(thirty, lanes: 5, spots: 10, helpers: 2)
+        assert(tight.shown.floaters.count == 9 && tight.helpers == 0 && tight.more == 25 - 9 + 2)
+        let none = BreakAgent.crowd(thirty, lanes: 5, spots: 0, helpers: 1)
+        assert(none.shown.floaters.isEmpty && none.more == 25 + 1)
+        assert(BreakTricks.floatSpots(width: 1440, ring: 72, obstacles: [], floorTop: 100).isEmpty)   // a 250-point-tall screen
+        let wide = BreakTricks.floatSpots(width: 1440, ring: 72, obstacles: [], floorTop: 800)
+        assert(wide[0].x < 200 && wide[1].x > 1240 && wide[2].y < wide[0].y)   // a side, the other side, then the top
+        assert(BreakAgent.onScreen([], lanes: 5, slots: 6).hidden.isEmpty)
         assert(RexAgents.update(fromEvent: json(#"{"type":"client_connected","payload":{}}"#)) == nil)
+        // the other Macs' Rex servers, as `rex hosts list --json` gives them
+        assert(RexAgents.hosts(fromList: json(#"{"home":{"label":"","endpoint":"unix:///x/server.sock","this_machine":true,"reached":true},"hosts":[{"host":{"id":"host:01a15f25-c30c-719a-b220-65bca927b363","label":"mini","endpoints":["https://mini.example.ts.net"],"added_from":"MacBook-Air.local","updated_at":"2026-10-21T15:47:52.716941Z"},"from":"home","held":false},{"host":{"label":""}}],"warnings":[]}"#)) == ["mini"])
+        assert(RexAgents.hosts(fromList: json(#"{"hosts":[]}"#)).isEmpty && RexAgents.hosts(fromList: json("not json")).isEmpty)
 
         let fake = RexAgents.simulated("claude-code working, claude-code blocked,codex, grok idle, nope working")
-        assert(fake.map(\.app) == [.claude, .claude, .codex] && fake.map(\.blocked) == [false, true, false])
-        assert(fake[0].label == "claude-code 1" && Set(fake.map(\.id)).count == 3)
+        assert(fake.map(\.app) == [.claude, .claude, .codex, .grok] && fake.map(\.blocked) == [false, true, false, false])
+        assert(fake[3].idle && fake[0].label == "claude-code 1" && Set(fake.map(\.id)).count == 4)
         // with no Rex in a folder Pulse looks in, there's nothing to read
         assert(RexAgents.executable(home: URL(fileURLWithPath: "/nonexistent")) == nil
                || FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/rex")

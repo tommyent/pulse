@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 extension Color {
@@ -36,7 +37,7 @@ struct PillShape: Shape {
 }
 
 /// The 30-second countdown: the seconds in a ring that empties, and the break's length beside it. A click starts
-/// the break; otherwise it starts by itself.
+/// the break, the × skips it; otherwise it starts by itself.
 struct BreakPill: View {
     @ObservedObject var controller: BreakController
     var tail: Edge = .trailing
@@ -44,36 +45,48 @@ struct BreakPill: View {
     var body: some View {
         if case let .countdown(kind, endsAt) = controller.phase {
             let bar = Color(rgb: BreakColor.pair(controller.settings.color).bar)
-            Button { controller.startNow() } label: {
-                HStack(spacing: 9) {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        let left = max(0, endsAt.timeIntervalSince(context.date))
-                        ZStack {
-                            Circle().stroke(Color.primary.opacity(0.14), lineWidth: 4)
-                            Circle().trim(from: 0, to: left / BreakSchedule.countdown)
-                                .stroke(bar, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                                .rotationEffect(.degrees(-90))
-                                .animation(.linear(duration: 1), value: left)
-                            Text("\(Int(left.rounded(.up)))")
-                                .font(.system(size: 15, weight: .semibold).monospacedDigit())
+            HStack(spacing: 6) {
+                Button { controller.startNow() } label: {
+                    HStack(spacing: 9) {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            let left = max(0, endsAt.timeIntervalSince(context.date))
+                            ZStack {
+                                Circle().stroke(Color.primary.opacity(0.14), lineWidth: 4)
+                                Circle().trim(from: 0, to: left / BreakSchedule.countdown)
+                                    .stroke(bar, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                                    .rotationEffect(.degrees(-90))
+                                    .animation(.linear(duration: 1), value: left)
+                                Text("\(Int(left.rounded(.up)))")
+                                    .font(.system(size: 15, weight: .semibold).monospacedDigit())
+                            }
+                            .frame(width: 38, height: 38)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Break in \(Int(left.rounded(.up))) seconds")
                         }
-                        .frame(width: 38, height: 38)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("Break in \(Int(left.rounded(.up))) seconds")
+                        Text(breakLengthLabel(controller.settings.length(kind)))
+                            .font(.system(size: 13, weight: .medium))
+                            .fixedSize()
                     }
-                    Text(breakLengthLabel(controller.settings.length(kind)))
-                        .font(.system(size: 13, weight: .medium))
-                        .fixedSize()
+                    .contentShape(Rectangle())
                 }
-                .padding(.leading, 7).padding(.trailing, 16)
-                .frame(height: 52)
-                .padding(Edge.Set(tail), PillShape.tailWidth)
-                .contentShape(PillShape(edge: tail))
-                .glassCard(in: PillShape(edge: tail))
+                .help("Click to start the break now. It starts by itself when the ring is empty.")
+                .accessibilityHint("Starts the break now")
+                Button { controller.skip(why: "countdown dismissed") } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(Color.primary.opacity(0.1)))
+                        .contentShape(Circle())
+                }
+                .help("Skip this break")
+                .accessibilityLabel("Skip this break")
             }
             .buttonStyle(.plain)
-            .help("Click to start the break now. It starts by itself when the ring is empty.")
-            .accessibilityHint("Starts the break now")
+            .padding(.leading, 7).padding(.trailing, 12)
+            .frame(height: 52)
+            .padding(Edge.Set(tail), PillShape.tailWidth)
+            .glassCard(in: PillShape(edge: tail))
             .transition(.scale(scale: 0.5, anchor: UnitPoint(edge: tail)).combined(with: .opacity))
         }
     }
@@ -96,77 +109,140 @@ struct BreakOverlayView: View {
     @ObservedObject var controller: BreakController
     let size: CGSize
     var agents = false   // this screen shows the agents (the main one)
+    var holidayScreen = false   // a holiday's video plays here (the main screen)
     var showPet = true
     var petOnRight = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var perches: [BreakPerch] = []   // where the agents can jump up, in this view's points
 
     var body: some View {
         let s = min(1.3, max(0.7, size.width / 1440))   // the mockup's sizes, scaled to this screen
-        let colors = BreakColor.pair(controller.settings.color)
-        let paused = controller.phase.isPaused
+        let holiday = holidayScreen ? controller.holiday : nil
+        let colors = holiday.map { (glow: $0.glow, bar: $0.bar) } ?? BreakColor.pair(controller.settings.color)
         ZStack {
-            BreakGlow(rgb: colors.glow, size: size)
-            VStack(spacing: 0) {
-                Text("Time to take a break")
-                    .font(.system(size: 50 * s, weight: .medium))
-                    .tracking(-0.7 * s)
-                TimelineView(.periodic(from: .now, by: 0.5)) { context in
-                    let r = controller.remaining(context.date)
-                    VStack(spacing: 0) {
-                        Text(Self.clock(r.left))
-                            .font(.system(size: 172 * s, weight: .bold).monospacedDigit())
-                            .tracking(-5 * s)
-                            .foregroundStyle(paused ? Color(white: 0.55) : .white)
-                            .padding(.top, 34 * s)
-                        Capsule().fill(Color.white.opacity(0.1))
-                            .frame(width: 368 * s, height: 6 * s)
-                            .overlay(alignment: .leading) {
-                                Capsule().fill(paused ? Color(white: 0.45) : Color(rgb: colors.bar))
-                                    .frame(width: 368 * s * min(1, r.left / r.total))
-                                    .animation(.linear(duration: 0.5), value: r.left)
-                            }
-                            .padding(.top, 46 * s)
-                    }
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(paused ? "Paused, \(Self.clock(r.left)) left" : "\(Self.clock(r.left)) left in your break")
+            if holiday != nil {
+                Color(white: 0.043)
+                if let still = controller.holidayStill {
+                    Image(nsImage: still).resizable().scaledToFill().frame(width: size.width, height: size.height).clipped()
+                } else if let player = controller.holidayPlayer {
+                    HolidayVideo(player: player).transition(.opacity)
                 }
-                Text(paused ? "paused" : "left in your break")
-                    .font(.system(size: 17 * s))
-                    .tracking(0.8 * s)
-                    .foregroundStyle(Color(white: 0.5))
-                    .padding(.top, 20 * s)
-                ideaLine(s)
-                HStack(spacing: 16 * s) {
-                    Button("Back to Work") { controller.backToWork() }
-                        .buttonStyle(OverlayButtonStyle(primary: true, s: s))
-                        .help("End the break early")
-                        .background {
-                            // Escape skips the break; the history keeps it apart from ending it early
-                            Button("Skip this break") { controller.skip() }
-                                .keyboardShortcut(.cancelAction)
-                                .opacity(0)
-                                .accessibilityHidden(true)
-                        }
-                    Button { paused ? controller.resume() : controller.pause() } label: {
-                        Label(paused ? "Resume" : "Pause", systemImage: paused ? "play.fill" : "pause.fill")
-                    }
-                    .buttonStyle(OverlayButtonStyle(primary: false, s: s))
-                    Button("Snooze 5 min") { controller.snooze() }
-                        .buttonStyle(OverlayButtonStyle(primary: false, s: s))
+                // keeps the band at the bottom readable over a bright frame
+                LinearGradient(stops: [.init(color: Color(white: 0.02).opacity(0.88), location: 0),
+                                       .init(color: Color(white: 0.02).opacity(0.55), location: 0.28),
+                                       .init(color: .clear, location: 0.5)], startPoint: .bottom, endPoint: .top)
+                BreakGlow(rgb: colors.glow, size: size, plain: false)
+                band(s, bar: colors.bar)
+            } else {
+                BreakGlow(rgb: colors.glow, size: size)
+                VStack(spacing: 0) {
+                    title(size: 50 * s, s).perch(.text)   // words the floating rings keep clear of
+                    clock(s, digits: 172 * s, bar: 368 * s, color: colors.bar, align: .center).perch(.text).padding(.top, 34 * s)
+                    label(s).padding(.top, 20 * s)
+                    ideaLine(s, width: 760 * s, font: 22 * s, top: 46 * s, bar: colors.bar)
+                    buttons(s).padding(.top, 72 * s)
                 }
-                .padding(.top, 72 * s)
+                .foregroundStyle(.white)
             }
-            .foregroundStyle(.white)
             if agents {
                 BreakAgentsLayer(rex: controller.rex, size: size, start: controller.breakStarted,
-                                 showPet: showPet, petOnRight: petOnRight, still: reduceMotion)
+                                 showPet: showPet, petOnRight: petOnRight, still: reduceMotion, perches: perches)
             }
         }
         .frame(width: size.width, height: size.height)
+        .coordinateSpace(.named(BreakPerchKey.space))
+        .onPreferenceChange(BreakPerchKey.self) { perches = $0 }
         .environment(\.colorScheme, .dark)
     }
 
-    @ViewBuilder private func ideaLine(_ s: CGFloat) -> some View {
+    /// On a holiday the countdown, the idea and the buttons share a band along the bottom, so the video's story
+    /// plays uncovered above it. The band sits above the pets' floor.
+    private func band(_ s: CGFloat, bar: UInt32) -> some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            HStack(alignment: .bottom, spacing: 28 * s) {
+                VStack(alignment: .leading, spacing: 0) {
+                    title(size: 22 * s, s)
+                    clock(s, digits: 92 * s, bar: 240 * s, color: bar, align: .leading).padding(.top, 6 * s)
+                    label(s).padding(.top, 12 * s)
+                }
+                .perch(.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                ideaLine(s, width: 480 * s, font: 19 * s, top: 0, bar: bar)
+                buttons(s * 0.85).frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .padding(.horizontal, 60 * s)
+            .padding(.bottom, size.width * 0.095)
+        }
+        .foregroundStyle(.white)
+        .shadow(color: .black.opacity(0.5), radius: 10 * s)
+    }
+
+    private func title(size: CGFloat, _ s: CGFloat) -> some View {
+        Text("Time to take a break")
+            .font(.system(size: size, weight: .medium))
+            .tracking(-size * 0.014)
+    }
+
+    private func clock(_ s: CGFloat, digits: CGFloat, bar: CGFloat, color: UInt32, align: HorizontalAlignment) -> some View {
+        let paused = controller.phase.isPaused
+        return TimelineView(.periodic(from: .now, by: 0.5)) { context in
+            let r = controller.remaining(context.date)
+            VStack(alignment: align, spacing: 0) {
+                Text(Self.clock(r.left))
+                    .font(.system(size: digits, weight: .bold).monospacedDigit())
+                    .tracking(-digits * 0.029)
+                    .foregroundStyle(paused ? Color(white: 0.55) : .white)
+                Capsule().fill(Color.white.opacity(0.1))
+                    .frame(width: bar, height: 6 * s)
+                    .overlay(alignment: .leading) {
+                        Capsule().fill(paused ? Color(white: 0.45) : Color(rgb: color))
+                            .frame(width: bar * min(1, r.left / r.total))
+                            .animation(.linear(duration: 0.5), value: r.left)
+                    }
+                    .padding(.top, digits * 0.27)
+            }
+            .fixedSize()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(paused ? "Paused, \(Self.clock(r.left)) left" : "\(Self.clock(r.left)) left in your break")
+        }
+    }
+
+    private func label(_ s: CGFloat) -> some View {
+        Text(controller.phase.isPaused ? "paused" : "left in your break")
+            .font(.system(size: 17 * s))
+            .tracking(0.8 * s)
+            .foregroundStyle(Color(white: 0.5))
+    }
+
+    private func buttons(_ s: CGFloat) -> some View {
+        let paused = controller.phase.isPaused
+        return HStack(spacing: 16 * s) {
+            Button("Back to Work") { controller.backToWork() }
+                .buttonStyle(OverlayButtonStyle(primary: true, s: s))
+                .help("End the break early")
+                .perch(.button)
+                .background {
+                    // Escape skips the break; the history keeps it apart from ending it early
+                    Button("Skip this break") { controller.skip() }
+                        .keyboardShortcut(.cancelAction)
+                        .opacity(0)
+                        .accessibilityHidden(true)
+                }
+            Button { paused ? controller.resume() : controller.pause() } label: {
+                Label(paused ? "Resume" : "Pause", systemImage: paused ? "play.fill" : "pause.fill")
+            }
+            .buttonStyle(OverlayButtonStyle(primary: false, s: s))
+            .perch(.button)
+            Button("Snooze 5 min") { controller.snooze() }
+                .buttonStyle(OverlayButtonStyle(primary: false, s: s))
+                .perch(.button)
+        }
+        .fixedSize()
+    }
+
+    /// `top`: the space above it, only while it shows, so a hidden idea leaves the layout as it was.
+    @ViewBuilder private func ideaLine(_ s: CGFloat, width: CGFloat, font: CGFloat, top: CGFloat, bar: UInt32) -> some View {
         switch controller.idea {
         case .hidden:
             EmptyView()
@@ -174,15 +250,17 @@ struct BreakOverlayView: View {
             VStack(spacing: 14 * s) {
                 Group {
                     if case let .shown(text) = controller.idea {
-                        (Text(Image(systemName: "sparkle")).foregroundColor(Color(rgb: BreakColor.pair(controller.settings.color).bar))
+                        (Text(Image(systemName: "sparkle")).foregroundColor(Color(rgb: bar))
                             + Text("  " + text))
                     } else {
                         Text("Thinking of something to do in your break").redacted(reason: .placeholder)
                     }
                 }
-                .font(.system(size: 22 * s))
+                .font(.system(size: font))
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 760 * s)
+                // measured on the words themselves, not the wider frame; the placeholder is only kept clear of
+                .perch(controller.idea == .loading ? .text : .ideaRow)
+                .frame(maxWidth: width)
                 .foregroundStyle(Color(white: 0.92))
                 HStack(spacing: 26 * s) {
                     Button { controller.reroll() } label: { Label("Reroll", systemImage: "arrow.clockwise") }
@@ -192,8 +270,9 @@ struct BreakOverlayView: View {
                 }
                 .buttonStyle(QuietButtonStyle(s: s))
                 .disabled(controller.idea == .loading)
+                .perch(.text)
             }
-            .padding(.top, 46 * s)
+            .padding(.top, top)
         }
     }
 
@@ -203,17 +282,49 @@ struct BreakOverlayView: View {
     }
 }
 
+/// Collects the frames the agents can jump up on, in the overlay's coordinate space.
+private struct BreakPerchKey: PreferenceKey {
+    static let space = "break"
+    static let defaultValue: [BreakPerch] = []
+    static func reduce(value: inout [BreakPerch], nextValue: () -> [BreakPerch]) { value += nextValue() }
+}
+
+private extension View {
+    func perch(_ kind: BreakPerch.Kind) -> some View {
+        background(GeometryReader { g in
+            Color.clear.preference(key: BreakPerchKey.self, value: [BreakPerch(kind: kind, rect: g.frame(in: .named(BreakPerchKey.space)))])
+        })
+    }
+}
+
+/// The holiday's video, filling the screen without controls.
+private struct HolidayVideo: NSViewRepresentable {
+    let player: AVPlayer
+    func makeNSView(context: Context) -> NSView {
+        let layer = AVPlayerLayer(player: player)
+        layer.videoGravity = .resizeAspectFill
+        let view = NSView()
+        view.layer = layer   // layer-hosting: the player layer is the view's own layer
+        view.wantsLayer = true
+        return view
+    }
+    func updateNSView(_ view: NSView, context: Context) { (view.layer as? AVPlayerLayer)?.player = player }
+}
+
 /// The dark screen with the colour glowing at its edges and softly behind the timer. Each glow is a band from just
 /// outside the screen to a little inside it, blurred inward, like an inset shadow.
 private struct BreakGlow: View {
     let rgb: UInt32
     let size: CGSize
+    var plain = true   // false over a holiday video: the edges only
 
     var body: some View {
         let u = size.width / 100, glow = Color(rgb: rgb)
         ZStack {
-            Color(white: 0.043)
-            RadialGradient(colors: [glow.opacity(0.24), .clear], center: UnitPoint(x: 0.5, y: 0.45), startRadius: 0, endRadius: 23 * u)
+            if plain {
+                Color(white: 0.043)
+                RadialGradient(colors: [glow.opacity(0.24), .clear], center: UnitPoint(x: 0.5, y: 0.45), startRadius: 0, endRadius: 23 * u)
+            }
             band(glow.opacity(0.16), inset: 3 * u, blur: 20 * u)
             band(glow.opacity(0.48), inset: 1.2 * u, blur: 7 * u)
             band(glow.opacity(0.9), inset: 0.25 * u, blur: 1.6 * u)
@@ -305,8 +416,10 @@ struct ClaudeCrab: View {
     }
 }
 
-/// The pet and every agent Rex reports as working, moving around the edges of the break screen: the pet and the
-/// Claude crabs pace along the bottom, the rest float. A blocked agent stands still with a "!".
+/// The pet and the agents Rex reports, around the edges of the break screen: the pet, the Claude crabs and small
+/// Codex pets along the bottom in staggered sizes; other apps (no sprite of their own), and the agents the floor
+/// has no room for, float as rings. A blocked
+/// agent stands still with a "!", an idle one dimmed.
 struct BreakAgentsLayer: View {
     @ObservedObject var rex: RexAgents
     @ObservedObject private var pet = CodexPetSession.shared
@@ -315,30 +428,61 @@ struct BreakAgentsLayer: View {
     let showPet: Bool
     let petOnRight: Bool
     let still: Bool
+    var perches: [BreakPerch] = []
 
     private static let petFrames: [CodexPetSprite.State: [CGImage]] = Bundle.pulseResources
         .url(forResource: "Resources/codex-pet", withExtension: "webp")
         .map(CodexPetSprite.frames(from:)) ?? [:]
 
+    private static let lanes = 24   // the rest float as rings
+
+    /// Neighbours differ in size, so a crowded floor reads as a crowd; the bigger ones are drawn in front.
+    private static func stagger(_ i: Int) -> Double { [1, 0.72, 0.86][i % 3] }
+
     var body: some View {
-        let crabs = Array(rex.agents.filter { $0.app == .claude }.prefix(4))
-        let floaters = Array(rex.agents.filter { $0.app != .claude }.prefix(6))
-        let helpers = min(pet.helpersWorking, max(0, 6 - floaters.count))
-        TimelineView(.animation(minimumInterval: 1.0 / 24, paused: still)) { context in
-            let t = still ? 0 : context.date.timeIntervalSince(start)
-            ZStack(alignment: .topLeading) {
-                if showPet { petView(t) }
-                ForEach(Array(crabs.enumerated()), id: \.element.id) { i, agent in crabView(agent, lane: i, t: t) }
-                ForEach(Array(floaters.enumerated()), id: \.element.id) { i, agent in floaterView(agent, slot: i, t: t) }
-                ForEach(0..<helpers, id: \.self) { i in helperView(slot: floaters.count + i, t: t) }
+        let (spots, shown, helpers, more) = cast()
+        let cast = actors(shown.walkers), first = showPet ? 1 : 0
+        let seed = UInt64(bitPattern: Int64(start.timeIntervalSinceReferenceDate * 1000))   // new tricks each break
+        let rings = Array(shown.floaters.enumerated())
+        let moving = rings.filter { !$0.element.blocked && !$0.element.idle && !still }
+        ZStack(alignment: .topLeading) {
+            // rings that stand still are drawn once, outside the frame-by-frame redraw
+            ForEach(rings.filter { r in !moving.contains { $0.offset == r.offset } }, id: \.element.id) { i, agent in
+                floaterView(agent, at: spots[i], slot: i, t: 0)
             }
-            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            // with no spot left on a very short screen, the top-right corner
+            if more > 0 { moreRing(more, at: spots.last ?? CGPoint(x: size.width - ring, y: ring)) }
+            TimelineView(.animation(minimumInterval: 1.0 / 24, paused: still)) { context in
+                let t = still ? 0 : context.date.timeIntervalSince(start)
+                let poses = BreakTricks.poses(cast, t: t, floor: floor, width: size.width, perches: perches, seed: seed)
+                ZStack(alignment: .topLeading) {
+                    if showPet { petView(t, poses[0], cast[0]) }
+                    ForEach(Array(shown.walkers.enumerated()), id: \.element.id) { i, agent in
+                        walkerView(agent, cast[first + i], poses[first + i], t: t).zIndex(Self.stagger(i))
+                    }
+                    ForEach(moving, id: \.element.id) { i, agent in floaterView(agent, at: spots[i], slot: i, t: t) }
+                    ForEach(0..<helpers, id: \.self) { i in helperView(at: spots[shown.floaters.count + i], slot: shown.floaters.count + i, t: t) }
+                }
+                .frame(width: size.width, height: size.height, alignment: .topLeading)
+            }
         }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
         .accessibilityElement(children: .contain)
     }
 
     private var u: CGFloat { size.width / 100 }
     private var floor: CGFloat { size.height - 1.2 * u }
+    /// The floor's sprites grow with the overlay's text (its `s`), not the screen's width, so they fit its gaps on
+    /// any screen; at 1440 points wide it equals `u`.
+    private var unit: CGFloat { min(1.3, max(0.7, size.width / 1440)) * 14.4 }
+    private var ring: CGFloat { 5 * unit }
+
+    /// Who walks, who floats in which spot, how many helpers fit, and how many don't (the last spot then says so).
+    private func cast() -> (spots: [CGPoint], shown: (walkers: [BreakAgent], floaters: [BreakAgent], hidden: [BreakAgent]), helpers: Int, more: Int) {
+        let spots = BreakTricks.floatSpots(width: size.width, ring: ring, obstacles: perches.map(\.rect), floorTop: floor - 8 * unit)
+        let c = BreakAgent.crowd(rex.agents, lanes: Self.lanes, spots: spots.count, helpers: pet.helpersWorking)
+        return (spots, c.shown, c.helpers, c.more)
+    }
 
     private func sprite(_ state: CodexPetSprite.State, _ t: Double) -> some View {
         let frames = Self.petFrames[state] ?? []
@@ -351,87 +495,164 @@ struct BreakAgentsLayer: View {
         }
     }
 
-    /// Walks in from the rail's side, waves, then paces with a hop now and then.
-    private func petView(_ t: Double) -> some View {
-        let w = 7 * u, home = petOnRight ? 82.0 : 18.0, enter = petOnRight ? 104.0 : -4.0
-        var x = home, state = CodexPetSprite.State.idle
-        if still { x = home }
-        else if t < 3.2 { x = enter + (home - enter) * t / 3.2; state = petOnRight ? .walkLeft : .walkRight }
-        else if t < 4.8 { state = .waving }
-        else {
-            let k = (t - 4.8).truncatingRemainder(dividingBy: 12)
-            if k < 3 { x = home - 6 * k / 3; state = .walkLeft }
-            else if k < 5 { x = home - 6; state = k > 3.8 && k < 4.45 ? .jump : .idle }
-            else if k < 8 { x = home - 6 + 6 * (k - 5) / 3; state = .walkRight }
-            else { state = .idle }
+    /// Lanes 13% of the width apart, closer once more than 5 share the floor; the last stops short of the pet.
+    private func laneStart(_ lane: Int, of n: Int) -> Double {
+        let step = min(13, 60 / Double(max(1, n - 1)))
+        return petOnRight ? 4.0 + Double(lane) * step : 88.0 - Double(lane) * step
+    }
+
+    /// The pet first, then Claude and Codex agents in their lanes on the side away from it. Idle and blocked agents
+    /// stand still.
+    private func actors(_ walkers: [BreakAgent]) -> [TrickActor] {
+        var out: [TrickActor] = []
+        if showPet {
+            let w = 7 * unit
+            out.append(TrickActor(kind: .pet, home: (petOnRight ? 82 : 18) * u, span: -6 * u, width: w, height: w * 208 / 192,
+                                  footMargin: CodexPetSprite.footMargin(.idle), delay: 4.8, still: still))
         }
-        return sprite(state, t)
-            .frame(width: w, height: w * 208 / 192)
-            .position(x: x * u, y: floor - w * 104 / 192)
+        for (lane, agent) in walkers.enumerated() {
+            let codex = agent.app == .codex, w = (codex ? 5 : 5.6) * unit * Self.stagger(lane)
+            out.append(TrickActor(kind: codex ? .codex : .crab, home: laneStart(lane, of: walkers.count) * u, span: 8 * u, width: w,
+                                  height: codex ? w * 208 / 192 : w * 17 / 24,
+                                  footMargin: codex ? CodexPetSprite.footMargin(.idle) : 1.0 / 17,   // the crab's legs end 1/17 up
+                                  phase: Double(lane) * 3.1, still: still || agent.idle || agent.blocked))
+        }
+        return out
+    }
+
+    /// A pose's Codex sprite row, its frame when the pose picks one (a turn-around), and how fast it plays.
+    private static func petState(_ move: TrickPose.Move, blocked: Bool) -> (state: CodexPetSprite.State, frame: Int?, speed: Double) {
+        switch move {
+        case .stand: (blocked ? .waiting : .idle, nil, 1)
+        case let .walk(right, fast): (right ? .walkRight : .walkLeft, nil, fast ? 2 : 1)
+        case .jump: (.jump, nil, 1)
+        case .dance: (.happy, nil, 1)
+        case .dizzy: (.oops, nil, 1)
+        case .wave: (.waving, nil, 1)
+        case let .spin(q): { let f = CodexPetSprite.spin(q); return (f.state, f.frame, 1) }()
+        }
+    }
+
+    private func petImage(_ move: TrickPose.Move, t: Double, blocked: Bool) -> some View {
+        let (state, frame, speed) = Self.petState(move, blocked: blocked)
+        let frames = Self.petFrames[state] ?? []
+        return Group {
+            if frames.isEmpty { BrandIcon(account: .codex, size: 4 * u) }
+            else {
+                Image(decorative: frames[still ? 0 : (frame ?? CodexPetSprite.frame(state, at: t * speed)) % frames.count], scale: 1)
+                    .resizable().interpolation(.none)
+            }
+        }
+    }
+
+    /// Walks in from the rail's side and waves, then strolls and does tricks: hops, flips, spins, dances, and jumps
+    /// up on a button or the idea row.
+    private func petView(_ t: Double, _ pose: TrickPose, _ a: TrickActor) -> some View {
+        var p = pose
+        if !still, t < 3.2 {
+            let enter = (petOnRight ? 104.0 : -4.0) * u
+            p.x = enter + (a.home - enter) * t / 3.2
+            p.move = .walk(right: !petOnRight, fast: false)
+        } else if !still, t < 4.8 { p.move = .wave }
+        p.overControl = BreakTricks.overControl(a, p, perches)
+        let margin = CodexPetSprite.footMargin(Self.petState(p.move, blocked: false).state)
+        return petImage(p.move, t: t, blocked: false)
+            .frame(width: a.width, height: a.height)
+            .rotationEffect(.radians(p.turn))
+            .position(x: p.x, y: p.feet + margin * a.height - a.height / 2)
+            .allowsHitTesting(!p.overControl)   // over a button it lets the click through
             .help(pet.helpersWorking > 0 ? "Codex pet · \(pet.helpersWorking) helper\(pet.helpersWorking == 1 ? "" : "s") working" : "Codex pet")
     }
 
-    /// Paces sideways in its own lane on the side away from the pet.
-    private func crabView(_ agent: BreakAgent, lane: Int, t: Double) -> some View {
-        let w = 5.6 * u, span = 12.0
-        let x0 = petOnRight ? 5.0 + Double(lane) * 15 : 95.0 - span - Double(lane) * 15
-        var x = x0, walking = !agent.blocked && !still
-        let k = (t + Double(lane) * 3.1).truncatingRemainder(dividingBy: 8)
-        if walking {
-            if k < 3 { x = x0 + span * k / 3 }
-            else if k < 4 { x = x0 + span; walking = false }
-            else if k < 7 { x = x0 + span - span * (k - 4) / 3 }
-            else { walking = false }
+    /// Claude agents as crabs, Codex agents as small Codex pets. Working ones stroll and do tricks, a blocked one
+    /// stands with a "!", idle ones stand dimmed.
+    private func walkerView(_ agent: BreakAgent, _ a: TrickActor, _ p: TrickPose, t: Double) -> some View {
+        let codex = agent.app == .codex, local = agent.idle ? 0 : t + a.phase
+        let margin = codex ? CodexPetSprite.footMargin(Self.petState(p.move, blocked: agent.blocked).state) : a.footMargin
+        let crabFrame: Int = switch p.move {
+        case let .walk(_, fast): Int(t * (fast ? 16 : 8)) % 4
+        case .jump: 1
+        case .dance: Int(t * 10) % 4
+        default: 0
         }
-        let frame = walking ? Int(t * 8) % 4 : 0
-        let blink = !walking && !agent.blocked && k.truncatingRemainder(dividingBy: 1) > 0.45 && k.truncatingRemainder(dividingBy: 1) < 0.6
-        return ClaudeCrab(frame: frame, blink: blink)
-            .frame(width: w)
-            .overlay(alignment: .topTrailing) { if agent.blocked { BlockedBadge(size: 1.3 * u).offset(x: 0.4 * u, y: -0.6 * u) } }
-            .position(x: x * u, y: floor - w * 17 / 48)
-            .help(Self.tip(agent))
+        let beat = local.truncatingRemainder(dividingBy: 1)
+        return Group {
+            if codex { petImage(p.move, t: local, blocked: agent.blocked) }
+            else { ClaudeCrab(frame: crabFrame, blink: p.move == .stand && !agent.blocked && beat > 0.45 && beat < 0.6) }
+        }
+        .frame(width: a.width, height: a.height)
+        .overlay(alignment: .topTrailing) {
+            if agent.blocked { BlockedBadge(size: 1.3 * u).offset(x: (codex ? 0.2 : 0.4) * u, y: (codex ? 0.2 : -0.6) * u) }
+        }
+        .rotationEffect(.radians(p.turn))
+        .mask(alignment: .top) { Rectangle().frame(height: max(0, a.height - p.sunk)) }   // a peek hides below the floor
+        .opacity(agent.idle ? 0.45 : 1)
+        .position(x: p.x, y: p.feet + margin * a.height - a.height / 2)
+        .allowsHitTesting(!p.overControl)
+        .help(Self.tip(agent))
     }
 
-    private func floatPosition(slot: Int, t: Double, moving: Bool) -> CGPoint {
-        // two bands either side of the timer, then the top edge
-        let bands: [(cx: Double, cy: Double, ax: Double, ay: Double)] = [
-            (13, 24, 6, 10), (87, 26, 6, 9), (12, 58, 5, 10), (88, 58, 5, 12), (32, 8, 12, 2.5), (68, 8, 12, 2.5),
-        ]
-        let b = bands[slot % bands.count], w = 0.17 + Double(slot) * 0.02, p = Double(slot) * 1.7
-        let x = moving ? b.cx + b.ax * sin(w * t * 2 + p) : b.cx
-        let y = moving ? b.cy + b.ay * sin(w * t * 1.3 + p * 1.7) : b.cy
-        return CGPoint(x: x * u, y: y * size.height / 100)
+    /// A floating agent `size` across at `center` overlaps a button or the idea.
+    private func overControl(_ center: CGPoint, _ size: CGFloat) -> Bool {
+        let box = CGRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
+        return perches.contains { $0.rect.intersects(box) }
     }
 
-    private func floaterView(_ agent: BreakAgent, slot: Int, t: Double) -> some View {
-        let d = 5 * u
+    private func floatPosition(_ spot: CGPoint, slot: Int, t: Double, moving: Bool) -> CGPoint {
+        guard moving else { return spot }
+        let w = 0.17 + Double(slot % 7) * 0.02, p = Double(slot) * 1.7, drift = BreakTricks.floatDrift * ring
+        return CGPoint(x: spot.x + drift * sin(w * t * 2 + p), y: spot.y + drift * sin(w * t * 1.3 + p * 1.7))
+    }
+
+    private func floaterView(_ agent: BreakAgent, at spot: CGPoint, slot: Int, t: Double) -> some View {
         let account: AccountID = switch agent.app {
         case .claude: .claude
         case .codex: .codex
         case .antigravity: .antigravity
         case .grok: .grok
         }
+        let at = floatPosition(spot, slot: slot, t: t, moving: !agent.blocked && !agent.idle && !still)
+        let d = ring * Self.stagger(slot)   // never more than the spot allows
         return ZStack {
             Circle().fill(Color(white: 0.03))
-            Circle().strokeBorder(account.accent, lineWidth: 0.22 * u)
+            Circle().strokeBorder(account.accent, lineWidth: 0.22 * unit)
             BrandIcon(account: account, size: d * 0.46)
         }
         .frame(width: d, height: d)
-        .shadow(color: .black.opacity(0.6), radius: 1.2 * u, y: 0.5 * u)
-        .overlay(alignment: .topTrailing) { if agent.blocked { BlockedBadge(size: 1.3 * u) } }
-        .position(floatPosition(slot: slot, t: t, moving: !agent.blocked && !still))
+        .shadow(color: .black.opacity(0.6), radius: 0.6 * unit, y: 0.25 * unit)   // inside floatSpots' allowance
+        .overlay(alignment: .topTrailing) { if agent.blocked { BlockedBadge(size: 1.3 * unit) } }
+        .opacity(agent.idle ? 0.45 : 1)
+        .position(at)
+        .allowsHitTesting(!overControl(at, d))
         .help(Self.tip(agent))
     }
 
-    private func helperView(slot: Int, t: Double) -> some View {
-        sprite(.running, t + Double(slot) * 0.3)
-            .frame(width: 4.4 * u, height: 4.4 * u * 208 / 192)
-            .position(floatPosition(slot: slot, t: t, moving: !still))
+    private func helperView(at spot: CGPoint, slot: Int, t: Double) -> some View {
+        let at = floatPosition(spot, slot: slot, t: t, moving: !still), w = 0.88 * ring
+        return sprite(.running, t + Double(slot) * 0.3)
+            .frame(width: w, height: w * 208 / 192)
+            .position(at)
+            .allowsHitTesting(!overControl(at, w))
             .help("Codex helper")
     }
 
+    /// The last spot when even the rings run out: how many agents and helpers aren't on screen.
+    private func moreRing(_ count: Int, at spot: CGPoint) -> some View {
+        Text("+\(count)")
+            .font(.system(size: ring * 0.3, weight: .semibold).monospacedDigit())
+            .foregroundStyle(Color(white: 0.8))
+            .frame(width: ring, height: ring)
+            .background(Circle().fill(Color(white: 0.03)))
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.3), lineWidth: 0.22 * unit))
+            .position(spot)
+            .allowsHitTesting(!overControl(spot, ring))
+            .help("\(count) more not shown")
+            .accessibilityLabel("\(count) more not shown")
+    }
+
     private static func tip(_ agent: BreakAgent) -> String {
-        [agent.label.isEmpty ? agent.app.rawValue : agent.label, agent.blocked ? "waiting for you" : nil, agent.msg.isEmpty ? nil : agent.msg]
+        [agent.label.isEmpty ? agent.app.rawValue : agent.label, agent.blocked ? "waiting for you" : agent.idle ? "idle" : nil,
+         agent.msg.isEmpty ? nil : agent.msg]
             .compactMap { $0 }.joined(separator: " · ")
     }
 }
@@ -551,8 +772,12 @@ struct BreakSettingsSection: View {
             LabeledContent("Sound at end") { SoundChoice(title: "Sound at end", sound: soundBinding(\.endSound), sounds: sounds) }
                 .onAppear { sounds = BatterySounds.all().map(\.name) }
             Toggle(isOn: $settings.showAgents) {
-                Text("Show agents that are working")
-                Text("The Codex pet, and agents Rex reports as working or waiting for you")
+                Text("Show agents")
+                Text("The Codex pet, and the agents open in Rex: working, waiting for you, or idle (dimmed)")
+            }
+            Toggle(isOn: $settings.holidays) {
+                Text("Holiday surprises")
+                Text("On Halloween and Thanksgiving, a short film plays behind the countdown")
             }
         }
         Section("Ideas") {
@@ -665,13 +890,13 @@ struct BreakHistorySection: View {
                     }
                 }
             }
-            Text("Kept on this Mac for 90 days. Skipped means dismissed with Escape, or breaks turned off during one.")
+            Text("Kept on this Mac for 90 days. Skipped means dismissed with Escape or the countdown's ×, or breaks turned off during one.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
 }
 
-/// On hover, beside the rail: when the next breaks come.
+/// On hover, beside the rail: when the next break comes.
 struct NextBreakHint: View {
     @ObservedObject var controller: BreakController
     var tail: Edge = .trailing
