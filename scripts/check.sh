@@ -15,6 +15,8 @@ swiftc Sources/Pulse/CodexPetSprite.swift Checks/CodexPetChecks.swift -o "$OUT/p
 "$OUT/pet"
 swiftc Sources/Pulse/Breaks.swift Sources/Pulse/BreakTricks.swift Sources/Pulse/RexAgents.swift Checks/BreakChecks.swift -o "$OUT/break"
 "$OUT/break"
+swiftc Sources/Pulse/BreakHats.swift Sources/Pulse/BreakTricks.swift Sources/Pulse/CodexPetSprite.swift Checks/BreakHatChecks.swift -o "$OUT/hats"
+"$OUT/hats"
 swiftc $(find Sources/Pulse -name "*.swift" ! -name PulseApp.swift) Checks/SettingsStateChecks.swift -o "$OUT/state"
 "$OUT/state"
 swiftc Sources/Pulse/HotKey.swift Checks/VoiceShortcutChecks.swift -o "$OUT/voice-shortcut"

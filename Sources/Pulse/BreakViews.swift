@@ -146,7 +146,11 @@ struct BreakOverlayView: View {
             }
             if agents {
                 BreakAgentsLayer(rex: controller.rex, size: size, start: controller.breakStarted,
-                                 showPet: showPet, petOnRight: petOnRight, still: reduceMotion, perches: perches)
+                                 showPet: showPet, petOnRight: petOnRight, still: reduceMotion, perches: perches,
+                                 week: controller.settings.holidays
+                                     ? BreakHatWeek.on(controller.breakStarted, simulated: UserDefaults.standard.simulatedHoliday) : nil,
+                                 dressed: controller.settings.partyMode,
+                                 left: { [controller] in controller.remaining($0).left })
             }
         }
         .frame(width: size.width, height: size.height)
@@ -391,6 +395,8 @@ struct ClaudeCrab: View {
     static let color = Color(rgb: 0xD97757)
     var frame = 0
     var blink = false
+    var sleepy = false   // eyes nearly shut
+    var raise: (left: CGFloat, right: CGFloat) = (0, 0)   // grid units each arm is lifted: flapping, waving, climbing
 
     var body: some View {
         Canvas { context, size in
@@ -403,11 +409,11 @@ struct ClaudeCrab: View {
             }
             var p = Path()
             p.addRect(r(3, 5 + bob, 18, 12.079))
-            p.addRect(r(0, 10.95 + bob + arm, 3, 3.1))
-            p.addRect(r(21, 10.95 + bob - arm, 3, 3.1))
+            p.addRect(r(0, 10.95 + bob + arm - raise.left, 3, 3.1))
+            p.addRect(r(21, 10.95 + bob - arm - raise.right, 3, 3.1))
             for (i, x) in [4.487, 7.488, 15, 18].enumerated() { p.addRect(r(CGFloat(x), 17.079 + bob, 1.513, 2.921 - lift[i])) }
             // the eyes are holes in the body
-            let eyeH: CGFloat = blink ? 0.5 : 2.847, eyeY = 8.102 + bob + (blink ? 1.8 : 0)
+            let eyeH: CGFloat = blink ? 0.5 : sleepy ? 0.9 : 2.847, eyeY = 8.102 + bob + (blink ? 1.8 : sleepy ? 1.9 : 0)
             p.addRect(r(6, eyeY, 1.488, eyeH))
             p.addRect(r(16.51, eyeY, 1.49, eyeH))
             context.fill(p, with: .color(Self.color), style: FillStyle(eoFill: true))
@@ -419,7 +425,7 @@ struct ClaudeCrab: View {
 /// The pet and the agents Rex reports, around the edges of the break screen: the pet, the Claude crabs and small
 /// Codex pets along the bottom in staggered sizes; other apps (no sprite of their own), and the agents the floor
 /// has no room for, float as rings. A blocked
-/// agent stands still with a "!", an idle one dimmed.
+/// agent stands still with a "!", an idle one dimmed, asleep until the break's last seconds.
 struct BreakAgentsLayer: View {
     @ObservedObject var rex: RexAgents
     @ObservedObject private var pet = CodexPetSession.shared
@@ -429,6 +435,10 @@ struct BreakAgentsLayer: View {
     let petOnRight: Bool
     let still: Bool
     var perches: [BreakPerch] = []
+    var week: BreakHatWeek? = nil   // the holiday week the floor dresses up for
+    var dressed = true              // Party mode: hats, costumes and props; off, the agents wear nothing
+    /// Seconds left in the break at a moment; it holds still while the break is paused.
+    var left: (Date) -> TimeInterval = { _ in .infinity }
 
     private static let petFrames: [CodexPetSprite.State: [CGImage]] = Bundle.pulseResources
         .url(forResource: "Resources/codex-pet", withExtension: "webp")
@@ -443,6 +453,10 @@ struct BreakAgentsLayer: View {
         let (spots, shown, helpers, more) = cast()
         let cast = actors(shown.walkers), first = showPet ? 1 : 0
         let seed = UInt64(bitPattern: Int64(start.timeIntervalSinceReferenceDate * 1000))   // new tricks each break
+        let outfits = shown.walkers.map {
+            !dressed ? BreakOutfit() : BreakOutfit.pick(asleep: $0.idle && !$0.done, finished: $0.done, crowd: shown.walkers.count, week: week,
+                             roll: BreakOutfit.roll(id: $0.id, seed: seed))
+        }
         let rings = Array(shown.floaters.enumerated())
         let moving = rings.filter { !$0.element.blocked && !$0.element.idle && !still }
         ZStack(alignment: .topLeading) {
@@ -452,14 +466,18 @@ struct BreakAgentsLayer: View {
             }
             // with no spot left on a very short screen, the top-right corner
             if more > 0 { moreRing(more, at: spots.last ?? CGPoint(x: size.width - ring, y: ring)) }
-            TimelineView(.animation(minimumInterval: 1.0 / 24, paused: still)) { context in
-                let t = still ? 0 : context.date.timeIntervalSince(start)
-                let poses = BreakTricks.poses(cast, t: t, floor: floor, width: size.width, perches: perches, seed: seed)
+            // with Reduce Motion, a redraw a second so the sleepers are up at the end, without the getting up
+            TimelineView(.animation(minimumInterval: still ? 1 : 1.0 / 24)) { context in
+                let t = still ? 0 : context.date.timeIntervalSince(start), l = left(context.date)
+                let poses = BreakTricks.poses(cast, t: t, left: still ? (l > BreakTricks.wake ? .infinity : 0) : l, floor: floor,
+                                              width: size.width, perches: perches, seed: seed)
                 ZStack(alignment: .topLeading) {
+                    ladders(cast, poses)
                     if showPet { petView(t, poses[0], cast[0]) }
                     ForEach(Array(shown.walkers.enumerated()), id: \.element.id) { i, agent in
-                        walkerView(agent, cast[first + i], poses[first + i], t: t).zIndex(Self.stagger(i))
+                        walkerView(agent, cast[first + i], poses[first + i], t: t, outfit: outfits[i]).zIndex(Self.stagger(i))
                     }
+                    snores(cast, poses, first: first, t: t).zIndex(2)
                     ForEach(moving, id: \.element.id) { i, agent in floaterView(agent, at: spots[i], slot: i, t: t) }
                     ForEach(0..<helpers, id: \.self) { i in helperView(at: spots[shown.floaters.count + i], slot: shown.floaters.count + i, t: t) }
                 }
@@ -515,38 +533,54 @@ struct BreakAgentsLayer: View {
             out.append(TrickActor(kind: codex ? .codex : .crab, home: laneStart(lane, of: walkers.count) * u, span: 8 * u, width: w,
                                   height: codex ? w * 208 / 192 : w * 17 / 24,
                                   footMargin: codex ? CodexPetSprite.footMargin(.idle) : 1.0 / 17,   // the crab's legs end 1/17 up
-                                  phase: Double(lane) * 3.1, still: still || agent.idle || agent.blocked))
+                                  // a finished agent celebrates instead of sleeping
+                                  phase: Double(lane) * 3.1, still: still || (agent.idle && !agent.done) || agent.blocked,
+                                  idle: agent.idle && !agent.done))
         }
         return out
     }
 
-    /// A pose's Codex sprite row, its frame when the pose picks one (a turn-around), and how fast it plays.
+    /// A pose's Codex sprite row, its frame when the pose picks one (a turn-around, a leap, a wing beat, a seat), and
+    /// how fast it plays.
     private static func petState(_ move: TrickPose.Move, blocked: Bool) -> (state: CodexPetSprite.State, frame: Int?, speed: Double) {
         switch move {
         case .stand: (blocked ? .waiting : .idle, nil, 1)
+        case .sleep: (.idle, CodexPetSprite.asleep, 1)
+        case .sit: (.idle, 0, 1)
+        case .ladder: (.turn, CodexPetSprite.back, 1)
         case let .walk(right, fast): (right ? .walkRight : .walkLeft, nil, fast ? 2 : 1)
-        case .jump: (.jump, nil, 1)
+        case let .jump(q): (.jump, CodexPetSprite.leap(q), 1)
+        case let .fly(up): (.jump, CodexPetSprite.flap(up: up), 1)
         case .dance: (.happy, nil, 1)
         case .dizzy: (.oops, nil, 1)
         case .wave: (.waving, nil, 1)
+        case .type: (.running, nil, 1)   // the row where it sits at its laptop
         case let .spin(q): { let f = CodexPetSprite.spin(q); return (f.state, f.frame, 1) }()
         }
     }
 
-    private func petImage(_ move: TrickPose.Move, t: Double, blocked: Bool) -> some View {
+    /// The sheet's frame for a pose; nil when the sheet didn't load.
+    private func petFrame(_ move: TrickPose.Move, t: Double, blocked: Bool) -> CGImage? {
         let (state, frame, speed) = Self.petState(move, blocked: blocked)
         let frames = Self.petFrames[state] ?? []
-        return Group {
-            if frames.isEmpty { BrandIcon(account: .codex, size: 4 * u) }
-            else {
-                Image(decorative: frames[still ? 0 : (frame ?? CodexPetSprite.frame(state, at: t * speed)) % frames.count], scale: 1)
-                    .resizable().interpolation(.none)
-            }
+        return frames.isEmpty ? nil : frames[(frame ?? (still ? 0 : CodexPetSprite.frame(state, at: t * speed))) % frames.count]
+    }
+
+    private func petImage(_ move: TrickPose.Move, t: Double, blocked: Bool) -> some View {
+        Group {
+            if let image = petFrame(move, t: t, blocked: blocked) { Image(decorative: image, scale: 1).resizable().interpolation(.none) }
+            else { BrandIcon(account: .codex, size: 4 * u) }
         }
     }
 
-    /// Walks in from the rail's side and waves, then strolls and does tricks: hops, flips, spins, dances, and jumps
-    /// up on a button or the idea row.
+    /// What a sprite wears in this pose: everyone swaps to the propeller cap to fly or spin down, and puts the prop away.
+    private static func worn(_ outfit: BreakOutfit, _ p: TrickPose) -> BreakOutfit {
+        if case .fly = p.move { return BreakOutfit(hat: .propeller, wear: outfit.wear) }
+        return p.propeller ? BreakOutfit(hat: .propeller, wear: outfit.wear) : outfit
+    }
+
+    /// Walks in from the rail's side and waves, then strolls and does tricks: hops, bounces, flips, spins, dances,
+    /// moonwalks, types, flies, and jumps up on a button or the idea row.
     private func petView(_ t: Double, _ pose: TrickPose, _ a: TrickActor) -> some View {
         var p = pose
         if !still, t < 3.2 {
@@ -556,8 +590,11 @@ struct BreakAgentsLayer: View {
         } else if !still, t < 4.8 { p.move = .wave }
         p.overControl = BreakTricks.overControl(a, p, perches)
         let margin = CodexPetSprite.footMargin(Self.petState(p.move, blocked: false).state)
+        let frame = petFrame(p.move, t: t, blocked: false), worn = dressed ? Self.worn(BreakOutfit.pet(week), p) : BreakOutfit()
         return petImage(p.move, t: t, blocked: false)
             .frame(width: a.width, height: a.height)
+            .overlay(alignment: .topLeading) { if let frame { PetOutfit(outfit: worn, width: a.width, frame: frame) } }
+            .scaleEffect(x: 1 + p.squash, y: 1 - p.squash, anchor: .bottom)
             .rotationEffect(.radians(p.turn))
             .position(x: p.x, y: p.feet + margin * a.height - a.height / 2)
             .allowsHitTesting(!p.overControl)   // over a button it lets the click through
@@ -565,31 +602,97 @@ struct BreakAgentsLayer: View {
     }
 
     /// Claude agents as crabs, Codex agents as small Codex pets. Working ones stroll and do tricks, a blocked one
-    /// stands with a "!", idle ones stand dimmed.
-    private func walkerView(_ agent: BreakAgent, _ a: TrickActor, _ p: TrickPose, t: Double) -> some View {
-        let codex = agent.app == .codex, local = agent.idle ? 0 : t + a.phase
+    /// stands with a "!", idle ones sleep dimmed and get up as the break ends.
+    private func walkerView(_ agent: BreakAgent, _ a: TrickActor, _ p: TrickPose, t: Double, outfit: BreakOutfit) -> some View {
+        let codex = agent.app == .codex, local = t + a.phase
         let margin = codex ? CodexPetSprite.footMargin(Self.petState(p.move, blocked: agent.blocked).state) : a.footMargin
         let crabFrame: Int = switch p.move {
         case let .walk(_, fast): Int(t * (fast ? 16 : 8)) % 4
         case .jump: 1
-        case .dance: Int(t * 10) % 4
+        case .dance, .ladder: Int(t * 10) % 4
         default: 0
         }
-        let beat = local.truncatingRemainder(dividingBy: 1)
+        let arms: (left: CGFloat, right: CGFloat) = switch p.move {
+        case let .fly(up): up ? (6.5, 6.5) : (-1.5, -1.5)
+        case .wave: (0, Int(t * 6) % 2 == 0 ? 6.5 : 4.8)
+        case .ladder: crabFrame == 1 ? (4, 0) : crabFrame == 3 ? (0, 4) : (2, 2)   // a claw up each step
+        default: (0, 0)
+        }
+        let beat = local.truncatingRemainder(dividingBy: 1), worn = dressed ? Self.worn(outfit, p) : outfit
+        // where ClaudeCrab draws its body's top and its right claw's tip this frame
+        let bob: CGFloat = crabFrame % 2 == 1 ? -0.5 : 0, swing: CGFloat = crabFrame % 4 == 1 ? -0.6 : crabFrame % 4 == 3 ? 0.6 : 0
+        let frame = codex ? petFrame(p.move, t: local, blocked: agent.blocked) : nil
         return Group {
             if codex { petImage(p.move, t: local, blocked: agent.blocked) }
-            else { ClaudeCrab(frame: crabFrame, blink: p.move == .stand && !agent.blocked && beat > 0.45 && beat < 0.6) }
+            else {
+                ClaudeCrab(frame: crabFrame, blink: p.move == .stand && !agent.blocked && beat > 0.45 && beat < 0.6,
+                           sleepy: p.move == .sleep, raise: arms)
+            }
         }
         .frame(width: a.width, height: a.height)
+        .overlay(alignment: .topLeading) {
+            if let frame { PetOutfit(outfit: worn, width: a.width, frame: frame) }
+            else if !codex {
+                CrabOutfit(outfit: worn, width: a.width, bodyTop: 1 + bob, hand: CGPoint(x: 22.5, y: 7.5 + bob - swing - arms.right))
+            }
+        }
         .overlay(alignment: .topTrailing) {
             if agent.blocked { BlockedBadge(size: 1.3 * u).offset(x: (codex ? 0.2 : 0.4) * u, y: (codex ? 0.2 : -0.6) * u) }
         }
+        .scaleEffect(x: 1 + p.squash, y: 1 - p.squash, anchor: .bottom)
         .rotationEffect(.radians(p.turn))
-        .mask(alignment: .top) { Rectangle().frame(height: max(0, a.height - p.sunk)) }   // a peek hides below the floor
-        .opacity(agent.idle ? 0.45 : 1)
+        // whatever is below the floor is hidden: a peek, a seated sprite's legs; the hat above and the prop beside stay
+        .mask(alignment: .top) {
+            Rectangle().frame(width: 2 * a.width, height: a.height + (p.sunk > 0 ? max(0, a.height * (1 - margin) - p.sunk) : a.height))
+                .offset(y: -a.height)
+        }
+        .opacity(agent.idle && !agent.done ? BreakTricks.sleeperOpacity(a, p) : 1)
         .position(x: p.x, y: p.feet + margin * a.height - a.height / 2)
         .allowsHitTesting(!p.overControl)
         .help(Self.tip(agent))
+    }
+
+    /// The ladders propped against buttons and the ropes down from the top, behind whoever climbs them: plain wood,
+    /// rails and rungs, and a tan rope, on the crab's grid for a crab and finer for a Codex pet. Clicks pass through.
+    private func ladders(_ cast: [TrickActor], _ poses: [TrickPose]) -> some View {
+        Canvas { context, _ in
+            var path = Path()
+            for (a, p) in zip(cast, poses) {
+                if p.rope.count > 1 {
+                    var rope = Path()
+                    rope.addLines(p.rope)
+                    context.stroke(rope, with: .color(Color(rgb: 0xD8C49A)), lineWidth: a.kind == .crab ? 1.5 / 24 * a.width : 0.035 * a.width)
+                }
+                guard let r = p.ladder, r.height > 0 else { continue }
+                let crab = a.kind == .crab, rail = crab ? 1.5 / 24 * a.width : 0.05 * a.width
+                let rung = crab ? rail : 0.025 * a.height, pitch = BreakTricks.rungPitch(a)
+                path.addRect(CGRect(x: r.minX, y: r.minY, width: rail, height: r.height))
+                path.addRect(CGRect(x: r.maxX - rail, y: r.minY, width: rail, height: r.height))
+                var y = r.maxY - pitch / 2   // from the floor up, so rungs stay put as it's propped up
+                while y - rung >= r.minY { path.addRect(CGRect(x: r.minX, y: y - rung, width: r.width, height: rung)); y -= pitch }
+            }
+            context.fill(path, with: .color(Color(rgb: 0xB48A5E)))
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// The sleepers' Zs, drifting up beside where a hat would go.
+    private func snores(_ cast: [TrickActor], _ poses: [TrickPose], first: Int, t: Double) -> some View {
+        Canvas { context, _ in
+            let clear = perches.map(\.rect)
+            let z = context.resolve(Text("Z").font(.system(size: 20, weight: .heavy, design: .rounded)).foregroundStyle(Color(white: 0.86)))
+            for (i, (a, p)) in zip(cast, poses).enumerated() where i >= first {
+                for s in BreakTricks.snores(a, p, index: i, t: t, clear: clear) {
+                    var c = context
+                    c.opacity = s.opacity
+                    c.translateBy(x: s.x, y: s.y)
+                    c.scaleBy(x: s.size / 20, y: s.size / 20)
+                    c.draw(z, at: .zero)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     /// A floating agent `size` across at `center` overlaps a button or the idea.
@@ -651,7 +754,7 @@ struct BreakAgentsLayer: View {
     }
 
     private static func tip(_ agent: BreakAgent) -> String {
-        [agent.label.isEmpty ? agent.app.rawValue : agent.label, agent.blocked ? "waiting for you" : agent.idle ? "idle" : nil,
+        [agent.label.isEmpty ? agent.app.rawValue : agent.label, agent.blocked ? "waiting for you" : agent.done ? "finished" : agent.idle ? "idle" : nil,
          agent.msg.isEmpty ? nil : agent.msg]
             .compactMap { $0 }.joined(separator: " · ")
     }
@@ -773,11 +876,16 @@ struct BreakSettingsSection: View {
                 .onAppear { sounds = BatterySounds.all().map(\.name) }
             Toggle(isOn: $settings.showAgents) {
                 Text("Show agents")
-                Text("The Codex pet, and the agents open in Rex: working, waiting for you, or idle (dimmed)")
+                Text("The Codex pet, and the agents open in Rex on this Mac and the Macs it connects to: working, waiting for you, just finished, or asleep")
             }
+            Toggle(isOn: $settings.partyMode) {
+                Text("Party mode")
+                Text("Hats, costumes and props on the agents")
+            }
+            .disabled(!settings.showAgents)
             Toggle(isOn: $settings.holidays) {
                 Text("Holiday surprises")
-                Text("On Halloween and Thanksgiving, a short film plays behind the countdown")
+                Text("A short film behind the countdown on Halloween and Thanksgiving; in Party mode, holiday hats all that week and in December")
             }
         }
         Section("Ideas") {

@@ -39,8 +39,16 @@ enum CodexPetChecks {
         for state in [CodexPetSprite.State.happy, .oops, .turn, .turnBack] {
             for frame in tracks[state]! { assert(NSBitmapImageRep(cgImage: frame).colorAt(x: 96, y: 120)!.alphaComponent > 0.5, "\(state)") }
         }
+        // the break screen's picks: a leap through row 4 in order, two wing beats, and frames for sleeping and climbing
+        let leap = stride(from: 0.0, to: 1, by: 0.01).map(CodexPetSprite.leap)
+        assert(leap.first == 0 && leap.last == 4 && zip(leap, leap.dropFirst()).allSatisfy { $0 <= $1 } && Set(leap) == Set(0..<5))
+        assert(CodexPetSprite.flap(up: true) != CodexPetSprite.flap(up: false))
+        for (state, frame) in [(CodexPetSprite.State.jump, CodexPetSprite.flap(up: true)), (.jump, CodexPetSprite.flap(up: false)),
+                               (.idle, CodexPetSprite.asleep), (.turn, CodexPetSprite.back)] {
+            assert(NSBitmapImageRep(cgImage: tracks[state]![frame]).colorAt(x: 96, y: 120)!.alphaComponent > 0.5, "\(state) \(frame)")
+        }
         assert(CodexPetSprite.footMargin(.idle) < CodexPetSprite.footMargin(.turn))
         assert(CodexPetSprite.frames(from: URL(fileURLWithPath: "/nonexistent-codex-pet.webp")).isEmpty)
-        print("Pet checks passed: decoding, idle frames, transparency, timing and missing-asset fallback")
+        print("Pet checks passed: decoding, idle frames, transparency, timing, the break screen's frames and missing-asset fallback")
     }
 }

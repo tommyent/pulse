@@ -13,6 +13,11 @@ struct BreakAgent: Equatable, Identifiable {
     var idle = false
     var label = ""
     var msg = ""
+    var done = false   // finished in the last `celebration`, and not looked at yet (Rex's "done"); idle too
+
+    /// How long a finished agent celebrates. Rex keeps "done" until the pane is looked at, hours later sometimes;
+    /// after this it sleeps like any idle agent.
+    static let celebration: TimeInterval = 15 * 60
     /// Who gets a place first on the break screen: blocked, then working, then idle.
     var rank: Int { blocked ? 0 : idle ? 2 : 1 }
 
@@ -249,15 +254,26 @@ final class RexAgents: ObservableObject {
         return agent(fromRecord: root, block: block)
     }
 
-    nonisolated static func agent(fromRecord record: [String: Any], block: String) -> BreakAgent? {
+    nonisolated static func agent(fromRecord record: [String: Any], block: String, now: Date = .now) -> BreakAgent? {
         guard let name = record["app"] as? String ?? record["effective_app"] as? String,
               let app = BreakAgent.App(rex: name) else { return nil }
         switch record["state"] as? String {
         case "working": return BreakAgent(id: block, app: app, blocked: false, msg: record["msg"] as? String ?? "")
         case "blocked": return BreakAgent(id: block, app: app, blocked: true, msg: record["msg"] as? String ?? "")
-        case "idle", "done": return BreakAgent(id: block, app: app, blocked: false, idle: true)
+        case "idle": return BreakAgent(id: block, app: app, blocked: false, idle: true)
+        case "done":
+            let at = (record["updated_at"] as? String).flatMap(date)   // an event without one has just happened
+            return BreakAgent(id: block, app: app, blocked: false, idle: true,
+                              done: at.map { now.timeIntervalSince($0) < BreakAgent.celebration } ?? true)
         default: return nil   // error and states Rex adds later
         }
+    }
+
+    /// Rex's times, such as "2026-10-26T01:35:14.24817-04:00".
+    nonisolated static func date(_ text: String) -> Date? {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.date(from: text) ?? ISO8601DateFormatter().date(from: text)
     }
 
     /// A line of `rex events --all --json`: (block, its agent now, or nil when its program stopped reporting). nil for every

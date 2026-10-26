@@ -18,7 +18,8 @@ struct BreakSettings: Codable, Equatable {
     var longLength: TimeInterval = 5 * 60
     var color = BreakColor.presets[0].name   // a preset's name, or "#RRGGBB"
     var showAgents = true
-    var holidays = true   // a holiday's video behind the countdown
+    var partyMode = true  // hats, costumes and props on the agents
+    var holidays = true   // a holiday's video behind the countdown, and its hats that week
     var ideas = true
     var level = 1   // 0 easy … 4 adventurous
     var interests: [String] = []
@@ -44,6 +45,7 @@ struct BreakSettings: Codable, Equatable {
         longLength = try c.decodeIfPresent(TimeInterval.self, forKey: .longLength) ?? d.longLength
         color = try c.decodeIfPresent(String.self, forKey: .color) ?? d.color
         showAgents = try c.decodeIfPresent(Bool.self, forKey: .showAgents) ?? d.showAgents
+        partyMode = try c.decodeIfPresent(Bool.self, forKey: .partyMode) ?? d.partyMode
         holidays = try c.decodeIfPresent(Bool.self, forKey: .holidays) ?? d.holidays
         ideas = try c.decodeIfPresent(Bool.self, forKey: .ideas) ?? d.ideas
         level = min(4, max(0, try c.decodeIfPresent(Int.self, forKey: .level) ?? d.level))
@@ -556,17 +558,22 @@ enum BreakIdeaPrompt {
     /// True when `idea` rewords one of `recent`: at least 70% of their content words shared (overlap over union), or
     /// all of one's words (two or more) inside the other's. One changed subject in a short idea ("sounds" for
     /// "colours") is new.
-    static func isRepeat(_ idea: String, of recent: [String]) -> Bool {
+    static func isRepeat(_ idea: String, of recent: [String]) -> Bool { lastSeen(idea, in: recent) != nil }
+
+    /// Where in `recent` (oldest first) the newest idea that `idea` rewords sits; nil when it rewords none.
+    static func lastSeen(_ idea: String, in recent: [String]) -> Int? {
         let w = words(idea)
-        return !w.isEmpty && recent.contains { r in
+        guard !w.isEmpty else { return nil }
+        return recent.lastIndex { r in
             let o = words(r), shared = w.intersection(o).count
             return Double(shared) / Double(w.union(o).count) >= 0.7 || (shared == min(w.count, o.count) && shared >= 2)
         }
     }
 
     /// Asks up to `attempts` times, all within one `timeout`, for an idea that isn't a repeat of `recent`. Each
-    /// rejected answer joins the next try's avoid list. nil when the model fails, every answer repeats, or time runs
-    /// out; the deadline holds even when the model ignores cancellation, and its late answer is dropped.
+    /// rejected answer joins the next try's avoid list. When every answer repeats, the one shown longest ago wins,
+    /// since with narrow interests the model runs out of new ideas and a blank line is worse. nil when the model
+    /// fails or time runs out; the deadline holds even when the model ignores cancellation, and its late answer is dropped.
     static func fresh(recent: [String], attempts: Int = 3, timeout: TimeInterval,
                       ask: @escaping @Sendable (_ avoid: [String], _ attempt: Int) async -> String?) async -> String? {
         let work = Task<String?, Never> {
@@ -577,7 +584,7 @@ enum BreakIdeaPrompt {
                 if !isRepeat(text, of: recent + rejected) { return text }
                 rejected.append(text)
             }
-            return nil
+            return rejected.min { (lastSeen($0, in: recent) ?? -1) < (lastSeen($1, in: recent) ?? -1) }
         }
         let race = Race()
         let timer = Task {

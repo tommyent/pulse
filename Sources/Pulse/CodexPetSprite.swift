@@ -34,6 +34,18 @@ enum CodexPetSprite {
         return i < 8 ? (.turn, i) : (.turnBack, i - 8)
     }
 
+    /// A leap at `progress` 0…1 along row 4: crouch, rise, top, fall, land.
+    static func leap(_ progress: Double) -> Int { [0.12, 0.35, 0.65, 0.88].firstIndex { progress < $0 } ?? 4 }
+
+    /// Flying, from row 4: its arms-up frame with the wings up, its arms-out frame with them down.
+    static func flap(up: Bool) -> Int { up ? 2 : 1 }
+
+    /// Asleep: the idle frame with its eyes shut. The break screen sits it down, its legs hidden below the floor.
+    static let asleep = 1
+
+    /// Its back, from the turn-around row: on a ladder.
+    static let back = 4
+
     static func frame(_ state: State, at elapsed: TimeInterval) -> Int {
         let durations = track(state).durations
         var remaining = max(0, elapsed).truncatingRemainder(dividingBy: durations.reduce(0, +))
