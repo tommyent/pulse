@@ -1,6 +1,7 @@
 import AVFoundation
 import AppKit
 import Combine
+import CoreAudio
 import CoreGraphics
 import SwiftUI
 import os
@@ -54,6 +55,7 @@ final class BreakController: ObservableObject {
     private var simulation: NSKeyValueObservation?
     private var awayIdle = false     // no input has counted as time away; "back" is logged when input returns
     private var held: String?        // why a due break is waiting (a voice call, a locked screen), logged as it changes
+    private var lastCall = Date.distantPast   // a call counts as input: on one, you're at the Mac, not away
     private var saved: BreakClocks?  // what break-clock.json holds
     private var sound: NSSound?      // kept until it has played
 
@@ -64,6 +66,7 @@ final class BreakController: ObservableObject {
     private static let ideasURL = dir.appending(path: "break-ideas.json")
 
     var settings: BreakSettings { schedule.settings }
+    var pausedUntil: Date? { schedule.pausedUntil }
     func remaining(_ now: Date) -> (left: TimeInterval, total: TimeInterval) { schedule.remaining(now) ?? (0, 1) }
     var kind: BreakKind? {
         switch phase {
@@ -76,6 +79,9 @@ final class BreakController: ObservableObject {
     func nextText(_ now: Date) -> String? {
         guard schedule.settings.enabled else { return nil }
         if !phase.isWorking { return "Break now" }
+        if let until = schedule.pausedUntil, until > now {
+            return "Breaks paused until \(until.formatted(date: .omitted, time: .shortened))"
+        }
         if let held { return "Next: a break is waiting for \(held)" }
         let next = schedule.upcoming(now)
         return nextBreakText(micro: next.micro, long: next.long, now: now)
@@ -240,12 +246,17 @@ final class BreakController: ObservableObject {
     private func tick() {
         let now = Date()
         // any input event: kCGAnyInputEventType
-        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+        var idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
         let voice = CodexPetSession.shared.voiceState != .off, locked = lockedAt != nil || sleptAt != nil
-        let previous = schedule.phase, enabled = schedule.settings.enabled
-        let waiting = enabled && previous == .working && schedule.due(at: now) != nil
-            ? (locked ? "the screen to unlock" : voice ? "your voice call to end" : nil) : nil
-        let event = schedule.tick(now: now, idle: idle, locked: locked, voiceActive: voice)
+        let previous = schedule.phase, enabled = schedule.settings.enabled, due = schedule.due(at: now) != nil
+        // ~2 ms a read, so only when a call would change something: a break due or counting down, or time away
+        let call = !voice && enabled && schedule.settings.waitForCalls
+            && (due || previous.isCountdown || idle >= BreakSchedule.idleAway) && Self.microphoneInUse()
+        if voice || call { lastCall = now }
+        idle = min(idle, now.timeIntervalSince(lastCall))
+        let waiting = enabled && previous == .working && due
+            ? (locked ? "the screen to unlock" : voice ? "your voice call to end" : call ? "your call to end" : nil) : nil
+        let event = schedule.tick(now: now, idle: idle, locked: locked, voiceActive: voice || call)
         if waiting != held {
             if let waiting { log.notice("break due but held: waiting for \(waiting, privacy: .public)") } else { log.notice("hold over") }
             held = waiting
@@ -259,7 +270,7 @@ final class BreakController: ObservableObject {
         let why = switch (event, previous) {
         case (.start, _): "the countdown ran out"
         case (.end(_, .taken, _), _): "finished"
-        case (.end(_, nil, _), _): locked ? "the screen locked" : "a Pulse voice call started"
+        case (.end(_, nil, _), _): locked ? "the screen locked" : voice ? "a Pulse voice call started" : "a call started"
         case (.end(_, .skipped, _), _): "breaks turned off"
         case (.away, _): "no input for \(Int(idle)) s"
         default: ""
@@ -327,6 +338,30 @@ final class BreakController: ObservableObject {
     func skip(why: String = "Escape") { if let e = schedule.skip(.now) { handle(e, why: why) } }
     func reroll() { requestIdea(surprise: false) }
     func surprise() { requestIdea(surprise: true) }
+
+    /// The hover hint's Pause, for a meeting without a call on this Mac; nil resumes.
+    func pauseBreaks(for seconds: TimeInterval?) {
+        objectWillChange.send()
+        schedule.pausedUntil = seconds.map { Date().addingTimeInterval($0) }
+        saveClocks(force: true)
+        log.notice("\(seconds.map { "breaks paused for \(Int($0)) s" } ?? "breaks resumed", privacy: .public)")
+    }
+
+    /// Whether any app is recording from a microphone, as on a call. Reading it needs no microphone permission.
+    private static func microphoneInUse() -> Bool {
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyProcessObjectList,
+                                                 mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr else { return false }
+        var processes = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &processes) == noErr else { return false }
+        address.mSelector = kAudioProcessPropertyIsRunningInput
+        return processes.contains { process in
+            var running: UInt32 = 0, size = UInt32(MemoryLayout<UInt32>.size)
+            return AudioObjectGetPropertyData(process, &address, 0, nil, &size, &running) == noErr && running != 0
+        }
+    }
 
     /// Writing an idea never holds up the timer: a placeholder shows while it runs, and a failure keeps the last idea
     /// or hides the line.

@@ -24,6 +24,7 @@ struct BreakSettings: Codable, Equatable {
     var level = 1   // 0 easy … 4 adventurous
     var interests: [String] = []
     var awayMode = BreakAwayMode.idle
+    var waitForCalls = true   // a break due while an app records from a microphone waits for the call to end
     var startSound = "Blow"   // a sound's name, as Battery's pickers list them; "" is None
     var endSound = "Glass"
 
@@ -51,6 +52,7 @@ struct BreakSettings: Codable, Equatable {
         level = min(4, max(0, try c.decodeIfPresent(Int.self, forKey: .level) ?? d.level))
         interests = try c.decodeIfPresent([String].self, forKey: .interests) ?? d.interests
         awayMode = (try? c.decodeIfPresent(BreakAwayMode.self, forKey: .awayMode)) ?? d.awayMode
+        waitForCalls = try c.decodeIfPresent(Bool.self, forKey: .waitForCalls) ?? d.waitForCalls
         startSound = try c.decodeIfPresent(String.self, forKey: .startSound) ?? d.startSound
         endSound = try c.decodeIfPresent(String.self, forKey: .endSound) ?? d.endSound
     }
@@ -188,7 +190,10 @@ struct BreakSchedule {
     private(set) var nextMicro: Date
     private(set) var nextLong: Date
     private(set) var snoozedUntil: Date?
-    private var currentDue: Date?                 // when the break counting down or on screen was due
+    /// The hover hint's Pause: no breaks until then, through time away and a restart. The clocks keep running, so a
+    /// break that came due meanwhile comes as the pause ends.
+    var pausedUntil: Date?
+    private var currentDue: Date?                // when the break counting down or on screen was due
     private var counts = true                     // false for a simulatedBreak, which leaves the clocks alone
     private var awayCounted: Set<BreakKind> = []  // what the current time away already counted, to report it once
 
@@ -201,24 +206,27 @@ struct BreakSchedule {
     /// The break that's due now, if any. A long break due within `merge` takes the place of a due micro break.
     func due(at now: Date) -> BreakKind? {
         if let s = snoozedUntil, now < s { return nil }
+        if let p = pausedUntil, now < p { return nil }
         if settings.longEnabled, now >= nextLong { return .long }
         guard now >= nextMicro else { return nil }
         return settings.longEnabled && nextLong.timeIntervalSince(now) <= Self.merge ? .long : .micro
     }
 
-    /// When each kind comes next, a snooze included; nil for the long break when it's off.
+    /// When each kind comes next, a snooze or pause included; nil for the long break when it's off.
     func upcoming(_ now: Date) -> (micro: Date, long: Date?) {
-        let s = snoozedUntil ?? .distantPast
+        let s = max(snoozedUntil ?? .distantPast, pausedUntil ?? .distantPast)
         return (max(nextMicro, s), settings.longEnabled ? max(nextLong, s) : nil)
     }
 
     /// Called about once a second. `idle`: seconds with no input; `locked`: the screen is locked (no countdown or
-    /// overlay then; the controller reports how long when it unlocks); `voiceActive` holds new breaks back.
+    /// overlay then; the controller reports how long when it unlocks); `voiceActive`, a call in Pulse or another app,
+    /// holds new breaks back.
     mutating func tick(now: Date, idle: TimeInterval, locked: Bool = false, voiceActive: Bool) -> Event? {
         guard settings.enabled else {
             nextMicro = now.addingTimeInterval(settings.microEvery)   // turning breaks on starts the clocks then
             nextLong = now.addingTimeInterval(settings.longEvery)
             snoozedUntil = nil
+            pausedUntil = nil
             awayCounted = []
             return interrupt(.skipped)
         }
@@ -330,7 +338,7 @@ struct BreakSchedule {
 
     // MARK: surviving a restart
 
-    var clocks: BreakClocks { BreakClocks(nextMicro: nextMicro, nextLong: nextLong) }
+    var clocks: BreakClocks { BreakClocks(nextMicro: nextMicro, nextLong: nextLong, pausedUntil: pausedUntil) }
 
     /// Carries on from the clocks saved before Pulse quit. `quitFor` is how long Pulse wasn't running, `downFor` how
     /// much of that the Mac was off or asleep. Asleep or off counts as time away in both modes; the rest counts only
@@ -341,6 +349,7 @@ struct BreakSchedule {
         nextMicro = min(saved.nextMicro, now.addingTimeInterval(settings.microEvery))
         nextLong = settings.longEnabled ? min(saved.nextLong, now.addingTimeInterval(settings.longEvery))
                                         : now.addingTimeInterval(settings.longEvery)
+        pausedUntil = saved.pausedUntil.flatMap { $0 > now ? $0 : nil }
         let awayFor = settings.awayMode == .idle && quitFor >= Self.idleAway ? quitFor : downFor
         let event = awayFor > 0 ? away(awayFor, now: now) : nil
         awayCounted = []
@@ -405,6 +414,7 @@ struct BreakSchedule {
 struct BreakClocks: Codable, Equatable {
     var nextMicro: Date
     var nextLong: Date
+    var pausedUntil: Date?
     var savedAt = Date()
 }
 

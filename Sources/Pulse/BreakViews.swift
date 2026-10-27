@@ -13,6 +13,7 @@ extension Color {
 struct PillShape: Shape {
     static let tailWidth: CGFloat = 7
     var edge: Edge = .trailing
+    var maxRadius: CGFloat = .infinity   // a taller pill keeps round corners instead of turning into a stadium
     func path(in rect: CGRect) -> Path {
         let t = Self.tailWidth
         let body: CGRect
@@ -32,7 +33,7 @@ struct PillShape: Shape {
             tail.move(to: CGPoint(x: rect.midX - 8, y: body.maxY - 4)); tail.addLine(to: CGPoint(x: rect.midX, y: rect.maxY)); tail.addLine(to: CGPoint(x: rect.midX + 8, y: body.maxY - 4))
         }
         tail.closeSubpath()
-        return Path(roundedRect: body, cornerRadius: body.height / 2).union(tail)
+        return Path(roundedRect: body, cornerRadius: min(body.height / 2, maxRadius)).union(tail)
     }
 }
 
@@ -836,7 +837,11 @@ struct BreakSettingsSection: View {
                 Text("Only when locked or asleep (fixed schedule)").tag(BreakAwayMode.fixed)
             }
             .pickerStyle(.radioGroup)
-            Text("Breaks keep to their times: every 10 minutes means every 10 minutes, however long each break takes. A long break takes the place of a micro break due within two minutes of it. A break waits while the screen is locked or a Pulse voice call is on. Choose a fixed schedule if you watch the screen without touching the keyboard or mouse.")
+            Toggle(isOn: $settings.waitForCalls) {
+                Text("Wait during calls")
+                Text("A break that comes due while an app is using the microphone, as on a video call, waits until the call ends; the call doesn't count as time away")
+            }
+            Text("Breaks keep to their times: every 10 minutes means every 10 minutes, however long each break takes. A long break takes the place of a micro break due within two minutes of it. A break waits while the screen is locked, during a Pulse voice call, and during other calls when Wait during calls is on. To skip breaks through a meeting, hover over the rail and choose Pause. Choose a fixed schedule if you watch the screen without touching the keyboard or mouse.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         Section("Break screen") {
@@ -1004,7 +1009,7 @@ struct BreakHistorySection: View {
     }
 }
 
-/// On hover, beside the rail: when the next break comes.
+/// On hover, beside the rail: when the next break comes, and Pause for a meeting that isn't a call on this Mac.
 struct NextBreakHint: View {
     @ObservedObject var controller: BreakController
     var tail: Edge = .trailing
@@ -1012,15 +1017,42 @@ struct NextBreakHint: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 20)) { context in
             if let text = controller.nextText(context.date) {
-                Label(text, systemImage: "cup.and.saucer")
-                    .font(.system(size: 12.5, weight: .medium))
-                    .fixedSize()
-                    .padding(.horizontal, 14)
-                    .frame(height: 34)
-                    .padding(Edge.Set(tail), PillShape.tailWidth)
-                    .glassCard(in: PillShape(edge: tail))
-                    .accessibilityElement(children: .combine)
+                let paused = controller.pausedUntil.map { $0 > context.date } ?? false
+                VStack(alignment: .leading, spacing: 7) {
+                    Label(text, systemImage: paused ? "pause.circle" : "cup.and.saucer")
+                    HStack(spacing: 6) {
+                        if paused {
+                            chip("Resume", help: "Breaks come on their times again") { controller.pauseBreaks(for: nil) }
+                        } else {
+                            Text("Pause").foregroundStyle(.secondary).accessibilityHidden(true)
+                            ForEach([30, 60, 120], id: \.self) { minutes in
+                                let length = minutes < 60 ? "\(minutes) min" : "\(minutes / 60) hr"
+                                chip(length, help: "No breaks for \(length)") { controller.pauseBreaks(for: TimeInterval(minutes * 60)) }
+                                    .accessibilityLabel("Pause breaks for \(Duration.seconds(minutes * 60).formatted(.units(allowed: [.hours, .minutes], width: .wide)))")
+                            }
+                        }
+                    }
+                }
+                .font(.system(size: 12.5, weight: .medium))
+                .buttonStyle(.plain)
+                .fixedSize()
+                .padding(.horizontal, 14).padding(.vertical, 9)
+                .padding(Edge.Set(tail), PillShape.tailWidth)
+                .glassCard(in: PillShape(edge: tail, maxRadius: 16))
+                .accessibilityElement(children: .contain)
             }
         }
+    }
+
+    private func chip(_ title: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11.5, weight: .semibold))
+                .padding(.horizontal, 8)
+                .frame(height: 22)
+                .background(Capsule().fill(Color.primary.opacity(0.1)))
+                .contentShape(Capsule())
+        }
+        .help(help)
     }
 }

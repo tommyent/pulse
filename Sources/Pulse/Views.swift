@@ -709,6 +709,7 @@ struct OverlayView: View {
     var onDrop: ((CGPoint) -> Void)? = nil
     var onRailFrame: ((CGRect) -> Void)? = nil
     var onCardFrame: ((CGRect) -> Void)? = nil
+    var onHintFrame: ((CGRect) -> Void)? = nil
     var pointerInside: (() -> Bool)? = nil   // whether the pointer is really over the panel
     @ObservedObject private var battery = BatteryMonitor.shared
     @ObservedObject private var breaks = BreakController.shared
@@ -786,7 +787,11 @@ struct OverlayView: View {
             BreakPill(controller: breaks, tail: tail)
             // hovering the rail with nothing else open: when the next breaks come
             if state.hoveringOverlay, !state.cardVisible, !state.petVisible, breaks.phase.isWorking, breaks.settings.enabled {
-                NextBreakHint(controller: breaks, tail: tail).transition(.opacity)
+                NextBreakHint(controller: breaks, tail: tail)
+                    // its Pause buttons take clicks, so a click there isn't a click away
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onHintFrame?($0) }
+                    .onDisappear { onHintFrame?(.zero) }
+                    .transition(.opacity)
             }
             let shift = cardShift(state.petVisible ? "pet" : state.selected.rawValue)
             usageOrPetCard(tail: tail)

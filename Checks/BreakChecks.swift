@@ -78,6 +78,21 @@ enum BreakChecks {
         assert(s.tick(now: at(45.5 + 1.0 / 3), idle: 0, voiceActive: false) == .end(.micro, .taken, due: at(20)))
         assert(next(s, 46).0 == at(60))   // the slot at 40 passed during the hold: skipped, not stacked
 
+        // Pause from the hover hint: nothing comes until it ends, time away leaves it, then the break due comes;
+        // turning breaks off ends it
+        s = BreakSchedule(settings: on, now: t0)
+        s.pausedUntil = at(90)
+        assert(next(s, 1) == (at(90), at(90)))
+        assert(s.tick(now: at(20), idle: 0, voiceActive: false) == nil && s.tick(now: at(89.9), idle: 0, voiceActive: false) == nil)
+        assert(s.tick(now: at(89.95), idle: 600, voiceActive: false) == .away([.micro: at(20), .long: at(60)]) && s.pausedUntil == at(90))
+        assert(s.tick(now: at(90), idle: 0, voiceActive: false) == nil)
+        assert(s.tick(now: at(109.9), idle: 0, voiceActive: false) == nil)
+        assert(s.tick(now: at(110), idle: 0, voiceActive: false) == .countdown(.micro))
+        s.pausedUntil = at(200)
+        s.settings.enabled = false
+        _ = s.tick(now: at(111), idle: 0, voiceActive: false)
+        assert(s.pausedUntil == nil)
+
         // idle mode: no input counts from 5 minutes, as a micro break and, as long as a long one, a long break too;
         // reported once, the clocks following the time while it lasts
         s = BreakSchedule(settings: on, now: t0)
@@ -218,6 +233,14 @@ enum BreakChecks {
         s = BreakSchedule(settings: off, now: at(30))
         assert(s.restore(saved, now: at(30), quitFor: 60, downFor: 0) == nil)
         assert(try! JSONDecoder().decode(BreakClocks.self, from: JSONEncoder().encode(saved)) == saved)
+
+        // a pause outlives a restart until it ends; clocks saved before Pause existed still load
+        s = BreakSchedule(settings: on, now: at(30))
+        _ = s.restore(BreakClocks(nextMicro: at(40), nextLong: at(60), pausedUntil: at(90), savedAt: at(29)), now: at(30), quitFor: 60, downFor: 0)
+        assert(s.pausedUntil == at(90) && s.upcoming(at(30)).micro == at(90))
+        _ = s.restore(BreakClocks(nextMicro: at(40), nextLong: at(60), pausedUntil: at(20), savedAt: at(29)), now: at(30), quitFor: 60, downFor: 0)
+        assert(s.pausedUntil == nil)
+        assert(try! JSONDecoder().decode(BreakClocks.self, from: Data(#"{"nextMicro":0,"nextLong":60,"savedAt":0}"#.utf8)).pausedUntil == nil)
     }
 
     static func history() {
@@ -669,7 +692,7 @@ enum BreakChecks {
         assert(empty == BreakSettings())
         let partial = try! JSONDecoder().decode(BreakSettings.self, from: Data(#"{"enabled":true,"level":9,"interests":["tea"],"later":1}"#.utf8))
         assert(partial.enabled && partial.level == 4 && partial.interests == ["tea"] && partial.microEvery == 1200)
-        var s = BreakSettings(); s.color = "#3FB8AF"; s.level = 3; s.longEnabled = false
+        var s = BreakSettings(); s.color = "#3FB8AF"; s.level = 3; s.longEnabled = false; s.waitForCalls = false
         assert(try! JSONDecoder().decode(BreakSettings.self, from: JSONEncoder().encode(s)) == s)
 
         // sounds: one as a break starts, another when it runs its full length; none for Snooze, Escape, Back to Work
