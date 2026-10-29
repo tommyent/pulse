@@ -75,12 +75,10 @@ struct BreakPill: View {
                 .accessibilityHint("Starts the break now")
                 Button { controller.skip(why: "countdown dismissed") } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 22, height: 22)
-                        .background(Circle().fill(Color.primary.opacity(0.1)))
-                        .contentShape(Circle())
                 }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.circle)
+                .controlSize(.small)
                 .help("Skip this break")
                 .accessibilityLabel("Skip this break")
             }
@@ -200,13 +198,9 @@ struct BreakOverlayView: View {
                     .font(.system(size: digits, weight: .bold).monospacedDigit())
                     .tracking(-digits * 0.029)
                     .foregroundStyle(paused ? Color(white: 0.55) : .white)
-                Capsule().fill(Color.white.opacity(0.1))
-                    .frame(width: bar, height: 6 * s)
-                    .overlay(alignment: .leading) {
-                        Capsule().fill(paused ? Color(white: 0.45) : Color(rgb: color))
-                            .frame(width: bar * min(1, r.left / r.total))
-                            .animation(.linear(duration: 0.5), value: r.left)
-                    }
+                ProgressView(value: max(0, min(1, r.left / r.total)))
+                    .tint(paused ? Color.secondary : Color(rgb: color))
+                    .frame(width: bar)
                     .padding(.top, digits * 0.27)
             }
             .fixedSize()
@@ -226,7 +220,7 @@ struct BreakOverlayView: View {
         let paused = controller.phase.isPaused
         return HStack(spacing: 16 * s) {
             Button("Back to Work") { controller.backToWork() }
-                .buttonStyle(OverlayButtonStyle(primary: true, s: s))
+                .buttonStyle(.borderedProminent)
                 .help("End the break early")
                 .perch(.button)
                 .background {
@@ -239,12 +233,13 @@ struct BreakOverlayView: View {
             Button { paused ? controller.resume() : controller.pause() } label: {
                 Label(paused ? "Resume" : "Pause", systemImage: paused ? "play.fill" : "pause.fill")
             }
-            .buttonStyle(OverlayButtonStyle(primary: false, s: s))
+            .buttonStyle(.bordered)
             .perch(.button)
             Button("Snooze 5 min") { controller.snooze() }
-                .buttonStyle(OverlayButtonStyle(primary: false, s: s))
+                .buttonStyle(.bordered)
                 .perch(.button)
         }
+        .controlSize(.large)
         .fixedSize()
     }
 
@@ -264,7 +259,7 @@ struct BreakOverlayView: View {
                     Button { controller.surprise() } label: { Label("Surprise me", systemImage: "dice") }
                         .help("An idea from any level")
                 }
-                .buttonStyle(QuietButtonStyle(s: s))
+                .buttonStyle(.borderless)
                 .perch(.text)
             }
             .padding(.top, top)
@@ -345,36 +340,6 @@ private struct EdgeBand: Shape {
         p.addRect(rect.insetBy(dx: -outset, dy: -outset))
         p.addRect(rect.insetBy(dx: inset, dy: inset))
         return p
-    }
-}
-
-private struct OverlayButtonStyle: ButtonStyle {
-    let primary: Bool
-    let s: CGFloat
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 17 * s, weight: .medium))
-            .labelStyle(.titleAndIcon)
-            .foregroundStyle(primary ? Color(white: 0.11) : Color(white: 0.93))
-            .padding(.horizontal, 36 * s)
-            .frame(height: 52 * s)
-            .background(Capsule().fill(primary ? Color(white: 0.915) : Color(white: 0.106)))
-            .overlay(Capsule().strokeBorder(Color.white.opacity(primary ? 0 : 0.14), lineWidth: 1))
-            .opacity(configuration.isPressed ? 0.75 : 1)
-            .contentShape(Capsule())
-    }
-}
-
-private struct QuietButtonStyle: ButtonStyle {
-    let s: CGFloat
-    @State private var hovering = false
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 15 * s, weight: .medium))
-            .foregroundStyle(hovering ? Color.white : Color(white: 0.56))
-            .opacity(configuration.isPressed ? 0.6 : 1)
-            .contentShape(Rectangle())
-            .onHover { hovering = $0 }
     }
 }
 
@@ -765,13 +730,6 @@ private struct BlockedBadge: View {
 
 // MARK: - Settings → Breaks
 
-/// The colour panel reports by target-action, which a View can't take. One for the app, so it outlives Settings.
-@MainActor final class ColorPanelTarget: NSObject {
-    static let shared = ColorPanelTarget()
-    var picked: (NSColor) -> Void = { _ in }
-    @objc func changed(_ panel: NSColorPanel) { picked(panel.color) }
-}
-
 /// Settings → Breaks. A binding, not AppState, so it can be rendered on its own.
 struct BreakSettingsSection: View {
     @Binding var settings: BreakSettings
@@ -825,14 +783,8 @@ struct BreakSettingsSection: View {
                         .accessibilityAddTraits(settings.color == preset.name ? .isSelected : [])
                     }
                     let custom = BreakColor.rgb(hex: settings.color)
-                    Button(action: pickCustomColor) {
-                        Circle().fill(custom.map { AnyShapeStyle(Color(rgb: $0)) }
-                                      ?? AnyShapeStyle(AngularGradient(colors: [.red, .yellow, .green, .cyan, .blue, .purple, .red], center: .center)))
-                            .frame(width: 16, height: 16)
-                            .padding(2)
-                            .overlay(Circle().strokeBorder(Color.primary, lineWidth: custom != nil ? 1.5 : 0))
-                    }
-                    .buttonStyle(.plain)
+                    ColorPicker("Custom colour", selection: customColor, supportsOpacity: false)
+                    .labelsHidden()
                     .help("Custom colour: the Mac's colour picker, which also takes a hex code")
                     .accessibilityLabel("Custom colour")
                     .accessibilityValue(custom.map(BreakColor.hex) ?? "")
@@ -875,7 +827,6 @@ struct BreakSettingsSection: View {
                     .font(.body)
                     .multilineTextAlignment(.leading)   // the Form right-aligns a row's content
                     .frame(width: 250, height: 72)
-                    .clipShape(.rect(cornerRadius: 6))
                     .accessibilityLabel("Your own ideas")
             }
             Text("One idea per line; yours come up about one break in three. Reroll picks another at your level, Surprise me one from any level.")
@@ -890,23 +841,13 @@ struct BreakSettingsSection: View {
                 set: { settings[keyPath: key] = $0 ?? "" })
     }
 
-    /// The Mac's colour panel, opened on its sliders, which have a hex field. What it picks becomes the custom colour.
-    private func pickCustomColor() {
-        let panel = NSColorPanel.shared
-        panel.setTarget(nil)   // so loading the current colour isn't taken as a pick
-        panel.showsAlpha = false
-        panel.mode = .RGB
-        panel.color = NSColor(Color(rgb: BreakColor.pair(settings.color).glow))
-        ColorPanelTarget.shared.picked = { color in
-            guard let c = color.usingColorSpace(.sRGB) else { return }
+    private var customColor: Binding<Color> {
+        Binding(get: { Color(rgb: BreakColor.pair(settings.color).glow) }, set: { color in
+            guard let c = NSColor(color).usingColorSpace(.sRGB) else { return }
             let rgb = [c.redComponent, c.greenComponent, c.blueComponent].map { UInt32(max(0, min(255, ($0 * 255).rounded()))) }
             let picked = rgb[0] << 16 | rgb[1] << 8 | rgb[2]
-            // Return in the panel resends the colour it opened with; that keeps the preset
             if picked != BreakColor.pair(settings.color).glow { settings.color = BreakColor.hex(picked) }
-        }
-        panel.setTarget(ColorPanelTarget.shared)
-        panel.setAction(#selector(ColorPanelTarget.changed(_:)))
-        panel.orderFront(nil)
+        })
     }
 
     private func minutes(_ value: Binding<TimeInterval>, _ options: [Int]) -> some View {
@@ -983,7 +924,6 @@ struct NextBreakHint: View {
                     }
                 }
                 .font(.system(size: 12.5, weight: .medium))
-                .buttonStyle(.plain)
                 .fixedSize()
                 .padding(.horizontal, 14).padding(.vertical, 9)
                 .padding(Edge.Set(tail), PillShape.tailWidth)
@@ -994,14 +934,9 @@ struct NextBreakHint: View {
     }
 
     private func chip(_ title: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 11.5, weight: .semibold))
-                .padding(.horizontal, 8)
-                .frame(height: 22)
-                .background(Capsule().fill(Color.primary.opacity(0.1)))
-                .contentShape(Capsule())
-        }
-        .help(help)
+        Button(title, action: action)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help(help)
     }
 }

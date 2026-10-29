@@ -124,7 +124,6 @@ enum BatterySounds {
 }
 
 struct BatteryAlertView: View {
-    @Environment(\.colorScheme) private var scheme
     @ObservedObject private var battery = BatteryMonitor.shared
     let level: BatteryLevel
     let dismiss: () -> Void
@@ -138,15 +137,15 @@ struct BatteryAlertView: View {
                 .accessibilityHidden(true)
             Text(level == .critical ? "Battery critical" : "Battery low")
                 .font(.title2.weight(.semibold))
-                .foregroundStyle(Ink.primary(scheme))
+                .foregroundStyle(Color.primary)
             Text(reading.map { "\($0.percent)%" } ?? "—")
                 .font(.system(size: 44, weight: .bold).monospacedDigit())
-                .foregroundStyle(level == .critical ? Color.red : Ink.primary(scheme))
+                .foregroundStyle(level == .critical ? Color.red : Color.primary)
             Text((reading?.minutesLeft.map { "About \(batteryTimeLeft($0)) left. " } ?? "")
                  + "Plug in your Mac before it goes to sleep.")
                 .font(.body)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(Ink.secondary(scheme))
+                .foregroundStyle(Color.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }

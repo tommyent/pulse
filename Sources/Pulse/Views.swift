@@ -2,8 +2,6 @@ import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
 
-private let cardBackground = Color.black
-
 private struct GlassTintKey: EnvironmentKey { static let defaultValue = true }
 private struct ShowsRemainingKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues {
@@ -13,8 +11,7 @@ extension EnvironmentValues {
         set { self[ShowsRemainingKey.self] = newValue }
     }
 
-    /// Pulse's own finish: a white wash over the glass in light mode, opaque piano black in dark. Off
-    /// leaves plain system glass in both, spanning the full Liquid Glass slider in System Settings → Appearance.
+    /// A light or dark tint on system glass. Off leaves the system material untinted.
     var glassTint: Bool {
         get { self[GlassTintKey.self] }
         set { self[GlassTintKey.self] = newValue }
@@ -27,36 +24,12 @@ private struct GlassCard<S: Shape>: ViewModifier {
     @Environment(\.glassTint) private var tinted
     let shape: S
     func body(content: Content) -> some View {
-        if scheme == .dark && tinted {
-            // glass frosts everything gray; the reference look is opaque piano black with a soft top sheen
-            // shadow lives on the shape and stays inside the overlay's 12pt padding, or the window clips it flat
-            content.background(shape.fill(LinearGradient(colors: [Color(white: 0.07), Color.black],
-                                                         startPoint: .top, endPoint: .bottom))
-                                    .shadow(color: .black.opacity(0.45), radius: 7, y: 3))
-                .overlay(rim)
-        } else {
-            content.glassEffect(tinted ? .regular.tint(Color.white.opacity(0.35)) : .regular, in: shape)
-                .overlay(rim)
-        }
-    }
-
-    /// Thin light-catching edge: bright at the top, fading out toward the bottom, like a polished bezel.
-    private var rim: some View {
-        shape.stroke(LinearGradient(colors: [.white.opacity(scheme == .dark ? 0.45 : 0.9), .white.opacity(0.04)],
-                                    startPoint: .top, endPoint: .bottom),
-                     lineWidth: 1)
+        content.glassEffect(tinted ? .regular.tint(scheme == .dark ? .black : .white.opacity(0.35)) : .regular, in: shape)
     }
 }
 
 extension View {
     func glassCard<S: Shape>(in shape: S) -> some View { modifier(GlassCard(shape: shape)) }
-}
-
-/// Text inks. On the black surfaces the system "label" white (85%) reads dull; use pure white.
-/// Light mode keeps the system label colours.
-enum Ink {
-    static func primary(_ s: ColorScheme) -> Color { s == .dark ? .white : .primary }
-    static func secondary(_ s: ColorScheme) -> Color { s == .dark ? Color(white: 0.6) : .secondary }
 }
 
 private let brandIcons: [AccountID: NSImage] = {
@@ -156,7 +129,6 @@ private struct CodexPet: View {
 }
 
 struct RingView: View {
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.showsRemaining) private var remaining
     let account: AccountID
     let percent: Double?
@@ -202,7 +174,7 @@ struct RingView: View {
             if showPercent {
                 Text(percent.map { "\(remaining ? 100 - Int($0) : Int($0))%" } ?? "—")   // 98.4 used is 98%, so 2% left
                     .font(.system(size: 15, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(Ink.primary(scheme))
+                    .foregroundStyle(Color.primary)
             }
         }
     }
@@ -220,7 +192,6 @@ struct RingView: View {
 
 /// The battery as the rail's last ring: green, yellow or red by charge, a bolt while plugged in.
 struct BatteryRing: View {
-    @Environment(\.colorScheme) private var scheme
     let reading: BatteryReading
     let level: BatteryLevel
     var size: CGFloat = 52
@@ -236,13 +207,13 @@ struct BatteryRing: View {
                     .rotationEffect(.degrees(-90))
                 Image(systemName: reading.onAC ? "bolt.fill" : "battery.\(min(100, (reading.percent + 12) / 25 * 25))percent")
                     .font(.system(size: size * (reading.onAC ? 0.34 : 0.26), weight: .semibold))
-                    .foregroundStyle(Ink.primary(scheme))
+                    .foregroundStyle(Color.primary)
             }
             .frame(width: size, height: size)
             if showPercent {
                 Text("\(reading.percent)%")
                     .font(.system(size: 15, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(level == .critical ? Color.red : Ink.primary(scheme))
+                    .foregroundStyle(level == .critical ? Color.red : Color.primary)
             }
         }
         .accessibilityElement(children: .ignore)
@@ -259,7 +230,6 @@ struct BatteryRing: View {
 }
 
 struct WindowRow: View {
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.showsRemaining) private var remaining
     let window: UsageWindow
     var tint: Color = .white
@@ -268,24 +238,18 @@ struct WindowRow: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(window.label)
                 .font(.subheadline)
-                .foregroundStyle(Ink.primary(scheme))
+                .foregroundStyle(Color.primary)
             if let p = window.percentUsed {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(window.isNearLimit && remaining ? .red   // the used part turns red, as on the rings
-                                       : scheme == .dark ? Color(white: 0.18) : Color.primary.opacity(0.25))
-                        Capsule().fill(window.isNearLimit && !remaining ? .red : tint)
-                            .frame(width: max(6, geo.size.width * min(remaining ? 100 - p : p, 100) / 100))
-                    }
-                }
+                ProgressView(value: max(0, min(remaining ? 100 - p : p, 100)), total: 100)
+                .tint(window.isNearLimit ? .red : tint)
                 .frame(height: 6)
                 HStack {
                     Text(remaining ? "\(100 - Int(p))% Left" : "\(Int(p))% Used").font(.caption)
-                        .foregroundStyle(window.isNearLimit ? Color.red : Ink.secondary(scheme))
+                        .foregroundStyle(window.isNearLimit ? Color.red : Color.secondary)
                     Spacer()
                     Text(resetLabel(window.resetsAt)).font(.caption)
                 }
-                .foregroundStyle(Ink.secondary(scheme))
+                .foregroundStyle(Color.secondary)
             }
         }
     }
@@ -333,7 +297,6 @@ private struct BubbleShape: Shape {
 }
 
 struct UsageCard: View {
-    @Environment(\.colorScheme) private var scheme
     let snapshot: AccountSnapshot
     var tailEdge: Edge = .trailing
     var tailAt: CGFloat? = nil
@@ -344,9 +307,9 @@ struct UsageCard: View {
                 BrandIcon(account: snapshot.id, size: 17)
                 Text("\(snapshot.displayName) Usage").font(.headline)
                 Spacer()
-                Text(snapshot.planLabel).font(.caption).foregroundStyle(Ink.secondary(scheme))
+                Text(snapshot.planLabel).font(.caption).foregroundStyle(Color.secondary)
             }
-            .foregroundStyle(Ink.primary(scheme))
+            .foregroundStyle(Color.primary)
             ForEach(Array(snapshot.windows.enumerated()), id: \.element.id) { i, w in
                 WindowRow(window: w, tint: i == 0 ? snapshot.id.accent : snapshot.id.accent.opacity(0.5))
             }
@@ -401,14 +364,14 @@ struct PetCard: View {
         var body: some View {
             let m = message
             if m.role == .note {   // Pulse's own notice, not a message and not input: a small centered line
-                Text(m.text).font(.caption).foregroundStyle(Ink.secondary(scheme)).multilineTextAlignment(.center)
+                Text(m.text).font(.caption).foregroundStyle(Color.secondary).multilineTextAlignment(.center)
                     .textSelection(.enabled).frame(maxWidth: .infinity).padding(.vertical, 2).id(m.id)
             } else {
                 HStack {
                     if m.role == .user { Spacer(minLength: 40) }
                     VStack(alignment: .leading, spacing: 2) {
                         // Results of work a call started: never one of the spoken replies.
-                        if let caption = m.caption { Text(caption).font(.caption2).foregroundStyle(Ink.secondary(scheme)) }
+                        if let caption = m.caption { Text(caption).font(.caption2).foregroundStyle(Color.secondary) }
                         Text(m.role == .user ? AttributedString(m.text) : inlineMarkdown(m.text))
                             .font(.callout)
                             .textSelection(.enabled)
@@ -417,7 +380,7 @@ struct PetCard: View {
                                 .fill(m.role == .user ? AccountID.codex.accent.opacity(0.35)
                                                       : m.caption != nil ? Color.clear
                                                       : (scheme == .dark ? Color(white: 0.16) : Color(white: 0.9))))
-                            .overlay { if m.caption != nil { RoundedRectangle(cornerRadius: 12).strokeBorder(Ink.secondary(scheme).opacity(0.5)) } }
+                            .overlay { if m.caption != nil { RoundedRectangle(cornerRadius: 12).strokeBorder(Color.secondary.opacity(0.5)) } }
                     }
                     .accessibilityElement(children: .combine)
                     if m.role != .user { Spacer(minLength: 40) }
@@ -440,25 +403,25 @@ struct PetCard: View {
                     if !session.workModels.isEmpty {
                         workModelMenu(workDetail ?? "Choose a work model", label: modelLine ?? "Choose a work model")
                     } else if let model = modelLine {
-                        Text(model).font(.caption2).foregroundStyle(Ink.secondary(scheme)).lineLimit(1)
+                        Text(model).font(.caption2).foregroundStyle(Color.secondary).lineLimit(1)
                     }
                     if let split = splitLine {   // its own line: a menu label never wraps, so it would cut this off
-                        Text(split).font(.caption2).foregroundStyle(Ink.secondary(scheme))   // wraps fully: pending notices can be long
+                        Text(split).font(.caption2).foregroundStyle(Color.secondary)   // wraps fully: pending notices can be long
                     }
                     if let place = placeDetail {
-                        Text(place).font(.caption2).foregroundStyle(Ink.secondary(scheme)).lineLimit(1).truncationMode(.middle)
+                        Text(place).font(.caption2).foregroundStyle(Color.secondary).lineLimit(1).truncationMode(.middle)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 if let showUsage {
-                    Button("Usage", action: showUsage).buttonStyle(.plain).font(.caption)
-                        .foregroundStyle(Ink.secondary(scheme)).fixedSize()
+                    Button("Usage", action: showUsage).buttonStyle(.borderless).font(.caption)
+                        .foregroundStyle(Color.secondary).fixedSize()
                 }
                 Button { session.clear() } label: { Image(systemName: "square.and.pencil") }
-                    .buttonStyle(.plain).help("New conversation: starts over and stops running helpers")
+                    .buttonStyle(.borderless).help("New conversation: starts over and stops running helpers")
                     .accessibilityLabel("New conversation").accessibilityHint("Starts over and stops running helpers")
             }
-            .foregroundStyle(Ink.primary(scheme))
+            .foregroundStyle(Color.primary)
 
             if !session.activity.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -474,24 +437,24 @@ struct PetCard: View {
                         }
                     }
                 }
-                .foregroundStyle(Ink.primary(scheme))
+                .foregroundStyle(Color.primary)
             }
 
             transcript
 
             if session.helpersWorking > 0 {
                 Label(session.helpersWorking == 1 ? "A helper is working" : "\(session.helpersWorking) helpers are working", systemImage: "person.2")
-                    .font(.caption).foregroundStyle(Ink.secondary(scheme))
+                    .font(.caption).foregroundStyle(Color.secondary)
             }
 
             if session.microphonePaused {
                 Label("Microphone paused · voice still on", systemImage: "mic.slash.fill")
-                    .font(.caption).foregroundStyle(Ink.secondary(scheme))
+                    .font(.caption).foregroundStyle(Color.secondary)
             }
 
             if let status = session.status {
                 Text(status).font(.caption)
-                    .foregroundStyle(status == CodexPetSession.reconnectNote ? Ink.secondary(scheme) : .red.opacity(0.85))
+                    .foregroundStyle(status == CodexPetSession.reconnectNote ? Color.secondary : .red.opacity(0.85))
                     .lineLimit(3).help(status)
                 if session.microphoneBlocked {
                     Button("Open Microphone Settings") {
@@ -503,26 +466,24 @@ struct PetCard: View {
 
             HStack(spacing: 8) {
                 TextField("Ask Codex…", text: $session.draft, axis: .vertical)
-                    .textFieldStyle(.plain)
+                    .textFieldStyle(.roundedBorder)
                     .lineLimit(1...4)
                     .focused($composing)
                     .onSubmit { submit() }
-                    .padding(.horizontal, 10).padding(.vertical, 6)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(scheme == .dark ? Color(white: 0.14) : Color(white: 0.92)))
                 // Fixed slots: Send never moves and Stop never appears where a click meant for Send lands.
                 Button { submit() } label: { Image(systemName: "arrow.up.circle.fill") }
-                    .buttonStyle(.plain).help("Send").accessibilityLabel("Send")
+                    .buttonStyle(.borderless).help("Send").accessibilityLabel("Send")
                     .disabled(session.draft.trimmingCharacters(in: .whitespaces).isEmpty || !session.canSend)
                 // Stop stays while helpers work, even with the pet free.
                 Button { session.interrupt() } label: { Image(systemName: "stop.circle.fill") }
-                    .buttonStyle(.plain).help("Stop work and helpers").accessibilityLabel("Stop work and helpers")
+                    .buttonStyle(.borderless).help("Stop work and helpers").accessibilityLabel("Stop work and helpers")
                     .opacity(session.thinking || session.helpersWorking > 0 ? 1 : 0)
                     .disabled(!session.thinking && session.helpersWorking == 0)
                     .accessibilityHidden(!session.thinking && session.helpersWorking == 0)
                 voiceButton
             }
             .font(.title3)
-            .foregroundStyle(Ink.primary(scheme))
+            .foregroundStyle(Color.primary)
         }
         .padding(16)
         .padding(Edge.Set(tailEdge), BubbleShape.tailWidth)
@@ -542,26 +503,26 @@ struct PetCard: View {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     if session.canLoadEarlier {
                         Button("Load earlier messages") { session.loadEarlier() }
-                            .buttonStyle(.plain).font(.caption).foregroundStyle(Ink.secondary(scheme))
+                            .buttonStyle(.borderless).font(.caption).foregroundStyle(Color.secondary)
                     }
                     if session.messages.isEmpty {
                         Text(session.voiceState == .off ? "Type, or tap the waveform to talk. Same Codex sign-in, same threads."
                              : session.voiceState == .connecting ? "Starting microphone…"
                              : session.microphonePaused ? "Use the microphone button or shortcut to talk." : "Listening…")
-                            .font(.caption).foregroundStyle(Ink.secondary(scheme))
+                            .font(.caption).foregroundStyle(Color.secondary)
                     }
                     ForEach(session.messages) { m in
                         Bubble(message: m, scheme: scheme)
                     }
                     if session.waitingOnYou {
                         Label("Waiting for your answer in the Codex prompt", systemImage: "hand.raised")
-                            .font(.caption).foregroundStyle(Ink.secondary(scheme)).id("thinking")
+                            .font(.caption).foregroundStyle(Color.secondary).id("thinking")
                     } else if session.thinking, !(session.messages.last?.live ?? false) {
                         HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Thinking…").font(.caption) }
-                            .foregroundStyle(Ink.secondary(scheme)).id("thinking")
+                            .foregroundStyle(Color.secondary).id("thinking")
                     }
                 }
-                .foregroundStyle(Ink.primary(scheme))
+                .foregroundStyle(Color.primary)
             }
             .environment(\.openURL, OpenURLAction { openLink($0) })
             .frame(maxHeight: 260)
@@ -584,14 +545,14 @@ struct PetCard: View {
                 Button { session.muted.toggle() } label: {
                     Image(systemName: session.muted ? "mic.slash.fill" : "mic.fill")
                 }
-                .buttonStyle(.plain).help(session.muted ? "Unmute" : "Mute").accessibilityLabel(session.muted ? "Unmute" : "Mute")
+                .buttonStyle(.borderless).help(session.muted ? "Unmute" : "Mute").accessibilityLabel(session.muted ? "Unmute" : "Mute")
             }
             Button { session.toggleVoice() } label: {
                 Image(systemName: session.voiceState == .off ? "waveform.circle" : "waveform.circle.fill")
-                    .foregroundStyle(session.voiceTint ?? Ink.primary(scheme))
+                    .foregroundStyle(session.voiceTint ?? Color.primary)
                     .symbolEffect(.variableColor.iterative, isActive: session.voiceState == .connecting)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
             .help(session.voiceState == .off ? "Start live voice" : "End live voice")
             .accessibilityLabel(session.voiceState == .off ? "Start live voice" : "End live voice")
         }
@@ -650,9 +611,9 @@ struct PetCard: View {
                 Text(label).lineLimit(1).truncationMode(.tail)
                 Image(systemName: "chevron.down").font(.system(size: 7, weight: .semibold))
             }
-            .font(.caption2).foregroundStyle(Ink.secondary(scheme))
+            .font(.caption2).foregroundStyle(Color.secondary)
         }
-        .menuStyle(.button).buttonStyle(.plain)   // a plain label lines up with the lines around it
+        .menuStyle(.button).buttonStyle(.borderless)   // a plain label lines up with the lines around it
         .fixedSize()
         .disabled(session.choosingWork)
         .help("Work model: \(detail)\(planned). Choose the model and effort Codex works with; the voice doesn't change. With helpers and an effort above medium, the pet talks at medium and helpers work at the effort you pick; a new helper effort, or a model that can't run the helpers' current effort, applies from the next conversation or Pulse restart.")
@@ -984,38 +945,8 @@ struct MenuBarPopover: View {
         }
         .padding(14)
         .frame(width: 300)
-        .background(state.isLight ? Color(white: 0.95) : cardBackground)
         .colorScheme(state.isLight ? .light : .dark)   // drives .primary text and system controls
         .environment(\.showsRemaining, state.showsRemaining)
-    }
-}
-
-/// Sun/moon segmented pill: amber sun for light, indigo moon for dark.
-struct AppearanceToggle: View {
-    @Binding var light: Bool
-
-    var body: some View {
-        HStack(spacing: 2) {
-            segment("sun.max.fill", on: light, tint: .orange) { light = true }
-            segment("moon.fill", on: !light, tint: .indigo) { light = false }
-        }
-        .padding(3)
-        .background(Capsule().fill(Color.primary.opacity(0.08)))
-        .animation(.spring(duration: 0.2), value: light)
-    }
-
-    private func segment(_ name: String, on: Bool, tint: Color, tap: @escaping () -> Void) -> some View {
-        Button(action: tap) {
-            Image(systemName: name)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(on ? .white : .secondary)
-                .frame(width: 32, height: 22)
-                .background(Capsule().fill(on ? tint : .clear))
-                .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(name == "sun.max.fill" ? "Light appearance" : "Dark appearance")
-        .accessibilityValue(on ? "Selected" : "Not selected")
     }
 }
 
@@ -1039,7 +970,12 @@ struct SettingsView: View {
                         Button("Allow Pulse in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
                     }
                     LabeledContent("Appearance") {
-                        AppearanceToggle(light: state.lightModeBinding)
+                        Picker("Appearance", selection: state.lightModeBinding) {
+                            Text("Light").tag(true)
+                            Text("Dark").tag(false)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
                     }
                     Toggle("Tint the glass", isOn: state.glassTintBinding)
                         .help("Off shows plain Liquid Glass in both appearances, following the whole range of the Liquid Glass slider in System Settings → Appearance")

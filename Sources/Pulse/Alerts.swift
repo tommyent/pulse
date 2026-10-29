@@ -104,7 +104,6 @@ final class LimitAlert {
 }
 
 struct LimitAlertView: View {
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.showsRemaining) private var remaining
     let entries: [AccountSnapshot]
     let dismiss: () -> Void
@@ -118,7 +117,7 @@ struct LimitAlertView: View {
                 Text(LimitAlert.title(snap))
                     .font(.title2.weight(.semibold))
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(Ink.primary(scheme))
+                    .foregroundStyle(Color.primary)
                 if let top = snap.windows.compactMap(\.percentUsed).max() {
                     Text(remaining ? "\(100 - Int(top))% left" : "\(Int(top))%")
                         .font(.system(size: 44, weight: .bold).monospacedDigit())
@@ -127,7 +126,7 @@ struct LimitAlertView: View {
                 Text(LimitAlert.lines(snap, remaining: remaining))
                     .font(.body)
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(Ink.secondary(scheme))
+                    .foregroundStyle(Color.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

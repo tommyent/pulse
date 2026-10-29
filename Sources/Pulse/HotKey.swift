@@ -122,7 +122,7 @@ struct HotKeyRecorder: View {
             Button(recording ? "Press keys…" : combo.label) { recording ? stop() : start() }
                 .frame(minWidth: 110)
             if combo != .voiceDefault, !recording {
-                Button("Reset") { combo = .voiceDefault }.buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
+                Button("Reset") { combo = .voiceDefault }.buttonStyle(.borderless).font(.caption)
             }
         }
         .onDisappear { stop() }
