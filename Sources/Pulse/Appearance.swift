@@ -16,14 +16,8 @@ enum PulsePalette {
     static let surface = Color(.sRGB, red: 0.07, green: 0.07, blue: 0.08, opacity: 1)
     // Match the dark menu progress track with opaque ink, independent of glass and backdrop.
     static let track = Color(.sRGB, red: 37.0 / 255, green: 37.0 / 255, blue: 39.0 / 255, opacity: 1)
-    static let trackEdge = Color(.sRGB, red: 134.0 / 255, green: 134.0 / 255, blue: 136.0 / 255, opacity: 1)
     static let secondary = Color(.sRGB, red: 0.9, green: 0.9, blue: 0.9, opacity: 1)
-    static let border = LinearGradient(stops: [
-        .init(color: .white.opacity(0.45), location: 0),
-        .init(color: .white.opacity(0.35), location: 0.1),
-        .init(color: .white.opacity(0.35), location: 0.9),
-        .init(color: .white.opacity(0.45), location: 1)
-    ], startPoint: .top, endPoint: .bottom)
+    static let border = track
 }
 
 struct RingTrack: View {
@@ -31,11 +25,6 @@ struct RingTrack: View {
 
     var body: some View {
         Circle().stroke(PulsePalette.track, lineWidth: lineWidth)
-            .overlay {
-                // Keep the menu-grey core and the existing outer diameter; define its outside edge.
-                Circle().inset(by: -(lineWidth - 0.75) / 2)
-                    .stroke(PulsePalette.trackEdge, lineWidth: 0.75)
-            }
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
