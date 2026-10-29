@@ -2444,6 +2444,23 @@ enum CodexSessionChecks {
         assert(approvals.isRemembered(remembered))
         let reopened = PetApprovals(); reopened.defaults = UserDefaults(suiteName: suite)!
         assert(reopened.isRemembered(remembered), "always allow must survive a new coordinator")
+        for (field, label, first, second) in [
+            ("commandActions", "Command actions", [["type": "read", "path": "first.txt"]] as Any, [["type": "read", "path": "second.txt"]] as Any),
+            ("proposedExecpolicyAmendment", "Proposed execution policy change", ["git", "status"] as Any, ["git", "push"] as Any),
+            ("proposedNetworkPolicyAmendments", "Proposed network policy changes", [["host": "first.example", "action": "allow"]] as Any, [["host": "second.example", "action": "allow"]] as Any)
+        ] {
+            func request(_ value: Any) -> PetApproval {
+                PetApproval(id: field, method: "item/commandExecution/requestApproval",
+                            params: rememberedParams.merging([field: value]) { $1 }, item: nil)!
+            }
+            let added = request(first), changed = request(second)
+            assert(added.detail.contains(label + ":\n") && added.detail.contains(field == "proposedExecpolicyAmendment" ? "status" : "first"),
+                   "the prompt must show \(field)")
+            assert(!approvals.isRemembered(added), "adding \(field) must prompt again")
+            approvals.remember(added)
+            assert(reopened.isRemembered(added) && !reopened.isRemembered(changed), "changing \(field) must prompt after a restart too")
+            assert(added.rememberKey != changed.rememberKey && added.rememberKey != remembered.rememberKey)
+        }
         rememberedParams["command"] = "touch ~/Downloads/different.txt"
         let changed = PetApproval(id: 2, method: "item/commandExecution/requestApproval", params: rememberedParams, item: nil)!
         assert(!approvals.isRemembered(changed), "a different command must prompt")

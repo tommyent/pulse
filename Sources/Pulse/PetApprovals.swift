@@ -39,7 +39,7 @@ struct PetApproval {
         var details = [String]()
         var rule = p
         // Identity and display-only fields do not broaden the operation being remembered.
-        for field in ["threadId", "turnId", "itemId", "startedAtMs", "approvalId", "reason", "commandActions", "availableDecisions", "proposedExecpolicyAmendment", "proposedNetworkPolicyAmendments"] { rule[field] = nil }
+        for field in ["threadId", "turnId", "itemId", "startedAtMs", "approvalId", "reason", "availableDecisions"] { rule[field] = nil }
         rule["method"] = method
         let cwd = p["cwd"] as? String ?? item?["cwd"] as? String
         // Codex may send `command: null` or "" with the command on the cached item: either falls back to the item's.
@@ -66,7 +66,12 @@ struct PetApproval {
             if let permissions = p["additionalPermissions"] as? [String: Any] {
                 details.append("Requested access:\n" + Self.json(permissions))
             }
-            details.append("Allow once approves this request. Always allow remembers this exact command or network destination, working folder and requested access.")
+            for (field, label) in [("commandActions", "Command actions"),
+                                   ("proposedExecpolicyAmendment", "Proposed execution policy change"),
+                                   ("proposedNetworkPolicyAmendments", "Proposed network policy changes")] {
+                if let value = p[field], !(value is NSNull) { details.append(label + ":\n" + Self.json(value)) }
+            }
+            details.append("Allow once approves this request. Always allow remembers this exact command or network destination, working folder, requested access, actions and proposed policy changes.")
             allowed = ["decision": "accept"]; denied = ["decision": "decline"]; cancelled = ["decision": "cancel"]
             taskScope = false; consent = false
         case "item/fileChange/requestApproval":
