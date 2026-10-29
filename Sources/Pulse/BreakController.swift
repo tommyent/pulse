@@ -377,7 +377,7 @@ final class BreakController: ObservableObject {
     /// With the rings on screen the countdown grows out of the rail (OverlayView); without them it gets a panel of its
     /// own at the middle of the right edge.
     private func placePill() {
-        guard phase.isCountdown, state?.persisted.showOverlay == false, let screen = NSScreen.main?.visibleFrame else {
+        guard let state, phase.isCountdown, state.persisted.showOverlay == false, let screen = NSScreen.main?.visibleFrame else {
             pillPanel?.close()
             pillPanel = nil
             return
@@ -391,7 +391,7 @@ final class BreakController: ObservableObject {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
         let hosting = OverlayHostingView(rootView: BreakPill(controller: self, tail: .trailing).padding(12)
-            .environment(\.glassTint, state?.glassTint ?? true))
+            .pulsePresentation(state))
         panel.contentView = hosting
         let size = CGSize(width: 220, height: 80)
         panel.setFrame(CGRect(x: screen.maxX - size.width - 4, y: screen.midY - size.height / 2, width: size.width, height: size.height), display: false)
@@ -402,13 +402,14 @@ final class BreakController: ObservableObject {
     // MARK: the overlay on every screen
 
     private func showOverlay(_ kind: BreakKind) {
+        guard let state else { return }
         hideOverlay()
         breakStarted = .now
         let s = schedule.settings
         let main = NSScreen.main ?? NSScreen.screens.first
         let agents = s.showAgents
         if agents { rex.start() }
-        let petOnRight = state?.dock != .left
+        let petOnRight = state.dock != .left
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         holiday = s.holidays ? BreakHoliday.on(.now, simulated: UserDefaults.standard.simulatedHoliday) : nil
         if let holiday { startHoliday(holiday, still: reduceMotion) }
@@ -422,15 +423,11 @@ final class BreakController: ObservableObject {
             panel.isReleasedWhenClosed = false
             panel.contentView = OverlayHostingView(rootView: BreakOverlayView(
                 controller: self, size: screen.frame.size,
-                agents: agents && screen == main, holidayScreen: screen == main, showPet: state?.showsPet ?? true,
-                petOnRight: petOnRight))
+                agents: agents && screen == main, holidayScreen: screen == main, showPet: state.showsPet,
+                petOnRight: petOnRight).pulsePresentation(state))
             panel.setFrame(screen.frame, display: false)
-            panel.alphaValue = reduceMotion ? 1 : 0
             panel.orderFrontRegardless()
             panels.append(panel)
-            if !reduceMotion {
-                NSAnimationContext.runAnimationGroup { $0.duration = 0.6; panel.animator().alphaValue = 1 }
-            }
         }
         rememberShownIdea()
         // the keyboard, so Escape can end the break
@@ -512,8 +509,7 @@ final class BreakController: ObservableObject {
         guard !panels.isEmpty else { return }
         let closing = panels
         panels = []
-        NSAnimationContext.runAnimationGroup({ $0.duration = 0.35; closing.forEach { $0.animator().alphaValue = 0 } },
-                                             completionHandler: { closing.forEach { $0.close() } })
+        closing.forEach { $0.close() }
         if NSApp.isActive { NSApp.deactivate() }   // hand the keyboard back to whatever was in use
     }
 }

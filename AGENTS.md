@@ -1,6 +1,6 @@
 ## Lessons
 
-- Inspect ring icons and colors in both appearances, collapsed and expanded, including with a usage card selected. Verifying the Settings appearance switch alone does not validate the overlay.
+- Inspect ring icons and colors in both appearances, collapsed and expanded, with a usage card selected, key and inactive, over white, dark and busy backgrounds. A Settings switch or screenshot alone does not validate live display rendering.
 - For pop-out dismissal, test transparent areas inside its window and clicks in other apps separately. Verify inside-card clicks and reopening too; window bounds differ from visible content.
 - Anything beside the rail that takes clicks must count as inside for `OverlayController.mouseDown` (as the card, the hover hint and the break countdown do). Otherwise mouse-down collapses the rail, the control moves before mouse-up and its button never fires. Test with a real pointer (hover, then click), not an accessibility press.
 - The pet card makes Pulse active and the panel key (typing). Test its dismissal three ways: click inside, click in another app, and mouse leaving the card (which must NOT close a chat). `scripts/codex-chat-check.sh` covers the Codex path without the UI.

@@ -45,7 +45,8 @@ struct PulseApp: App {
     var body: some Scene {
         MenuBarExtra {
             MenuBarPopover(state: state)
-                .preferredColorScheme(.dark)
+                .containerBackground(.clear, for: .window)
+                .pulsePresentation(state)
         } label: {
             if let icon = Self.menuBarIcon {
                 Image(nsImage: icon)
@@ -57,7 +58,14 @@ struct PulseApp: App {
 
         Settings {
             SettingsView(state: state)
-                .preferredColorScheme(.dark)
+                .containerBackground(for: .window) {
+                    PulseSurface(shape: Rectangle())
+                        .environment(\.pulseAppearance, state.persisted.appearance)
+                        .environment(\.appearsActive, true)
+                        .preferredColorScheme(.dark)
+                }
+                .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+                .pulsePresentation(state)
         }
     }
 }

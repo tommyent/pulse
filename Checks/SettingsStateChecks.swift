@@ -7,7 +7,7 @@ final class OverlayHostingView<Content: View>: NSHostingView<Content> {}
 
 @main
 enum SettingsStateChecks {
-    static func main() {
+    @MainActor static func main() {
         // a state.json written before breaks existed: every value it holds survives, and breaks get their defaults
         let legacy = Data("""
         {"enabled":["claude","codex","grok"],"order":["codex","claude","grok","antigravity"],"alwaysOnTop":false,
@@ -19,22 +19,35 @@ enum SettingsStateChecks {
         """.utf8)
         let p = try! JSONDecoder().decode(AppState.Persisted.self, from: legacy)
         assert(p.enabled == [.claude, .codex, .grok] && p.order == [.codex, .claude, .grok, .antigravity])
-        assert(!p.alwaysOnTop && p.showOverlay && p.glassTint == false && p.dock == .bottom)
+        assert(!p.alwaysOnTop && p.showOverlay && p.appearance == .glass && p.dock == .bottom)
         assert(p.showPet == false && p.showRemaining == true && p.voiceHotKey?.label == "⌥⇧Space")
         assert(p.limitAlerts?["claude.session_5h"] == Date(timeIntervalSinceReferenceDate: 782000000))
         assert(p.battery.lowPercent == 30 && p.battery.criticalPercent == 15 && !p.battery.showInRail && p.battery.criticalSound == nil)
         assert(p.breakSettings == nil && p.breaks == BreakSettings())
 
-        // Saving drops the obsolete appearance key, preserves other keys, and adds breakSettings only when changed.
+        // Saving migrates Tint to Appearance, drops obsolete appearance keys, and preserves unrelated settings.
         let again = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(p)) as! [String: Any]
         let before = try! JSONSerialization.jsonObject(with: legacy) as! [String: Any]
-        for key in before.keys where key != "lightMode" { assert(again[key] != nil, "lost \(key)") }
-        assert(again["lightMode"] == nil, "the obsolete appearance setting is ignored and not saved again")
+        for key in before.keys where key != "lightMode" && key != "glassTint" { assert(again[key] != nil, "lost \(key)") }
+        assert(again["appearance"] as? String == "glass" && again["glassTint"] == nil && again["lightMode"] == nil)
         for obsolete in ["true", "false", "null", "\"obsolete\""] {
             let data = Data("{\"enabled\":[],\"order\":[],\"alwaysOnTop\":true,\"showOverlay\":true,\"lightMode\":\(obsolete)}".utf8)
             let decoded = try! JSONDecoder().decode(AppState.Persisted.self, from: data)
             let encoded = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(decoded)) as! [String: Any]
             assert(encoded["lightMode"] == nil && decoded.showOverlay, "unknown legacy values never affect current settings")
+        }
+        for (old, expected) in [("true", PulseAppearance.solid), ("false", .glass), ("null", .solid), ("\"obsolete\"", .solid)] {
+            let data = Data("{\"enabled\":[],\"order\":[],\"alwaysOnTop\":true,\"showOverlay\":true,\"glassTint\":\(old)}".utf8)
+            let migrated = try! JSONDecoder().decode(AppState.Persisted.self, from: data)
+            assert(migrated.appearance == expected)
+            let encoded = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(migrated)) as! [String: Any]
+            assert(encoded["glassTint"] == nil && encoded["appearance"] as? String == expected.rawValue)
+            for look in [PulseAppearance.glass, .solid] {
+                var object = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
+                object["appearance"] = look.rawValue
+                let explicit = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONSerialization.data(withJSONObject: object))
+                assert(explicit.appearance == look, "the current selection takes precedence over the old Tint key")
+            }
         }
         assert(again["breakSettings"] == nil)
         var changed = p
@@ -45,7 +58,26 @@ enum SettingsStateChecks {
 
         // the oldest form: only the keys Pulse has always written
         let oldest = try! JSONDecoder().decode(AppState.Persisted.self, from: Data(#"{"enabled":["claude"],"order":["claude"],"alwaysOnTop":true,"showOverlay":true}"#.utf8))
-        assert(oldest.battery == BatterySettings() && oldest.breaks == BreakSettings() && oldest.dock == nil)
-        print("Settings state checks passed: an existing state.json keeps every value and gets the Breaks defaults")
+        assert(oldest.battery == BatterySettings() && oldest.breaks == BreakSettings() && oldest.dock == nil && oldest.appearance == .solid)
+        checkTrackRendering()
+        print("Settings state checks passed: saved values preserved, Tint migrated, opaque ring track independent of backdrop")
+    }
+
+    @MainActor private static func checkTrackRendering() {
+        var samples: [[UInt8]] = []
+        for background in [Color.black, .white] {
+            let renderer = ImageRenderer(content: RingView(account: .claude, percent: 0, showPercent: false)
+                .padding(4).background(background).environment(\.colorScheme, .dark))
+            renderer.scale = 2
+            let image = renderer.cgImage!
+            let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
+                                    bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)!
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            let pixel = context.data!.assumingMemoryBound(to: UInt8.self).advanced(by: (60 * image.width + 10) * 4)
+            samples.append(Array(UnsafeBufferPointer(start: pixel, count: 4)))
+        }
+        assert(samples[0] == samples[1] && samples[0][3] == 255,
+               "the empty ring's track must paint opaque ink, independent of the content underneath")
     }
 }

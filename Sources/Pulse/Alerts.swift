@@ -17,7 +17,7 @@ enum AlertPanel {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
         let hosting = OverlayHostingView(rootView: content
-            .environment(\.glassTint, state.glassTint)
+            .pulsePresentation(state)
             .environment(\.showsRemaining, state.showsRemaining))
         panel.contentView = hosting
         panel.setContentSize(hosting.fittingSize)
@@ -51,7 +51,7 @@ struct AlertCard<Content: View>: View {
         .padding(.horizontal, 28)
         .padding(.vertical, 24)
         .frame(width: 320)
-        .glassCard(in: RoundedRectangle(cornerRadius: 26))
+        .pulseSurface(in: RoundedRectangle(cornerRadius: 26))
         .padding(12)   // room for the dark card's shadow
         .task {
             try? await Task.sleep(for: .seconds(1))
@@ -125,7 +125,7 @@ struct LimitAlertView: View {
                 Text(LimitAlert.lines(snap, remaining: remaining))
                     .font(.body)
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(Color.secondary)
+                    .foregroundStyle(PulsePalette.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

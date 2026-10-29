@@ -53,7 +53,7 @@ struct BreakPill: View {
                         TimelineView(.periodic(from: .now, by: 1)) { context in
                             let left = max(0, endsAt.timeIntervalSince(context.date))
                             ZStack {
-                                Circle().stroke(Color.primary.opacity(0.14), lineWidth: 4)
+                                Circle().stroke(PulsePalette.track, lineWidth: 4)
                                 Circle().trim(from: 0, to: left / BreakSchedule.countdown)
                                     .stroke(bar, style: StrokeStyle(lineWidth: 4, lineCap: .round))
                                     .rotationEffect(.degrees(-90))
@@ -86,9 +86,9 @@ struct BreakPill: View {
             .padding(.leading, 7).padding(.trailing, 12)
             .frame(height: 52)
             .padding(Edge.Set(tail), PillShape.tailWidth)
-            .glassCard(in: PillShape(edge: tail))
+            .pulseSurface(in: PillShape(edge: tail))
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onFrame?($0) }
-            .transition(.scale(scale: 0.5, anchor: UnitPoint(edge: tail)).combined(with: .opacity))
+            .transition(.scale(scale: 0.5, anchor: UnitPoint(edge: tail)))
         }
     }
 }
@@ -121,8 +121,8 @@ struct BreakOverlayView: View {
         let holiday = holidayScreen ? controller.holiday : nil
         let colors = holiday.map { (glow: $0.glow, bar: $0.bar) } ?? BreakColor.pair(controller.settings.color)
         ZStack {
+            PulseSurface(shape: Rectangle())
             if holiday != nil {
-                Color(white: 0.043)
                 if let still = controller.holidayStill {
                     Image(nsImage: still).resizable().scaledToFill().frame(width: size.width, height: size.height).clipped()
                 } else if let player = controller.holidayPlayer {
@@ -198,7 +198,7 @@ struct BreakOverlayView: View {
                     .tracking(-digits * 0.029)
                     .foregroundStyle(paused ? Color(white: 0.55) : .white)
                 ProgressView(value: max(0, min(1, r.left / r.total)))
-                    .tint(paused ? Color.secondary : Color(rgb: color))
+                    .tint(paused ? PulsePalette.secondary : Color(rgb: color))
                     .frame(width: bar)
                     .padding(.top, digits * 0.27)
             }
@@ -212,7 +212,7 @@ struct BreakOverlayView: View {
         Text(controller.phase.isPaused ? "paused" : "left in your break")
             .font(.system(size: 17 * s))
             .tracking(0.8 * s)
-            .foregroundStyle(Color.secondary)
+            .foregroundStyle(PulsePalette.secondary)
     }
 
     private func buttons(_ s: CGFloat) -> some View {
@@ -311,7 +311,6 @@ private struct BreakGlow: View {
         let u = size.width / 100, glow = Color(rgb: rgb)
         ZStack {
             if plain {
-                Color(white: 0.043)
                 RadialGradient(colors: [glow.opacity(0.24), .clear], center: UnitPoint(x: 0.5, y: 0.45), startRadius: 0, endRadius: 23 * u)
             }
             band(glow.opacity(0.16), inset: 3 * u, blur: 20 * u)
@@ -741,17 +740,17 @@ struct BreakSettingsSection: View {
                 .accessibilityLabel("Remind me to take breaks")
             LabeledContent("Micro break") {
                 HStack(spacing: 6) {
-                    Text("every").foregroundStyle(.secondary)
+                    Text("every").foregroundStyle(PulsePalette.secondary)
                     minutes($settings.microEvery, [10, 15, 20, 25, 30, 45, 60])
-                    Text("for").foregroundStyle(.secondary)
+                    Text("for").foregroundStyle(PulsePalette.secondary)
                     seconds($settings.microLength, [10, 20, 30, 45, 60])
                 }
             }
             LabeledContent("Long break") {
                 HStack(spacing: 6) {
-                    Text("every").foregroundStyle(.secondary)
+                    Text("every").foregroundStyle(PulsePalette.secondary)
                     minutes($settings.longEvery, [30, 45, 60, 90, 120])
-                    Text("for").foregroundStyle(.secondary)
+                    Text("for").foregroundStyle(PulsePalette.secondary)
                     minutes($settings.longLength, [2, 3, 5, 10, 15])
                     Toggle("Long break", isOn: $settings.longEnabled).labelsHidden().toggleStyle(.switch)
                         .accessibilityLabel("Long break")
@@ -768,7 +767,7 @@ struct BreakSettingsSection: View {
             }
             .accessibilityLabel("Wait during calls")
             Text("Breaks keep to their times: every 10 minutes means every 10 minutes, however long each break takes. A long break takes the place of a micro break due within two minutes of it. A break waits while the screen is locked, during a Pulse voice call, and during other calls when Wait during calls is on. To skip breaks through a meeting, hover over the rail and choose Pause. Choose a fixed schedule if you watch the screen without touching the keyboard or mouse.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(PulsePalette.secondary)
         }
         Section("Break screen") {
             LabeledContent("Colour") {
@@ -821,11 +820,11 @@ struct BreakSettingsSection: View {
             .accessibilityLabel("Suggest something to do")
             LabeledContent {
                 HStack(spacing: 8) {
-                    Text("Easy").foregroundStyle(.secondary)
+                    Text("Easy").foregroundStyle(PulsePalette.secondary)
                     Slider(value: Binding(get: { Double(settings.ideaLevel) }, set: { settings.ideaLevel = Int($0.rounded()) }), in: 0...2, step: 1)
                         .labelsHidden()
                         .accessibilityValue(BreakSettings.levels[settings.ideaLevel])
-                    Text("Wild").foregroundStyle(.secondary)
+                    Text("Wild").foregroundStyle(PulsePalette.secondary)
                 }
             } label: { Text("Level") }
             LabeledContent("Your own ideas") {
@@ -836,7 +835,7 @@ struct BreakSettingsSection: View {
                     .accessibilityLabel("Your own ideas")
             }
             Text("One idea per line; yours come up about one break in three. Reroll picks another at your level, Surprise me one from any level.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(PulsePalette.secondary)
         }
         BreakHistorySection(history: controller.history)
     }
@@ -883,13 +882,13 @@ struct BreakHistorySection: View {
             LabeledContent("This week", value: BreakHistory.summary(history.counts(since: week)))
             let recent = history.records.suffix(6).reversed()
             if recent.isEmpty {
-                Text("No breaks yet.").foregroundStyle(.secondary)
+                Text("No breaks yet.").foregroundStyle(PulsePalette.secondary)
             } else {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(recent.enumerated()), id: \.offset) { _, r in
                         HStack {
                             Text(r.at.formatted(.dateTime.weekday(.abbreviated).hour().minute()))
-                                .monospacedDigit().foregroundStyle(.secondary)
+                                .monospacedDigit().foregroundStyle(PulsePalette.secondary)
                                 .frame(width: 92, alignment: .leading)
                             Text(r.kind == .micro ? "Micro break" : "Long break")
                             Spacer()
@@ -900,7 +899,7 @@ struct BreakHistorySection: View {
                 }
             }
             Text("Kept on this Mac for 90 days. Skipped means dismissed with Escape or the countdown's ×, or breaks turned off during one.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(PulsePalette.secondary)
         }
     }
 }
@@ -920,7 +919,7 @@ struct NextBreakHint: View {
                         if paused {
                             chip("Resume", help: "Breaks come on their times again") { controller.pauseBreaks(for: nil) }
                         } else {
-                            Text("Pause").foregroundStyle(.secondary).accessibilityHidden(true)
+                            Text("Pause").foregroundStyle(PulsePalette.secondary).accessibilityHidden(true)
                             ForEach([30, 60, 120], id: \.self) { minutes in
                                 let length = minutes < 60 ? "\(minutes) min" : "\(minutes / 60) hr"
                                 chip(length, help: "No breaks for \(length)") { controller.pauseBreaks(for: TimeInterval(minutes * 60)) }
@@ -933,7 +932,7 @@ struct NextBreakHint: View {
                 .fixedSize()
                 .padding(.horizontal, 14).padding(.vertical, 9)
                 .padding(Edge.Set(tail), PillShape.tailWidth)
-                .glassCard(in: PillShape(edge: tail, maxRadius: 16))
+                .pulseSurface(in: PillShape(edge: tail, maxRadius: 16))
                 .accessibilityElement(children: .contain)
             }
         }

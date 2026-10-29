@@ -2,7 +2,6 @@ import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
 
-private struct GlassTintKey: EnvironmentKey { static let defaultValue = true }
 private struct ShowsRemainingKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues {
     /// Rings, bars and percentages show what's left of each limit instead of what's used.
@@ -10,29 +9,6 @@ extension EnvironmentValues {
         get { self[ShowsRemainingKey.self] }
         set { self[ShowsRemainingKey.self] = newValue }
     }
-
-    /// A black tint on dark glass. Off leaves the system material untinted.
-    var glassTint: Bool {
-        get { self[GlassTintKey.self] }
-        set { self[GlassTintKey.self] = newValue }
-    }
-}
-
-/// Dark Liquid Glass, with the optional black tint.
-private struct GlassCard<S: Shape>: ViewModifier {
-    @Environment(\.glassTint) private var tinted
-    let shape: S
-    func body(content: Content) -> some View {
-        content.background {
-            // Glass's adaptive foreground effect can invert semantic text independently of our dark surface.
-            Color.clear.glassEffect(tinted ? .regular.tint(.black) : .regular, in: shape)
-                .background(.black, in: shape)
-        }
-    }
-}
-
-extension View {
-    func glassCard<S: Shape>(in shape: S) -> some View { modifier(GlassCard(shape: shape)) }
 }
 
 private let brandIcons: [AccountID: NSImage] = {
@@ -103,7 +79,7 @@ private struct CodexPet: View {
     var body: some View {
         let still = reduceMotion || (state == .idle && !animateIdle)
         ZStack {
-            Circle().stroke(session.voiceTint ?? Color.primary.opacity(0.18), lineWidth: size * 0.12)
+            Circle().stroke(session.voiceTint ?? PulsePalette.track, lineWidth: size * 0.12)
             TimelineView(.animation(minimumInterval: 0.1, paused: still)) { context in
                 if let frames = Self.frames[state], frames.count == CodexPetSprite.track(state).durations.count {
                     let index = still ? 0 : CodexPetSprite.frame(state, at: context.date.timeIntervalSinceReferenceDate)
@@ -147,12 +123,12 @@ struct RingView: View {
                 // the outer track's gray, never red: the level rises as the cap is used, or falls showing what's left
                 if let tertiary {
                     let d = size * 0.61   // inside the inner track
-                    Rectangle().fill(Color.primary.opacity(0.18))
+                    Rectangle().fill(PulsePalette.track)
                         .frame(width: d, height: d * max(0, min(shown(tertiary), 100)) / 100)
                         .frame(width: d, height: d, alignment: .bottom)
                         .clipShape(Circle())
                 }
-                Circle().stroke(Color.primary.opacity(0.18), lineWidth: size * 0.12)
+                Circle().stroke(PulsePalette.track, lineWidth: size * 0.12)
                 if let percent {
                     arc(percent, lineWidth: size * 0.12)
                 }
@@ -203,7 +179,7 @@ struct BatteryRing: View {
     var body: some View {
         VStack(spacing: 6) {
             ZStack {
-                Circle().stroke(Color.primary.opacity(0.18), lineWidth: size * 0.12)
+                Circle().stroke(PulsePalette.track, lineWidth: size * 0.12)
                 Circle()
                     .trim(from: 0, to: CGFloat(max(reading.percent, 1)) / 100)
                     .stroke(level.color, style: StrokeStyle(lineWidth: size * 0.12, lineCap: .round))
@@ -248,11 +224,11 @@ struct WindowRow: View {
                 .frame(height: 6)
                 HStack {
                     Text(remaining ? "\(100 - Int(p))% Left" : "\(Int(p))% Used").font(.caption)
-                        .foregroundStyle(window.isNearLimit ? Color.red : Color.secondary)
+                        .foregroundStyle(window.isNearLimit ? Color.red : PulsePalette.secondary)
                     Spacer()
                     Text(resetLabel(window.resetsAt)).font(.caption)
                 }
-                .foregroundStyle(Color.secondary)
+                .foregroundStyle(PulsePalette.secondary)
             }
         }
     }
@@ -310,14 +286,14 @@ struct UsageCard: View {
                 BrandIcon(account: snapshot.id, size: 17)
                 Text("\(snapshot.displayName) Usage").font(.headline)
                 Spacer()
-                Text(snapshot.planLabel).font(.caption).foregroundStyle(Color.secondary)
+                Text(snapshot.planLabel).font(.caption).foregroundStyle(PulsePalette.secondary)
             }
             .foregroundStyle(Color.primary)
             ForEach(Array(snapshot.windows.enumerated()), id: \.element.id) { i, w in
                 WindowRow(window: w, tint: i == 0 ? snapshot.id.accent : snapshot.id.accent.opacity(0.5))
             }
             if let msg = snapshot.healthMessage {
-                Text(msg).font(.caption).foregroundStyle(.primary.opacity(0.6))
+                Text(msg).font(.caption).foregroundStyle(PulsePalette.secondary)
             }
             if snapshot.id == .grok, snapshot.health == .needsAuth {
                 Button("Connect Grok…") {
@@ -328,7 +304,7 @@ struct UsageCard: View {
         .padding(16)
         .padding(Edge.Set(tailEdge), BubbleShape.tailWidth)
         .frame(width: tailEdge == .trailing || tailEdge == .leading ? 320 + BubbleShape.tailWidth : 320)
-        .glassCard(in: BubbleShape(edge: tailEdge, at: tailAt))
+        .pulseSurface(in: BubbleShape(edge: tailEdge, at: tailAt))
     }
 }
 
@@ -365,14 +341,14 @@ struct PetCard: View {
         var body: some View {
             let m = message
             if m.role == .note {   // Pulse's own notice, not a message and not input: a small centered line
-                Text(m.text).font(.caption).foregroundStyle(Color.secondary).multilineTextAlignment(.center)
+                Text(m.text).font(.caption).foregroundStyle(PulsePalette.secondary).multilineTextAlignment(.center)
                     .textSelection(.enabled).frame(maxWidth: .infinity).padding(.vertical, 2).id(m.id)
             } else {
                 HStack {
                     if m.role == .user { Spacer(minLength: 40) }
                     VStack(alignment: .leading, spacing: 2) {
                         // Results of work a call started: never one of the spoken replies.
-                        if let caption = m.caption { Text(caption).font(.caption2).foregroundStyle(Color.secondary) }
+                        if let caption = m.caption { Text(caption).font(.caption2).foregroundStyle(PulsePalette.secondary) }
                         Text(m.role == .user ? AttributedString(m.text) : inlineMarkdown(m.text))
                             .font(.callout)
                             .textSelection(.enabled)
@@ -381,7 +357,7 @@ struct PetCard: View {
                                 .fill(m.role == .user ? AccountID.codex.accent.opacity(0.35)
                                                       : m.caption != nil ? Color.clear
                                                       : Color(white: 0.16)))
-                            .overlay { if m.caption != nil { RoundedRectangle(cornerRadius: 12).strokeBorder(Color.secondary.opacity(0.5)) } }
+                            .overlay { if m.caption != nil { RoundedRectangle(cornerRadius: 12).strokeBorder(PulsePalette.secondary.opacity(0.5)) } }
                     }
                     .accessibilityElement(children: .combine)
                     if m.role != .user { Spacer(minLength: 40) }
@@ -404,19 +380,19 @@ struct PetCard: View {
                     if !session.workModels.isEmpty {
                         workModelMenu(workDetail ?? "Choose a work model", label: modelLine ?? "Choose a work model")
                     } else if let model = modelLine {
-                        Text(model).font(.caption2).foregroundStyle(Color.secondary).lineLimit(1)
+                        Text(model).font(.caption2).foregroundStyle(PulsePalette.secondary).lineLimit(1)
                     }
                     if let split = splitLine {   // its own line: a menu label never wraps, so it would cut this off
-                        Text(split).font(.caption2).foregroundStyle(Color.secondary)   // wraps fully: pending notices can be long
+                        Text(split).font(.caption2).foregroundStyle(PulsePalette.secondary)   // wraps fully: pending notices can be long
                     }
                     if let place = placeDetail {
-                        Text(place).font(.caption2).foregroundStyle(Color.secondary).lineLimit(1).truncationMode(.middle)
+                        Text(place).font(.caption2).foregroundStyle(PulsePalette.secondary).lineLimit(1).truncationMode(.middle)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 if let showUsage {
                     Button("Usage", action: showUsage).buttonStyle(.borderless).font(.caption)
-                        .foregroundStyle(Color.secondary).fixedSize()
+                        .foregroundStyle(PulsePalette.secondary).fixedSize()
                 }
                 Button { session.clear() } label: { Image(systemName: "square.and.pencil") }
                     .buttonStyle(.borderless).help("New conversation: starts over and stops running helpers")
@@ -445,17 +421,17 @@ struct PetCard: View {
 
             if session.helpersWorking > 0 {
                 Label(session.helpersWorking == 1 ? "A helper is working" : "\(session.helpersWorking) helpers are working", systemImage: "person.2")
-                    .font(.caption).foregroundStyle(Color.secondary)
+                    .font(.caption).foregroundStyle(PulsePalette.secondary)
             }
 
             if session.microphonePaused {
                 Label("Microphone paused · voice still on", systemImage: "mic.slash.fill")
-                    .font(.caption).foregroundStyle(Color.secondary)
+                    .font(.caption).foregroundStyle(PulsePalette.secondary)
             }
 
             if let status = session.status {
                 Text(status).font(.caption)
-                    .foregroundStyle(status == CodexPetSession.reconnectNote ? Color.secondary : .red.opacity(0.85))
+                    .foregroundStyle(status == CodexPetSession.reconnectNote ? PulsePalette.secondary : .red.opacity(0.85))
                     .lineLimit(3).help(status)
                 if session.microphoneBlocked {
                     Button("Open Microphone Settings") {
@@ -489,7 +465,7 @@ struct PetCard: View {
         .padding(16)
         .padding(Edge.Set(tailEdge), BubbleShape.tailWidth)
         .frame(width: tailEdge == .trailing || tailEdge == .leading ? 340 + BubbleShape.tailWidth : 340)
-        .glassCard(in: BubbleShape(edge: tailEdge, at: tailAt))
+        .pulseSurface(in: BubbleShape(edge: tailEdge, at: tailAt))
         .task { session.reopen(); session.loadWorkModels(); try? await Task.sleep(for: .milliseconds(200)); composing = true }   // after the panel is key
         .onExitCommand {
             // Escape: end the call and hand the keyboard back to whatever was in front
@@ -504,23 +480,23 @@ struct PetCard: View {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     if session.canLoadEarlier {
                         Button("Load earlier messages") { session.loadEarlier() }
-                            .buttonStyle(.borderless).font(.caption).foregroundStyle(Color.secondary)
+                            .buttonStyle(.borderless).font(.caption).foregroundStyle(PulsePalette.secondary)
                     }
                     if session.messages.isEmpty {
                         Text(session.voiceState == .off ? "Type, or tap the waveform to talk. Same Codex sign-in, same threads."
                              : session.voiceState == .connecting ? "Starting microphone…"
                              : session.microphonePaused ? "Use the microphone button or shortcut to talk." : "Listening…")
-                            .font(.caption).foregroundStyle(Color.secondary)
+                            .font(.caption).foregroundStyle(PulsePalette.secondary)
                     }
                     ForEach(session.messages) { m in
                         Bubble(message: m)
                     }
                     if session.waitingOnYou {
                         Label("Waiting for your answer in the Codex prompt", systemImage: "hand.raised")
-                            .font(.caption).foregroundStyle(Color.secondary).id("thinking")
+                            .font(.caption).foregroundStyle(PulsePalette.secondary).id("thinking")
                     } else if session.thinking, !(session.messages.last?.live ?? false) {
                         HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Thinking…").font(.caption) }
-                            .foregroundStyle(Color.secondary).id("thinking")
+                            .foregroundStyle(PulsePalette.secondary).id("thinking")
                     }
                 }
                 .foregroundStyle(Color.primary)
@@ -612,7 +588,7 @@ struct PetCard: View {
                 Text(label).lineLimit(1).truncationMode(.tail)
                 Image(systemName: "chevron.down").font(.system(size: 7, weight: .semibold))
             }
-            .font(.caption2).foregroundStyle(Color.secondary)
+            .font(.caption2).foregroundStyle(PulsePalette.secondary)
         }
         .menuStyle(.button).buttonStyle(.borderless)   // a plain label lines up with the lines around it
         .fixedSize()
@@ -634,14 +610,6 @@ struct PetCard: View {
         guard !session.draft.trimmingCharacters(in: .whitespaces).isEmpty, session.canSend else { return }
         session.send(session.draft)
         session.draft = ""
-    }
-}
-
-/// A card fades in where it opens. Only its opacity animates, never the layout, so the rail stays put.
-private struct FadesIn: ViewModifier {
-    @State private var shown = false
-    func body(content: Content) -> some View {
-        content.opacity(shown ? 1 : 0).onAppear { withAnimation(.easeOut(duration: 0.12)) { shown = true } }
     }
 }
 
@@ -728,7 +696,7 @@ struct OverlayView: View {
             }
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { onSize?($0) }
-        .environment(\.glassTint, state.glassTint)
+        .pulsePresentation(state)
         .environment(\.showsRemaining, state.showsRemaining)
     }
 
@@ -746,7 +714,6 @@ struct OverlayView: View {
                     // its Pause buttons take clicks, so a click there isn't a click away
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onHintFrame?($0) }
                     .onDisappear { onHintFrame?(.zero) }
-                    .transition(.opacity)
             }
             let shift = cardShift(state.petVisible ? "pet" : state.selected.rawValue)
             usageOrPetCard(tail: tail)
@@ -760,12 +727,10 @@ struct OverlayView: View {
         if state.petVisible {
             PetCard(tailEdge: tail, tailAt: tailAt("pet"), showUsage: state.persisted.enabled.contains(.codex) ? { toggleCard(.codex) } : nil)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
-                .modifier(FadesIn())
         } else if state.cardVisible, state.persisted.enabled.contains(state.selected) {
             UsageCard(snapshot: state.snapshots[state.selected] ?? placeholder(state.selected),
                       tailEdge: tail, tailAt: tailAt(state.selected.rawValue))
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
-                .modifier(FadesIn())
         }
     }
 
@@ -810,7 +775,7 @@ struct OverlayView: View {
         .focusEffectDisabled()   // the panel can be key now (pet composer); no focus ring on the rail
         .padding(state.dock.isVertical ? .vertical : .horizontal, expanded ? 16 : 10)
         .padding(state.dock.isVertical ? .horizontal : .vertical, expanded ? 12 : 8)
-        .glassCard(in: RoundedRectangle(cornerRadius: expanded ? 26 : 18))
+        .pulseSurface(in: RoundedRectangle(cornerRadius: expanded ? 26 : 18))
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { railFrame = $0; onRailFrame?($0) }
         .simultaneousGesture(DragGesture(minimumDistance: 4, coordinateSpace: .global)
             .onChanged { onDrag?($0.location) }
@@ -899,7 +864,7 @@ struct MenuBarPopover: View {
                             WindowRow(window: w, tint: i == 0 ? id.accent : id.accent.opacity(0.5))
                         }
                         if let msg = snap.healthMessage {
-                            Text(msg).font(.caption).foregroundStyle(.primary.opacity(0.6))
+                            Text(msg).font(.caption).foregroundStyle(PulsePalette.secondary)
                         }
                         if id == .grok, snap.health == .needsAuth {
                             Button("Connect Grok…") {
@@ -910,7 +875,7 @@ struct MenuBarPopover: View {
                 }
             }
             if state.enabledAccounts.isEmpty {
-                Text("All accounts disabled").foregroundStyle(.secondary)
+                Text("All accounts disabled").foregroundStyle(PulsePalette.secondary)
             }
             Divider()
             if state.persisted.breaks.enabled {
@@ -944,7 +909,7 @@ struct MenuBarPopover: View {
         }
         .padding(14)
         .frame(width: 300)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .pulseSurface(in: Rectangle())
         .environment(\.showsRemaining, state.showsRemaining)
     }
 }
@@ -969,9 +934,12 @@ struct SettingsView: View {
                     if loginItem == .requiresApproval {
                         Button("Allow Pulse in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
                     }
-                    Toggle("Tint the glass", isOn: state.glassTintBinding)
-                        .accessibilityLabel("Tint the glass")
-                        .help("Adds a black tint to the dark glass. Off leaves the dark system glass untinted.")
+                    Picker("Appearance", selection: $state.persisted.appearance) {
+                        Text("Glass").tag(PulseAppearance.glass)
+                        Text("Solid").tag(PulseAppearance.solid)
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityLabel("Appearance")
                 }
             }
             tab("Accounts", "person.crop.circle", height: 360) {
@@ -980,7 +948,7 @@ struct SettingsView: View {
                         LabeledContent {
                             if id == .claude {
                                 if state.snapshots[id]?.source == .officialProtocol, state.snapshots[id]?.health == .ok {
-                                    Text("via Claude Code").font(.caption).foregroundStyle(.secondary)
+                                    Text("via Claude Code").font(.caption).foregroundStyle(PulsePalette.secondary)
                                         .help("Reads Claude Code's own sign-in from the Keychain; no separate login needed")
                                 } else if state.snapshots[id]?.source == .officialUsagePage, state.snapshots[id]?.health == .ok {
                                     Button("Disconnect") {
@@ -1005,15 +973,15 @@ struct SettingsView: View {
                                         Task { await WebLogin.disconnectGrok(); await state.refreshAll() }
                                     }
                                 } else {
-                                    Text("via Grok CLI").font(.caption).foregroundStyle(.secondary)
+                                    Text("via Grok CLI").font(.caption).foregroundStyle(PulsePalette.secondary)
                                 }
                             }
                             if id == .codex {
-                                Text("via Codex CLI").font(.caption).foregroundStyle(.secondary)
+                                Text("via Codex CLI").font(.caption).foregroundStyle(PulsePalette.secondary)
                                     .help("Codex signs in through its own CLI (codex login)")
                             }
                             if id == .antigravity {
-                                Text("via Antigravity CLI").font(.caption).foregroundStyle(.secondary)
+                                Text("via Antigravity CLI").font(.caption).foregroundStyle(PulsePalette.secondary)
                                     .help("Reads agy's own /usage report; sign in by running agy once")
                             }
                             Toggle("Enable \(id.displayName)", isOn: state.isEnabled(id)).labelsHidden().toggleStyle(.switch)
@@ -1028,7 +996,7 @@ struct SettingsView: View {
                 }
                 Section {
                     Text("Subscription accounts only. API keys are not supported.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(PulsePalette.secondary)
                 }
             }
             tab("Rings", "circle.circle", height: 240) {
@@ -1038,7 +1006,7 @@ struct SettingsView: View {
                     Toggle("Always on top", isOn: $state.persisted.alwaysOnTop)
                         .accessibilityLabel("Always on top")
                     Text("Drag the usage rings to any screen edge. Top and bottom arrange horizontally.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(PulsePalette.secondary)
                     Toggle("Show what's left", isOn: state.showsRemainingBinding)
                         .accessibilityLabel("Show what's left")
                         .help("Rings, bars and percentages show what's left of each limit instead of what's used, emptying as you use it.")
@@ -1054,7 +1022,7 @@ struct SettingsView: View {
                         .help("Chat and live voice with Codex, separate from the Codex usage ring. Off hides the pet, ends a call, frees the shortcut and starts nothing new; work already running finishes, then Codex stops.")
                     LabeledContent("Shortcut") { HotKeyRecorder(combo: state.voiceHotKeyBinding) }.disabled(!state.showsPet)
                     Text("Tap to start hands-free voice; tap again to pause or resume the microphone. Hold to talk; letting go pauses the microphone while replies keep playing. Double-tap to end the call; Escape also ends it and closes the card.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(PulsePalette.secondary)
                     Button("Reset remembered approvals") { PetApprovals.shared.resetRemembered() }
                         .help("Ask again for future command and folder-access requests. Current task grants expire when that task ends.")
                 }
@@ -1070,6 +1038,7 @@ struct SettingsView: View {
                                     @ViewBuilder _ content: () -> Content) -> some View {
         Form { content() }
             .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
             .frame(width: 460, height: height)
             .tabItem { Label(title, systemImage: symbol) }
     }
@@ -1086,7 +1055,7 @@ struct BatterySettingsSection: View {
 
     var body: some View {
         if battery.reading == nil {
-            Text("This Mac has no battery.").foregroundStyle(.secondary)
+            Text("This Mac has no battery.").foregroundStyle(PulsePalette.secondary)
         } else {
             rows
         }
@@ -1144,7 +1113,7 @@ struct BatterySettingsSection: View {
             }
         }
         Text("An alert stays on screen with its sound until you click Dismiss or plug in. It never goes to Notification Center.")
-            .font(.caption).foregroundStyle(.secondary)
+            .font(.caption).foregroundStyle(PulsePalette.secondary)
         if battery.reading?.simulated == true {
             Text("Simulated battery. `defaults delete app.pulse simulatedBattery` returns to the real one.")
                 .font(.caption).foregroundStyle(.orange)

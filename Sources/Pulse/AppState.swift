@@ -8,7 +8,7 @@ final class AppState: ObservableObject {
         var order: [AccountID] = AccountID.allCases
         var alwaysOnTop: Bool = true
         var showOverlay: Bool = true
-        var glassTint: Bool?   // nil = on: a black tint over dark glass
+        var appearance: PulseAppearance = .solid
         var dock: DockEdge?
         var voiceHotKey: HotKeyCombo?   // nil = the default shortcut
         var showPet: Bool?   // nil = shown; independent of the Codex usage switch
@@ -25,6 +25,27 @@ final class AppState: ObservableObject {
         var breaks: BreakSettings {
             get { breakSettings ?? BreakSettings() }
             set { breakSettings = newValue }
+        }
+
+        init() {}
+
+        private enum LegacyKeys: String, CodingKey { case glassTint }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            enabled = try c.decode(Set<AccountID>.self, forKey: .enabled)
+            order = try c.decode([AccountID].self, forKey: .order)
+            alwaysOnTop = try c.decode(Bool.self, forKey: .alwaysOnTop)
+            showOverlay = try c.decode(Bool.self, forKey: .showOverlay)
+            let legacy = try decoder.container(keyedBy: LegacyKeys.self)
+            appearance = (try? c.decode(PulseAppearance.self, forKey: .appearance))
+                ?? ((try? legacy.decode(Bool.self, forKey: .glassTint)) == false ? .glass : .solid)
+            dock = try c.decodeIfPresent(DockEdge.self, forKey: .dock)
+            voiceHotKey = try c.decodeIfPresent(HotKeyCombo.self, forKey: .voiceHotKey)
+            showPet = try c.decodeIfPresent(Bool.self, forKey: .showPet)
+            showRemaining = try c.decodeIfPresent(Bool.self, forKey: .showRemaining)
+            limitAlerts = try c.decodeIfPresent([String: Date].self, forKey: .limitAlerts)
+            batterySettings = try c.decodeIfPresent(BatterySettings.self, forKey: .batterySettings)
+            breakSettings = try c.decodeIfPresent(BreakSettings.self, forKey: .breakSettings)
         }
     }
 
@@ -43,11 +64,6 @@ final class AppState: ObservableObject {
     var showsRemaining: Bool { persisted.showRemaining ?? false }
     var showsRemainingBinding: Binding<Bool> {
         Binding(get: { self.showsRemaining }, set: { self.persisted.showRemaining = $0 })
-    }
-
-    var glassTint: Bool { persisted.glassTint ?? true }
-    var glassTintBinding: Binding<Bool> {
-        Binding(get: { self.glassTint }, set: { self.persisted.glassTint = $0 })
     }
 
     @Published var persisted: Persisted { didSet { save() } }
