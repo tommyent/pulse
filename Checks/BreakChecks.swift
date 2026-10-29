@@ -7,16 +7,13 @@ enum BreakChecks {
         schedule()
         restore()
         history()
-        interests()
-        prompt()
-        repeats()
-        await retries()
+        ideas()
         holidays()
         tricks()
         colours()
         settingsDecoding()
         rex()
-        print("Break checks passed: due-based schedule, countdown, pause, snooze, voice hold, both away modes, locks, restore, history, sounds, interests, prompt, repeats, retries, holidays, tricks, sleepers, flights, ladders, colours, settings and Rex parsing")
+        print("Break checks passed: due-based schedule, countdown, pause, snooze, voice hold, both away modes, locks, restore, history, sounds, ideas, holidays, tricks, sleepers, flights, ladders, colours, settings and Rex parsing")
     }
 
     static func schedule() {
@@ -261,128 +258,39 @@ enum BreakChecks {
         assert(aged.prune(now: t.addingTimeInterval(BreakHistory.keep + 10)) && aged.records.isEmpty)
     }
 
-    static func interests() {
-        var list: [String] = []
-        list = BreakInterests.adding("  tea ", to: list)
-        list = BreakInterests.adding("Tea", to: list)
-        list = BreakInterests.adding("bird   watching", to: list)
-        list = BreakInterests.adding("   ", to: list)
-        list = BreakInterests.adding(String(repeating: "x", count: 31), to: list)
-        assert(list == ["tea", "bird watching"], "\(list)")
-        for i in 0..<30 { list = BreakInterests.adding("word\(i)", to: list) }
-        assert(list.count == BreakInterests.maxCount)
-    }
+    static func ideas() {
+        // the bundled list: all three levels, every idea named and filled in, no name twice
+        let list = BreakIdeaList.parse(try! Data(contentsOf: URL(fileURLWithPath: "Sources/Pulse/Resources/break-ideas.json")))
+        assert(list.count > 300 && Set(list.map(\.level)) == [0, 1, 2], "\(list.count)")
+        assert(list.allSatisfy { !$0.name.isEmpty && !$0.text.isEmpty })
+        assert(Set(list.map { $0.name.lowercased() }).count == list.count)
+        assert(BreakIdeaList.parse(Data("nope".utf8)).isEmpty)
 
-    static func prompt() {
-        let p = BreakIdeaPrompt.prompt(length: 300, level: 4, focus: "guitar", angle: "something to play", avoid: ["Water the plants."])
-        assert(p.contains("5 minutes") && p.contains("\"guitar\"") && p.contains("adventurous") && p.contains("something to play"))
-        assert(p.contains("Water the plants.") && !p.contains("very short") && !p.contains("odd"))
-        let micro = BreakIdeaPrompt.prompt(length: 20, level: 0, focus: "tea", angle: "something for the body")
-        assert(micro.contains("20 seconds") && micro.contains("very short") && micro.contains("easy") && micro.contains("\"tea\""))
-        let odd = BreakIdeaPrompt.prompt(length: 300, level: 2, focus: nil, angle: "something to make or draw")
-        assert(odd.contains("odd") && !odd.contains("like \"") && !odd.contains("Level:") && !odd.contains("interest \""))
-        assert(BreakIdeaPrompt.duration(60) == "1 minute" && BreakIdeaPrompt.duration(120) == "2 minutes")
-        assert(BreakIdeaPrompt.instructions.contains("travel") && BreakIdeaPrompt.instructions.contains("money"))
-        for level in 0...4 { assert(BreakIdeaPrompt.prompt(length: 60, level: level, focus: "x", angle: "a").contains(BreakIdeaPrompt.levelWords[level])) }
-        assert(BreakIdeaPrompt.angles(level: 0) == BreakIdeaPrompt.angles(level: 1) && BreakIdeaPrompt.angles(level: 3) == BreakIdeaPrompt.angles(level: 4))
-        assert(Set(BreakIdeaPrompt.angles(level: 0)).isDisjoint(with: BreakIdeaPrompt.angles(level: 4)))
+        let own = BreakIdeaList.own("  Water the fern \n\n\tHum a tune\n   \n")
+        assert(own == [BreakIdea(text: "Water the fern"), BreakIdea(text: "Hum a tune")] && BreakIdeaList.own("").isEmpty)
 
-        // the interest: a different one from the last whenever there's a choice, the only one when there isn't
         var rng = SystemRandomNumberGenerator()
-        for _ in 0..<50 { assert(BreakIdeaPrompt.focus(from: ["tea", "guitar", "plants"], after: "tea", using: &rng) != "tea") }
-        assert(BreakIdeaPrompt.focus(from: ["tea"], after: "tea", using: &rng) == "tea")
-        assert(BreakIdeaPrompt.focus(from: [], after: nil, using: &rng) == nil)
+        func pick(_ from: [BreakIdea], _ level: Int?, own: [BreakIdea] = [], recent: [String] = []) -> BreakIdea? {
+            BreakIdeaList.pick(from: from, level: level, own: own, recent: recent, using: &rng)
+        }
+        // the level set in Settings; any level for Surprise me
+        for _ in 0..<200 { assert(pick(list, 2)!.level == 2) }
+        assert(Set((0..<300).map { _ in pick(list, nil)!.level }) == [0, 1, 2])
+        // the person's own about one break in three, and only theirs when there's no list
+        let mine = (0..<3000).filter { _ in pick(list, 0, own: own)!.name.isEmpty }.count
+        assert((850...1150).contains(mine), "\(mine)")
+        assert(pick([], 0, own: own)!.name.isEmpty && pick([], 0) == nil)
+        // ideas shown lately wait until the rest have come up; then the one shown longest ago comes first
+        let abc = ["A", "B", "C"].map { BreakIdea(name: $0.lowercased(), text: $0) }
+        for _ in 0..<50 { assert(pick(abc, 0, recent: ["A", "C"])?.text == "B") }
+        assert(pick(abc, 0, recent: ["B", "A", "C"])?.text == "B")
 
-        assert(BreakIdeaPrompt.interestsUsed("Repot a plant into a mug", from: ["plants", "tea", "guitar"]) == ["plants"])
-        assert(BreakIdeaPrompt.interestsUsed("Brew some tea and play guitar", from: ["tea", "guitar"]) == ["tea", "guitar"])
-        assert(BreakIdeaPrompt.interestsUsed("Stretch your calves", from: ["stretching"]) == ["stretching"])
-        assert(BreakIdeaPrompt.interestsUsed("Go bird watching at the window", from: ["bird watching"]) == ["bird watching"])
-        assert(BreakIdeaPrompt.interestsUsed("Stretch your arms", from: ["tea"]).isEmpty)
-        assert(BreakIdeaPrompt.interestsUsed("Teach the cat a trick", from: ["tea"]).isEmpty)   // whole words, not any substring
-    }
-
-    static func repeats() {
-        let r = BreakIdeaPrompt.isRepeat
-        assert(r("Drink a glass of water slowly", ["Slowly drink a glass of water by the window"]))   // reworded
-        assert(r("Water your plants", ["water the plant"]))                                            // plural, case
-        assert(r("Hum your favourite song", ["Hum your favourite song."]))
-        assert(!r("Draw a cat on paper", ["Draw a dog on paper"]))
-        assert(!r("Stretch your arms", ["Stretch your legs"]))
-        assert(!r("Hum your favourite song while tidying your desk", ["Hum your favourite song while you water a plant"]))
-        assert(!r("Name three sounds nearby", ["Name three colors nearby"]))   // one changed subject is a new idea
-        assert(!r("Count five birds outside", ["Count five clouds outside"]))
-        assert(r("Quietly hum your favourite song", ["Hum your favourite song quietly"]))
-        assert(r("Water the plants", ["Water the plants by the window"]) && r("Draw a cat wearing a hat", ["Draw a cat"]))
-        assert(!r("Stretch", ["Stretch your arms slowly"]))   // one shared word isn't enough
-        assert(!r("Anything", []) && !r("", ["a the"]))
-        assert(BreakIdeaPrompt.words("The plants, the GLASS and its sides") == ["plant", "glass", "side"])
-
-        var list: [String] = []
-        for i in 0..<45 { list = BreakIdeaPrompt.remember("idea \(i)", in: list) }
-        assert(list.count == BreakIdeaPrompt.keep && list.first == "idea 5" && list.last == "idea 44")
-        list = BreakIdeaPrompt.remember("idea 10", in: list)   // shown again: moves to the newest end, once
-        assert(list.count == BreakIdeaPrompt.keep && list.last == "idea 10" && list.filter { $0 == "idea 10" }.count == 1)
-        let avoid = BreakIdeaPrompt.avoidList(list, budget: 30)
-        assert(avoid.first == "idea 10" && avoid.count == 3 && BreakIdeaPrompt.avoidList([], budget: 30).isEmpty)
-    }
-
-    /// The idea retries against a stand-in model: at most three asks, one deadline for all of them.
-    static func retries() async {
-        final class Asks: @unchecked Sendable {
-            private let lock = NSLock()
-            private var seen: [[String]] = []
-            func add(_ avoid: [String]) -> Int { lock.withLock { seen.append(avoid); return seen.count } }
-            var all: [[String]] { lock.withLock { seen } }
-        }
-        let recent = ["Water the plants by the window"]
-        func run(_ answers: [String?], delay: Double = 0, timeout: Double = 5) async -> (String?, Asks, Double) {
-            let asks = Asks(), start = Date()
-            let out = await BreakIdeaPrompt.fresh(recent: recent, timeout: timeout) { avoid, _ in
-                let n = asks.add(avoid)
-                if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
-                return answers[min(n, answers.count) - 1]
-            }
-            return (out, asks, Date().timeIntervalSince(start))
-        }
-        var (out, asks, _) = await run(["Hum a song"])
-        assert(out == "Hum a song" && asks.all.count == 1 && asks.all[0] == recent)
-        (out, asks, _) = await run(["Water the plants", "Water plants by the window", "Juggle two socks"])
-        assert(out == "Juggle two socks" && asks.all.count == 3)
-        assert(asks.all[2].prefix(2) == ["Water plants by the window", "Water the plants"])   // rejected ones are avoided next
-        (out, asks, _) = await run(["Water the plants"])
-        assert(out == "Water the plants" && asks.all.count == 3)   // nothing new: a repeat beats a blank line
-        let old = ["Hum a song", "Stretch your arms", "Water the plants by the window"]
-        let pick = await BreakIdeaPrompt.fresh(recent: old, timeout: 5) { _, n in ["Water the plants", "Hum a song", "Stretch your arms"][n] }
-        assert(pick == "Hum a song", "\(pick ?? "nil")")   // of three repeats, the one shown longest ago
-        assert(BreakIdeaPrompt.lastSeen("Hum a tune", in: old) == nil && BreakIdeaPrompt.lastSeen("Stretch arms", in: old) == 1)
-        (out, asks, _) = await run([nil])
-        assert(out == nil && asks.all.count == 1)
-        let (late, slow, took) = await run(["Water the plants", "Water the plants", "Hum"], delay: 0.2, timeout: 0.3)
-        assert(late == nil && slow.all.count <= 2 && took < 1, "\(took)")
-        // a model that ignores cancellation still can't hold the idea past its deadline
-        let begun = Date()
-        let stuck = await BreakIdeaPrompt.fresh(recent: [], timeout: 0.1) { _, _ in
-            await withCheckedContinuation { c in DispatchQueue.global().asyncAfter(deadline: .now() + 1) { c.resume() } }
-            return "Hum a song"
-        }
-        assert(stuck == nil && Date().timeIntervalSince(begun) < 0.5, "\(Date().timeIntervalSince(begun))")
-        // a cancelled caller (Reroll, the break ending) stops waiting at once, not at the deadline
-        let called = Date()
-        let caller = Task {
-            await BreakIdeaPrompt.fresh(recent: [], timeout: 2) { _, _ in
-                await withCheckedContinuation { c in DispatchQueue.global().asyncAfter(deadline: .now() + 1) { c.resume() } }
-                return "Hum a song"
-            }
-        }
-        try? await Task.sleep(for: .seconds(0.05))
-        caller.cancel()
-        let dropped = await caller.value
-        assert(dropped == nil && Date().timeIntervalSince(called) < 0.4, "\(Date().timeIntervalSince(called))")
-        // an answer that comes at once is never lost to the timer
-        for _ in 0..<2000 {
-            let quick = await BreakIdeaPrompt.fresh(recent: [], timeout: 1) { _, _ in "Hum a song" }
-            assert(quick == "Hum a song")
-        }
+        var recent: [String] = []
+        for i in 0..<105 { recent = BreakIdeaList.remember("idea \(i)", in: recent) }
+        assert(recent.count == BreakIdeaList.keep && recent.first == "idea 5" && recent.last == "idea 104")
+        recent = BreakIdeaList.remember("idea 10", in: recent)   // shown again: moves to the newest end, once
+        assert(recent.count == BreakIdeaList.keep && recent.last == "idea 10" && recent.filter { $0 == "idea 10" }.count == 1)
+        assert(spokenDuration(20) == "20 seconds" && spokenDuration(60) == "1 minute" && spokenDuration(120) == "2 minutes")
     }
 
     static func holidays() {
@@ -683,16 +591,18 @@ enum BreakChecks {
         assert(BreakColor.hex(0x3FB8AF) == "#3FB8AF")
         assert(BreakColor.pair("amber").glow == 0xC27532 && BreakColor.pair("ocean").bar == 0x62A8FF)
         assert(BreakColor.pair("#000000") == (0x000000, 0x595959))
-        assert(BreakColor.pair("nonsense").glow == BreakColor.presets[0].glow)
+        assert(BreakColor.pair("nonsense").glow == 0x6E52CF && BreakSettings().color == "violet")
         assert(BreakColor.mix(0xFFFFFF, white: 0.5) == 0xFFFFFF && BreakColor.mix(0x000000, white: 1) == 0xFFFFFF)
     }
 
     static func settingsDecoding() {
         let empty = try! JSONDecoder().decode(BreakSettings.self, from: Data("{}".utf8))
         assert(empty == BreakSettings())
-        let partial = try! JSONDecoder().decode(BreakSettings.self, from: Data(#"{"enabled":true,"level":9,"interests":["tea"],"later":1}"#.utf8))
-        assert(partial.enabled && partial.level == 4 && partial.interests == ["tea"] && partial.microEvery == 1200)
-        var s = BreakSettings(); s.color = "#3FB8AF"; s.level = 3; s.longEnabled = false; s.waitForCalls = false
+        // an older Pulse's level and interests are dropped
+        let partial = try! JSONDecoder().decode(BreakSettings.self, from:
+            Data(#"{"enabled":true,"ideaLevel":9,"ownIdeas":"Hum a tune","level":4,"interests":["tea"],"later":1}"#.utf8))
+        assert(partial.enabled && partial.ideaLevel == 2 && partial.ownIdeas == "Hum a tune" && partial.microEvery == 1200)
+        var s = BreakSettings(); s.color = "#3FB8AF"; s.ideaLevel = 1; s.ownIdeas = "Hum\nTea"; s.longEnabled = false; s.waitForCalls = false
         assert(try! JSONDecoder().decode(BreakSettings.self, from: JSONEncoder().encode(s)) == s)
 
         // sounds: one as a break starts, another when it runs its full length; none for Snooze, Escape, Back to Work

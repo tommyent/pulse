@@ -1,7 +1,7 @@
 import Foundation
 
-/// Break reminders without any UI or system calls: the settings, the schedule, the interests list, the overlay's
-/// colours and the idea prompt. The checks compile this file on its own.
+/// Break reminders without any UI or system calls: the settings, the schedule, the overlay's colours and picking
+/// the idea. The checks compile this file on its own.
 
 enum BreakKind: String, Codable { case micro, long }
 
@@ -16,19 +16,19 @@ struct BreakSettings: Codable, Equatable {
     var longEnabled = true
     var longEvery: TimeInterval = 60 * 60
     var longLength: TimeInterval = 5 * 60
-    var color = BreakColor.presets[0].name   // a preset's name, or "#RRGGBB"
+    var color = BreakColor.standard.name   // a preset's name, or "#RRGGBB"
     var showAgents = true
     var partyMode = true  // hats, costumes and props on the agents
     var holidays = true   // a holiday's video behind the countdown, and its hats that week
     var ideas = true
-    var level = 1   // 0 easy … 4 adventurous
-    var interests: [String] = []
+    var ideaLevel = 0   // 0 easy, 1 middle, 2 wild
+    var ownIdeas = ""   // the person's own ideas, one per line
     var awayMode = BreakAwayMode.idle
     var waitForCalls = true   // a break due while an app records from a microphone waits for the call to end
     var startSound = "Blow"   // a sound's name, as Battery's pickers list them; "" is None
     var endSound = "Glass"
 
-    static let levels = ["Easy", "Gentle", "Playful", "Bold", "Adventurous"]
+    static let levels = ["Easy", "Middle", "Wild"]
 
     func length(_ kind: BreakKind) -> TimeInterval { kind == .micro ? microLength : longLength }
 
@@ -49,8 +49,8 @@ struct BreakSettings: Codable, Equatable {
         partyMode = try c.decodeIfPresent(Bool.self, forKey: .partyMode) ?? d.partyMode
         holidays = try c.decodeIfPresent(Bool.self, forKey: .holidays) ?? d.holidays
         ideas = try c.decodeIfPresent(Bool.self, forKey: .ideas) ?? d.ideas
-        level = min(4, max(0, try c.decodeIfPresent(Int.self, forKey: .level) ?? d.level))
-        interests = try c.decodeIfPresent([String].self, forKey: .interests) ?? d.interests
+        ideaLevel = min(2, max(0, try c.decodeIfPresent(Int.self, forKey: .ideaLevel) ?? d.ideaLevel))
+        ownIdeas = try c.decodeIfPresent(String.self, forKey: .ownIdeas) ?? d.ownIdeas
         awayMode = (try? c.decodeIfPresent(BreakAwayMode.self, forKey: .awayMode)) ?? d.awayMode
         waitForCalls = try c.decodeIfPresent(Bool.self, forKey: .waitForCalls) ?? d.waitForCalls
         startSound = try c.decodeIfPresent(String.self, forKey: .startSound) ?? d.startSound
@@ -106,16 +106,9 @@ func breakLengthLabel(_ seconds: TimeInterval) -> String {
     seconds >= 60 ? "\(Int(seconds / 60))-min break" : "\(Int(seconds))-sec break"
 }
 
-/// The interests are keywords: typed, trimmed, one of each regardless of case, at most 20.
-enum BreakInterests {
-    static let maxCount = 20, maxLength = 30
-
-    static func adding(_ typed: String, to list: [String]) -> [String] {
-        let word = typed.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        guard !word.isEmpty, word.count <= maxLength, list.count < maxCount,
-              !list.contains(where: { $0.caseInsensitiveCompare(word) == .orderedSame }) else { return list }
-        return list + [word]
-    }
+/// "20 seconds" / "5 minutes", as VoiceOver announces a break.
+func spokenDuration(_ seconds: TimeInterval) -> String {
+    seconds >= 60 ? "\(Int(seconds / 60)) minute\(seconds >= 120 ? "s" : "")" : "\(Int(seconds)) seconds"
 }
 
 /// The overlay's colour: a preset's glow and bar, or one custom colour whose bar is a lighter shade of it.
@@ -129,6 +122,8 @@ enum BreakColor {
         Preset(name: "sage", glow: 0x3F8F57, bar: 0x7FD193),
         Preset(name: "graphite", glow: 0x7C7C82, bar: 0xE3E3E8),
     ]
+    static let standard = presets[2]   // violet, the default
+
 
     /// "#3FB8AF", "3fb8af" → 0x3FB8AF. Six hex digits only.
     static func rgb(hex: String) -> UInt32? {
@@ -140,10 +135,10 @@ enum BreakColor {
 
     static func hex(_ rgb: UInt32) -> String { String(format: "#%06X", rgb) }
 
-    /// (glow, bar) for a setting; an unknown value falls back to the first preset.
+    /// (glow, bar) for a setting; an unknown value falls back to the default.
     static func pair(_ setting: String) -> (glow: UInt32, bar: UInt32) {
         if let p = presets.first(where: { $0.name == setting }) { return (p.glow, p.bar) }
-        guard let c = rgb(hex: setting) else { return (presets[0].glow, presets[0].bar) }
+        guard let c = rgb(hex: setting) else { return (standard.glow, standard.bar) }
         return (c, mix(c, white: 0.35))
     }
 
@@ -485,177 +480,46 @@ func nextBreakText(micro: Date, long: Date?, now: Date) -> String {
     return "Next: micro in \(until(micro))"
 }
 
-/// What the on-device model is asked for. Reroll keeps the interests and level; Surprise me drops the interests.
-enum BreakIdeaPrompt {
-    static let instructions = """
-        You suggest one thing a person can do during a short break from their computer. \
-        It must fit in the break's length and be doable right where they are, at home or at their desk, \
-        away from the screen. Never suggest anything that needs travel, money, buying, booking, other people, \
-        or a vehicle. Keep it safe and kind. Write one short sentence that starts with a verb, under 20 words.
-        """
+/// One break idea: what to do, its name and its level (0 easy, 1 middle, 2 wild). The person's own have no name.
+struct BreakIdea: Equatable {
+    var name = ""
+    var text: String
+    var level = 0
+}
 
-    static let levelWords = [
-        "easy: calm and still, almost no effort",
-        "gentle: relaxing, with a little movement or care",
-        "playful: fun, silly or creative",
-        "bold: active, it gets the body going or takes a little nerve",
-        "adventurous: surprising and daring, something they've never done at a desk, but safe",
-    ]
-
-    /// What kind of thing the idea is, picked at random per request so Reroll doesn't keep landing on the same thing.
-    /// Calm levels get calm kinds, bold levels active ones.
-    static func angles(level: Int) -> [String] {
-        switch level {
-        case ...1: ["something to notice with the senses", "something to tidy or arrange", "something calm to make or draw",
-                    "something to listen to", "something gentle for the hands", "a slow breathing exercise", "a small kindness for later"]
-        case 2: ["something silly to make or draw", "something to play", "a small game", "a tiny performance",
-                 "something to build from what's around", "a made-up challenge", "something to invent or imagine"]
-        default: ["something that moves the whole body", "a small dare or challenge", "something to try for the first time",
-                  "a balance or coordination test", "a short burst of exercise", "something to learn by doing", "a quick physical game"]
+/// Picking the break's idea, from Pulse's list (Resources/break-ideas.json) or the person's own.
+enum BreakIdeaList {
+    /// `{"easy": [[name, what to do], …], "middle": […], "wild": […]}`; nothing when it doesn't read.
+    static func parse(_ data: Data) -> [BreakIdea] {
+        guard let levels = try? JSONDecoder().decode([String: [[String]]].self, from: data) else { return [] }
+        return ["easy", "middle", "wild"].enumerated().flatMap { level, key in
+            (levels[key] ?? []).compactMap { $0.count == 2 ? BreakIdea(name: $0[0], text: $0[1], level: level) : nil }
         }
     }
 
-    static func duration(_ seconds: TimeInterval) -> String {
-        seconds >= 60 ? "\(Int(seconds / 60)) minute\(seconds >= 120 ? "s" : "")" : "\(Int(seconds)) seconds"
+    /// The person's own ideas, typed one per line in Settings: trimmed, blank lines dropped.
+    static func own(_ typed: String) -> [BreakIdea] {
+        typed.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }.map { BreakIdea(text: $0) }
     }
 
-    /// `focus` is the one interest this idea is about (nil for a surprise); `angle` one of `angles`.
-    static func prompt(length: TimeInterval, level: Int, focus: String?, angle: String, avoid: [String] = []) -> String {
-        var lines = ["The break lasts \(duration(length)). Suggest something that takes about that long, not longer."]
-        if length < 60 { lines.append("It's very short: one quick action they can finish in \(duration(length)).") }
-        if let focus {
-            lines.append("It must be clearly about their interest \"\(focus)\", and name it.")
-            lines.append("Make it \(angle). Level: \(levelWords[min(4, max(0, level))]).")
-        } else {
-            // no example ideas: the small model tends to hand them back
-            lines.append("Make it odd, random, quirky and fun, something they'd never expect. Make it \(angle).")
-        }
-        lines.append("Be specific and concrete. Don't suggest stretching unless the interest is stretching.")
-        if !avoid.isEmpty { lines.append("Don't repeat or reword any of these: \(avoid.joined(separator: " | "))") }
-        return lines.joined(separator: "\n")
+    /// One of the person's own about one break in three when they have any, otherwise one from `list` at `level` (any
+    /// level when nil, for Surprise me). Ideas in `recent` (by text, oldest first) come up again only once the rest
+    /// have, the one shown longest ago first.
+    static func pick(from list: [BreakIdea], level: Int?, own: [BreakIdea], recent: [String],
+                     using rng: inout some RandomNumberGenerator) -> BreakIdea? {
+        let listed = list.filter { level == nil || $0.level == level }
+        let pool = !own.isEmpty && (listed.isEmpty || Int.random(in: 0..<3, using: &rng) == 0) ? own : listed
+        let fresh = pool.filter { !recent.contains($0.text) }
+        if !fresh.isEmpty { return fresh.randomElement(using: &rng) }
+        return pool.min { (recent.lastIndex(of: $0.text) ?? -1) < (recent.lastIndex(of: $1.text) ?? -1) }
     }
 
-    /// How many shown ideas Pulse remembers, across breaks and restarts.
-    static let keep = 40
+    /// How many shown ideas Pulse remembers, across breaks and restarts: most of one level's list.
+    static let keep = 100
 
     /// `list` with `idea` as its newest entry, at most `keep` long.
     static func remember(_ idea: String, in list: [String]) -> [String] {
         Array((list.filter { $0 != idea } + [idea]).suffix(keep))
-    }
-
-    /// The newest ideas that fit in the prompt, newest first. The on-device model's 4,096-token window holds the
-    /// instructions, the prompt, the schema and the answer, so the list stays near 1,500 characters (~400 tokens).
-    static func avoidList(_ recent: [String], budget: Int = 1500) -> [String] {
-        var out: [String] = [], used = 0
-        for idea in recent.reversed() {
-            used += idea.count + 3
-            if used > budget { break }
-            out.append(idea)
-        }
-        return out
-    }
-
-    private static let smallWords: Set<String> = ["a", "an", "the", "and", "or", "of", "to", "for", "with", "in", "on", "at",
-                                                  "by", "your", "you", "it", "its", "some", "into", "up", "out", "then", "from", "as"]
-
-    /// A sentence's content words, lowercased, small words dropped and plurals folded ("plants" counts as "plant").
-    static func words(_ idea: String) -> Set<String> {
-        Set(idea.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
-            .filter { !smallWords.contains($0) }
-            .map { $0.count > 3 && $0.hasSuffix("s") && !$0.hasSuffix("ss") ? String($0.dropLast()) : $0 })
-    }
-
-    /// True when `idea` rewords one of `recent`: at least 70% of their content words shared (overlap over union), or
-    /// all of one's words (two or more) inside the other's. One changed subject in a short idea ("sounds" for
-    /// "colours") is new.
-    static func isRepeat(_ idea: String, of recent: [String]) -> Bool { lastSeen(idea, in: recent) != nil }
-
-    /// Where in `recent` (oldest first) the newest idea that `idea` rewords sits; nil when it rewords none.
-    static func lastSeen(_ idea: String, in recent: [String]) -> Int? {
-        let w = words(idea)
-        guard !w.isEmpty else { return nil }
-        return recent.lastIndex { r in
-            let o = words(r), shared = w.intersection(o).count
-            return Double(shared) / Double(w.union(o).count) >= 0.7 || (shared == min(w.count, o.count) && shared >= 2)
-        }
-    }
-
-    /// Asks up to `attempts` times, all within one `timeout`, for an idea that isn't a repeat of `recent`. Each
-    /// rejected answer joins the next try's avoid list. When every answer repeats, the one shown longest ago wins,
-    /// since with narrow interests the model runs out of new ideas and a blank line is worse. nil when the model
-    /// fails or time runs out; the deadline holds even when the model ignores cancellation, and its late answer is dropped.
-    static func fresh(recent: [String], attempts: Int = 3, timeout: TimeInterval,
-                      ask: @escaping @Sendable (_ avoid: [String], _ attempt: Int) async -> String?) async -> String? {
-        let work = Task<String?, Never> {
-            var rejected: [String] = []
-            for attempt in 0..<attempts {
-                guard !Task.isCancelled, let text = await ask(rejected.reversed() + avoidList(recent), attempt),
-                      !Task.isCancelled else { return nil }
-                if !isRepeat(text, of: recent + rejected) { return text }
-                rejected.append(text)
-            }
-            return rejected.min { (lastSeen($0, in: recent) ?? -1) < (lastSeen($1, in: recent) ?? -1) }
-        }
-        let race = Race()
-        let timer = Task {
-            do { try await Task.sleep(for: .seconds(timeout)) } catch { return }   // cancelled: the answer came first
-            work.cancel()
-            race.finish(nil)
-        }
-        Task {
-            let text = await work.value
-            race.finish(text)   // claimed before the timer stops, so a timer waking in between can't take its place
-            timer.cancel()
-        }
-        // the deadline, the answer and a cancelled caller each end the wait; whichever comes first wins
-        return await withTaskCancellationHandler {
-            await withCheckedContinuation { race.wait($0) }
-        } onCancel: {
-            work.cancel()
-            race.finish(nil)
-        }
-    }
-
-    /// One result for a continuation that several racers may try to finish, possibly before it's waited on.
-    private final class Race: @unchecked Sendable {
-        private let lock = NSLock()
-        private var waiting: CheckedContinuation<String?, Never>?
-        private var result: String??   // set once: the winner's value
-
-        func wait(_ c: CheckedContinuation<String?, Never>) {
-            let ready: String?? = lock.withLock { if result == nil { waiting = c }; return result }
-            if let ready { c.resume(returning: ready) }
-        }
-
-        func finish(_ value: String?) {
-            let c: CheckedContinuation<String?, Never>? = lock.withLock {
-                guard result == nil else { return nil }
-                result = .some(value)
-                defer { waiting = nil }
-                return waiting
-            }
-            c?.resume(returning: value)
-        }
-    }
-
-    /// The interest to build on: any but the one used last, so rerolls move between them.
-    static func focus(from interests: [String], after last: String?, using rng: inout some RandomNumberGenerator) -> String? {
-        let choices = interests.count > 1 ? interests.filter { $0 != last } : interests
-        return choices.randomElement(using: &rng)
-    }
-
-    /// The interests a sentence names, as whole words: "plant" counts for "plants" and "stretch" for "stretching",
-    /// "teach" doesn't count for "tea".
-    static func interestsUsed(_ idea: String, from interests: [String]) -> [String] {
-        let text = idea.lowercased()
-        let words = Set(text.split { !$0.isLetter && !$0.isNumber }.map(String.init))
-        return interests.filter { interest in
-            let i = interest.lowercased()
-            if i.contains(" ") { return text.contains(i) }
-            let singular = i.hasSuffix("s") ? String(i.dropLast()) : i
-            var forms = [i, singular, singular + "s", singular + "es"]
-            if i.hasSuffix("ing"), i.count > 5 { let stem = String(i.dropLast(3)); forms += [stem, stem + "s", stem + "es"] }
-            return forms.contains { words.contains($0) }
-        }
     }
 }

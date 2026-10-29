@@ -42,6 +42,7 @@ struct PillShape: Shape {
 struct BreakPill: View {
     @ObservedObject var controller: BreakController
     var tail: Edge = .trailing
+    var onFrame: ((CGRect) -> Void)? = nil   // beside the rail, so the rail can tell a click here from a click away
 
     var body: some View {
         if case let .countdown(kind, endsAt) = controller.phase {
@@ -88,6 +89,7 @@ struct BreakPill: View {
             .frame(height: 52)
             .padding(Edge.Set(tail), PillShape.tailWidth)
             .glassCard(in: PillShape(edge: tail))
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onFrame?($0) }
             .transition(.scale(scale: 0.5, anchor: UnitPoint(edge: tail)).combined(with: .opacity))
         }
     }
@@ -248,33 +250,22 @@ struct BreakOverlayView: View {
 
     /// `top`: the space above it, only while it shows, so a hidden idea leaves the layout as it was.
     @ViewBuilder private func ideaLine(_ s: CGFloat, width: CGFloat, font: CGFloat, top: CGFloat, bar: UInt32) -> some View {
-        switch controller.idea {
-        case .hidden:
-            EmptyView()
-        case .loading, .shown:
+        if case let .shown(shown) = controller.idea {
             VStack(spacing: 14 * s) {
-                Group {
-                    if case let .shown(text) = controller.idea {
-                        (Text(Image(systemName: "sparkle")).foregroundColor(Color(rgb: bar))
-                            + Text("  " + text))
-                    } else {
-                        Text("Thinking of something to do in your break").redacted(reason: .placeholder)
-                    }
-                }
+                (Text(Image(systemName: "sparkle")).foregroundColor(Color(rgb: bar)) + Text("  ")
+                    + Text(shown.name.isEmpty ? "" : shown.name + ". ").bold() + Text(shown.text))
                 .font(.system(size: font))
                 .multilineTextAlignment(.center)
-                // measured on the words themselves, not the wider frame; the placeholder is only kept clear of
-                .perch(controller.idea == .loading ? .text : .ideaRow)
+                .perch(.ideaRow)   // measured on the words themselves, not the wider frame
                 .frame(maxWidth: width)
                 .foregroundStyle(Color(white: 0.92))
                 HStack(spacing: 26 * s) {
                     Button { controller.reroll() } label: { Label("Reroll", systemImage: "arrow.clockwise") }
-                        .help("Another idea from your interests")
+                        .help("Another idea at your level")
                     Button { controller.surprise() } label: { Label("Surprise me", systemImage: "dice") }
-                        .help("Something unexpected you can do where you are")
+                        .help("An idea from any level")
                 }
                 .buttonStyle(QuietButtonStyle(s: s))
-                .disabled(controller.idea == .loading)
                 .perch(.text)
             }
             .padding(.top, top)
@@ -775,42 +766,18 @@ private struct BlockedBadge: View {
 
 // MARK: - Settings → Breaks
 
-/// Lays its children out in rows, wrapping like words: the interest pills.
-struct FlowLayout: Layout {
-    var spacing: CGFloat = 6
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        arrange(subviews, width: proposal.width ?? .infinity).size
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        for (view, point) in zip(subviews, arrange(subviews, width: bounds.width).points) {
-            view.place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y), proposal: .unspecified)
-        }
-    }
-
-    private func arrange(_ subviews: Subviews, width: CGFloat) -> (size: CGSize, points: [CGPoint]) {
-        var points: [CGPoint] = [], x: CGFloat = 0, y: CGFloat = 0, row: CGFloat = 0, widest: CGFloat = 0
-        for view in subviews {
-            let size = view.sizeThatFits(.unspecified)
-            if x > 0, x + size.width > width { x = 0; y += row + spacing; row = 0 }
-            points.append(CGPoint(x: x, y: y))
-            x += size.width + spacing
-            row = max(row, size.height)
-            widest = max(widest, x - spacing)
-        }
-        return (CGSize(width: widest, height: y + row), points)
-    }
+/// The colour panel reports by target-action, which a View can't take. One for the app, so it outlives Settings.
+@MainActor final class ColorPanelTarget: NSObject {
+    static let shared = ColorPanelTarget()
+    var picked: (NSColor) -> Void = { _ in }
+    @objc func changed(_ panel: NSColorPanel) { picked(panel.color) }
 }
 
 /// Settings → Breaks. A binding, not AppState, so it can be rendered on its own.
 struct BreakSettingsSection: View {
     @Binding var settings: BreakSettings
     @ObservedObject private var controller = BreakController.shared
-    @State private var draft = ""
-    @State private var hex = ""
     @State private var sounds: [String] = []
-    private let ideasAvailable = BreakIdeas.available
 
     var body: some View {
         Section("Schedule") {
@@ -858,24 +825,21 @@ struct BreakSettingsSection: View {
                         .accessibilityLabel(preset.name.capitalized)
                         .accessibilityAddTraits(settings.color == preset.name ? .isSelected : [])
                     }
+                    let custom = BreakColor.rgb(hex: settings.color)
+                    Button(action: pickCustomColor) {
+                        Circle().fill(custom.map { AnyShapeStyle(Color(rgb: $0)) }
+                                      ?? AnyShapeStyle(AngularGradient(colors: [.red, .yellow, .green, .cyan, .blue, .purple, .red], center: .center)))
+                            .frame(width: 16, height: 16)
+                            .padding(2)
+                            .overlay(Circle().strokeBorder(Color.primary, lineWidth: custom != nil ? 1.5 : 0))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Custom colour: the Mac's colour picker, which also takes a hex code")
+                    .accessibilityLabel("Custom colour")
+                    .accessibilityValue(custom.map(BreakColor.hex) ?? "")
+                    .accessibilityAddTraits(custom != nil ? .isSelected : [])
                 }
             }
-            LabeledContent("Custom colour") {
-                HStack(spacing: 8) {
-                    ColorPicker("Custom colour", selection: customColor, supportsOpacity: false).labelsHidden()
-                    TextField("Hex", text: $hex, prompt: Text("#RRGGBB"))
-                        .labelsHidden()
-                        .frame(width: 84)
-                        .monospacedDigit()
-                        .onSubmit {
-                            if let rgb = BreakColor.rgb(hex: hex) { settings.color = BreakColor.hex(rgb) }
-                            hex = BreakColor.rgb(hex: settings.color).map(BreakColor.hex) ?? ""
-                        }
-                        .help("Six hex digits, then Return")
-                }
-            }
-            .onAppear { hex = BreakColor.rgb(hex: settings.color).map(BreakColor.hex) ?? "" }
-            .onChange(of: settings.color) { _, new in hex = BreakColor.rgb(hex: new).map(BreakColor.hex) ?? "" }
             LabeledContent("Sound at start") { SoundChoice(title: "Sound at start", sound: soundBinding(\.startSound), sounds: sounds) }
             LabeledContent("Sound at end") { SoundChoice(title: "Sound at end", sound: soundBinding(\.endSound), sounds: sounds) }
                 .onAppear { sounds = BatterySounds.all().map(\.name) }
@@ -896,52 +860,28 @@ struct BreakSettingsSection: View {
         Section("Ideas") {
             Toggle(isOn: $settings.ideas) {
                 Text("Suggest something to do")
-                Text(ideasAvailable ? "Written on this Mac by Apple Intelligence"
-                     : "Needs Apple Intelligence, which is off or still downloading on this Mac")
+                Text("From Pulse's list of quick ideas, or your own")
             }
-            .disabled(!ideasAvailable)
             LabeledContent {
                 HStack(spacing: 8) {
                     Text("Easy").foregroundStyle(.secondary)
-                    Slider(value: Binding(get: { Double(settings.level) }, set: { settings.level = Int($0.rounded()) }), in: 0...4, step: 1)
+                    Slider(value: Binding(get: { Double(settings.ideaLevel) }, set: { settings.ideaLevel = Int($0.rounded()) }), in: 0...2, step: 1)
                         .labelsHidden()
-                        .accessibilityValue(BreakSettings.levels[settings.level])
-                    Text("Adventurous").foregroundStyle(.secondary)
+                        .accessibilityValue(BreakSettings.levels[settings.ideaLevel])
+                    Text("Wild").foregroundStyle(.secondary)
                 }
             } label: { Text("Level") }
-            VStack(alignment: .leading, spacing: 8) {
-                LabeledContent("Interests") {
-                    TextField("Interests", text: $draft, prompt: Text("Add an interest, then press Return"))
-                        .labelsHidden()
-                        .frame(width: 250)
-                        .onSubmit {
-                            settings.interests = BreakInterests.adding(draft, to: settings.interests)
-                            draft = ""
-                        }
-                }
-                if !settings.interests.isEmpty {
-                    FlowLayout {
-                        ForEach(settings.interests, id: \.self) { word in
-                            HStack(spacing: 3) {
-                                Text(word).font(.callout)
-                                Button { settings.interests.removeAll { $0 == word } } label: {
-                                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
-                                        .frame(width: 16, height: 16).contentShape(Circle())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Remove \(word)")
-                            }
-                            .padding(.leading, 9).padding(.trailing, 4)
-                            .frame(height: 22)
-                            .background(Capsule().fill(Color.primary.opacity(0.1)))
-                        }
-                    }
-                }
+            LabeledContent("Your own ideas") {
+                TextEditor(text: $settings.ownIdeas)
+                    .font(.body)
+                    .multilineTextAlignment(.leading)   // the Form right-aligns a row's content
+                    .frame(width: 250, height: 72)
+                    .clipShape(.rect(cornerRadius: 6))
+                    .accessibilityLabel("Your own ideas")
             }
-            Text("Reroll asks again from your interests and level. Surprise me ignores them and picks something odd you can do where you are.")
+            Text("One idea per line; yours come up about one break in three. Reroll picks another at your level, Surprise me one from any level.")
                 .font(.caption).foregroundStyle(.secondary)
         }
-        .disabled(!ideasAvailable)
         BreakHistorySection(history: controller.history)
     }
 
@@ -951,13 +891,23 @@ struct BreakSettingsSection: View {
                 set: { settings[keyPath: key] = $0 ?? "" })
     }
 
-    private var customColor: Binding<Color> {
-        Binding(get: { Color(rgb: BreakColor.pair(settings.color).glow) },
-                set: { color in
-                    guard let c = NSColor(color).usingColorSpace(.sRGB) else { return }
-                    let rgb = [c.redComponent, c.greenComponent, c.blueComponent].map { UInt32(max(0, min(255, ($0 * 255).rounded()))) }
-                    settings.color = BreakColor.hex(rgb[0] << 16 | rgb[1] << 8 | rgb[2])
-                })
+    /// The Mac's colour panel, opened on its sliders, which have a hex field. What it picks becomes the custom colour.
+    private func pickCustomColor() {
+        let panel = NSColorPanel.shared
+        panel.setTarget(nil)   // so loading the current colour isn't taken as a pick
+        panel.showsAlpha = false
+        panel.mode = .RGB
+        panel.color = NSColor(Color(rgb: BreakColor.pair(settings.color).glow))
+        ColorPanelTarget.shared.picked = { color in
+            guard let c = color.usingColorSpace(.sRGB) else { return }
+            let rgb = [c.redComponent, c.greenComponent, c.blueComponent].map { UInt32(max(0, min(255, ($0 * 255).rounded()))) }
+            let picked = rgb[0] << 16 | rgb[1] << 8 | rgb[2]
+            // Return in the panel resends the colour it opened with; that keeps the preset
+            if picked != BreakColor.pair(settings.color).glow { settings.color = BreakColor.hex(picked) }
+        }
+        panel.setTarget(ColorPanelTarget.shared)
+        panel.setAction(#selector(ColorPanelTarget.changed(_:)))
+        panel.orderFront(nil)
     }
 
     private func minutes(_ value: Binding<TimeInterval>, _ options: [Int]) -> some View {

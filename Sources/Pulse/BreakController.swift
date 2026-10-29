@@ -12,8 +12,7 @@ extension UserDefaults {
     /// Starts a countdown at once, for testing: `defaults write app.pulse simulatedBreak long` (or `micro`). Breaks
     /// must be on in Settings. Pulse clears it once used, so each write is one countdown.
     @objc dynamic var simulatedBreak: String? { string(forKey: "simulatedBreak") }
-    /// Shows this text as the break's idea instead of asking Apple Intelligence, for testing on a Mac without it:
-    /// `defaults write app.pulse simulatedIdea "…"`.
+    /// Shows this text as every break's idea, for testing and screenshots: `defaults write app.pulse simulatedIdea "…"`.
     var simulatedIdea: String? { string(forKey: "simulatedIdea") }
     /// Dresses every break as this holiday, for testing on any day: `defaults write app.pulse simulatedHoliday halloween`.
     var simulatedHoliday: String? { string(forKey: "simulatedHoliday") }
@@ -24,7 +23,7 @@ extension UserDefaults {
 @MainActor
 final class BreakController: ObservableObject {
     static let shared = BreakController()
-    enum Idea: Equatable { case hidden, loading, shown(String) }
+    enum Idea: Equatable { case hidden, shown(BreakIdea) }
 
     /// Published only when it changes: the rail redraws for the countdown, not every second.
     @Published private(set) var phase = BreakSchedule.Phase.working
@@ -44,9 +43,6 @@ final class BreakController: ObservableObject {
     private var timer: Timer?
     private var panels: [NSPanel] = []
     private var pillPanel: NSPanel?   // only while the rings are hidden
-    private var ideaTask: Task<Void, Never>?
-    private var readyIdeas: [BreakKind: String] = [:]   // written ahead, so a break started early never waits on the model
-    private var prefetchTask: Task<Void, Never>?
     private var recentIdeas: [String] = []   // break-ideas.json: the ideas last shown, oldest first
     private var lockedAt: Date?
     private var sleptAt: Date?
@@ -109,11 +105,6 @@ final class BreakController: ObservableObject {
                     if new.awayMode != old.awayMode { log.notice("time away now counts: \(Self.describe(new), privacy: .public)") }
                     schedule.settings = new
                 }
-                if new.ideas != old.ideas || new.level != old.level || new.interests != old.interests
-                    || new.length(.micro) != old.length(.micro) || new.length(.long) != old.length(.long) {
-                    readyIdeas = [:]   // written for the old settings
-                    prefetchIdeas()
-                }
                 tick()
                 updateClock()
             }
@@ -145,7 +136,6 @@ final class BreakController: ObservableObject {
         simulation = UserDefaults.standard.observe(\.simulatedBreak, options: [.initial]) { _, _ in
             Task { @MainActor in BreakController.shared.simulate() }
         }
-        prefetchIdeas()
     }
 
     // MARK: time away and restarts
@@ -304,9 +294,7 @@ final class BreakController: ObservableObject {
             }
             placePill()
             hideOverlay()
-            ideaTask?.cancel()
             idea = .hidden
-            prefetchIdeas()   // after the idea just shown is saved, so the next isn't a repeat of it
         case let .away(counted):
             for k in [BreakKind.micro, .long] { if let due = counted[k] { record(k, due: due, .away) } }
             let kinds = counted.keys.map(\.rawValue).sorted().joined(separator: " and ")
@@ -363,57 +351,24 @@ final class BreakController: ObservableObject {
         }
     }
 
-    /// Writing an idea never holds up the timer: a placeholder shows while it runs, and a failure keeps the last idea
-    /// or hides the line.
+    /// Picks the break's idea from Pulse's list or the person's own. Reroll never brings back the one on screen.
     private func requestIdea(surprise: Bool) {
         let s = schedule.settings
-        if let text = UserDefaults.standard.simulatedIdea, kind != nil { idea = .shown(text); return }
-        guard s.ideas, let kind, BreakIdeas.available else { idea = .hidden; return }
-        ideaTask?.cancel()
-        if !surprise, let text = readyIdeas.removeValue(forKey: kind) {   // the next break's idea, written ahead
-            log.notice("idea: shown at once, written ahead")
-            idea = .shown(text)
-            rememberShownIdea()
-            return
-        }
-        let previous = idea
-        idea = .loading
-        let recent = recentIdeas
-        ideaTask = Task { [weak self] in
-            let text = await BreakIdeas.generate(length: s.length(kind), level: s.level, interests: s.interests,
-                                                 surprise: surprise, recent: recent)
-            guard !Task.isCancelled, let self else { return }
-            if let text {
-                idea = .shown(text)
-                rememberShownIdea()
-            } else {
-                log.notice("idea: none (the model failed or ran out of time)")
-                idea = previous == .loading ? .hidden : previous
-            }
-        }
+        if let text = UserDefaults.standard.simulatedIdea, kind != nil { idea = .shown(BreakIdea(text: text)); return }
+        guard s.ideas, kind != nil else { idea = .hidden; return }
+        var recent = recentIdeas
+        if case let .shown(current) = idea { recent.append(current.text) }
+        var rng = SystemRandomNumberGenerator()
+        idea = BreakIdeaList.pick(from: BreakIdeas.all, level: surprise ? nil : s.ideaLevel, own: BreakIdeaList.own(s.ownIdeas),
+                                  recent: recent, using: &rng).map(Idea.shown) ?? .hidden
+        rememberShownIdea()
     }
 
-    /// Writes the next micro and long break's ideas ahead, one at a time, for the countdown to show at once: the model
-    /// takes a second or more, so a break started from the countdown straight away used to open without one.
-    private func prefetchIdeas() {
-        prefetchTask?.cancel()
-        let s = schedule.settings
-        guard s.enabled, s.ideas, BreakIdeas.available, UserDefaults.standard.simulatedIdea == nil else { return }
-        prefetchTask = Task { [weak self] in
-            for kind in [BreakKind.micro, .long] {
-                guard let self, !Task.isCancelled, readyIdeas[kind] == nil else { continue }
-                let text = await BreakIdeas.generate(length: s.length(kind), level: s.level, interests: s.interests,
-                                                     surprise: false, recent: recentIdeas)
-                if let text, !Task.isCancelled { readyIdeas[kind] = text }
-            }
-        }
-    }
-
-    /// Saves the idea once it's on the break screen: one written during a countdown that was skipped never counts.
+    /// Saves the idea once it's on the break screen: one picked during a countdown that was skipped never counts.
     /// A `simulatedIdea` isn't saved.
     private func rememberShownIdea() {
-        guard !panels.isEmpty, case let .shown(text) = idea, UserDefaults.standard.simulatedIdea == nil else { return }
-        recentIdeas = BreakIdeaPrompt.remember(text, in: recentIdeas)
+        guard !panels.isEmpty, case let .shown(shown) = idea, UserDefaults.standard.simulatedIdea == nil else { return }
+        recentIdeas = BreakIdeaList.remember(shown.text, in: recentIdeas)
         if let data = try? JSONEncoder().encode(recentIdeas) { try? data.write(to: Self.ideasURL, options: .atomic) }
     }
 
@@ -483,7 +438,7 @@ final class BreakController: ObservableObject {
         (panels.first { $0.screen == main } ?? panels.first)?.makeKey()
         if let first = panels.first {
             NSAccessibility.post(element: first, notification: .announcementRequested, userInfo: [
-                .announcement: "Time to take a break: \(BreakIdeaPrompt.duration(s.length(kind)))",
+                .announcement: "Time to take a break: \(spokenDuration(s.length(kind)))",
                 .priority: NSAccessibilityPriorityLevel.high.rawValue,
             ])
         }

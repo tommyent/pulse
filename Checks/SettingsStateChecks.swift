@@ -32,9 +32,9 @@ enum SettingsStateChecks {
         assert(again["breakSettings"] == nil)
         var changed = p
         changed.breaks.enabled = true
-        changed.breaks.interests = ["tea"]
+        changed.breaks.ownIdeas = "Hum a tune"
         let back = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(changed))
-        assert(back.breaks.enabled && back.breaks.interests == ["tea"] && back.battery == p.battery && back.dock == .bottom)
+        assert(back.breaks.enabled && back.breaks.ownIdeas == "Hum a tune" && back.battery == p.battery && back.dock == .bottom)
 
         // the oldest form: only the keys Pulse has always written
         let oldest = try! JSONDecoder().decode(AppState.Persisted.self, from: Data(#"{"enabled":["claude"],"order":["claude"],"alwaysOnTop":true,"showOverlay":true}"#.utf8))

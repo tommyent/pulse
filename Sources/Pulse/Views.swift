@@ -710,6 +710,7 @@ struct OverlayView: View {
     var onRailFrame: ((CGRect) -> Void)? = nil
     var onCardFrame: ((CGRect) -> Void)? = nil
     var onHintFrame: ((CGRect) -> Void)? = nil
+    var onPillFrame: ((CGRect) -> Void)? = nil
     var pointerInside: (() -> Bool)? = nil   // whether the pointer is really over the panel
     @ObservedObject private var battery = BatteryMonitor.shared
     @ObservedObject private var breaks = BreakController.shared
@@ -784,7 +785,7 @@ struct OverlayView: View {
             ? AnyLayout(VStackLayout(alignment: tail == .leading ? .leading : .trailing, spacing: 10))
             : AnyLayout(HStackLayout(alignment: tail == .top ? .top : .bottom, spacing: 10))
         beside {
-            BreakPill(controller: breaks, tail: tail)
+            BreakPill(controller: breaks, tail: tail, onFrame: onPillFrame)
             // hovering the rail with nothing else open: when the next breaks come
             if state.hoveringOverlay, !state.cardVisible, !state.petVisible, breaks.phase.isWorking, breaks.settings.enabled {
                 NextBreakHint(controller: breaks, tail: tail)

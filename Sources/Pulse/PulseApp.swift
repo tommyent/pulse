@@ -81,6 +81,7 @@ final class OverlayController {
     private var railFrame = CGRect.zero
     private var cardFrame = CGRect.zero
     private var hintFrame = CGRect.zero   // the next-break hint on hover; .zero while it's hidden
+    private var pillFrame = CGRect.zero   // a break's countdown; stale once it ends, so read only during one
     private var localClickMonitor: Any?
     private var globalClickMonitor: Any?
     private var voiceKey: HotKey?
@@ -148,8 +149,10 @@ final class OverlayController {
     private func mouseDown(_ event: NSEvent) {
         guard NSApp.modalWindow == nil else { return }   // a click in an approval alert is not a click away from the pet
         let point = CGPoint(x: event.locationInWindow.x, y: panel.frame.height - event.locationInWindow.y)
+        // a click on the countdown must not collapse the rail: the pill would move off the pointer before mouse-up
         if event.window !== panel || overlayClickIsOutside(point, in: CGRect(origin: .zero, size: panel.frame.size),
-                                                          rail: railFrame, card: state.cardVisible || state.petVisible ? cardFrame : hintFrame) {
+                                                          rail: railFrame, card: state.cardVisible || state.petVisible ? cardFrame : hintFrame)
+            && !(BreakController.shared.phase.isCountdown && pillFrame.contains(point)) {
             state.collapseOverlay()
         }
     }
@@ -225,6 +228,7 @@ final class OverlayController {
             onRailFrame: { [weak self] in self?.railFrame = $0 },
             onCardFrame: { [weak self] in self?.cardFrame = $0 },
             onHintFrame: { [weak self] in self?.hintFrame = $0 },
+            onPillFrame: { [weak self] in self?.pillFrame = $0 },
             pointerInside: { [weak self] in self.map { $0.panel.frame.insetBy(dx: 1, dy: 1).contains(NSEvent.mouseLocation) } ?? false }))
         panel.contentView = hosting
         if panel.setFrameUsingName("PulseOverlay"), panel.frame.width > 50 {
