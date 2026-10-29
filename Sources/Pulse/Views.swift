@@ -909,7 +909,7 @@ struct MenuBarPopover: View {
         }
         .padding(14)
         .frame(width: 300)
-        .pulseSurface(in: Rectangle())
+        .pulseSurface(in: Rectangle(), bordered: false)   // the native menu window already supplies its rim
         .environment(\.showsRemaining, state.showsRemaining)
     }
 }

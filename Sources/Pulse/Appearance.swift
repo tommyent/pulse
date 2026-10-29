@@ -17,6 +17,12 @@ enum PulsePalette {
     // Match the dark menu progress track with opaque ink, independent of glass and backdrop.
     static let track = Color(.sRGB, red: 37.0 / 255, green: 37.0 / 255, blue: 39.0 / 255, opacity: 1)
     static let secondary = Color(.sRGB, red: 0.9, green: 0.9, blue: 0.9, opacity: 1)
+    static let border = LinearGradient(stops: [
+        .init(color: .white.opacity(0.3), location: 0),
+        .init(color: .white.opacity(0.12), location: 0.1),
+        .init(color: .white.opacity(0.12), location: 0.9),
+        .init(color: .white.opacity(0.3), location: 1)
+    ], startPoint: .top, endPoint: .bottom)
 }
 
 struct PulseSurface<S: Shape>: View {
@@ -64,6 +70,17 @@ private struct PulseWindowBacking: NSViewRepresentable {
 }
 
 extension View {
-    func pulseSurface<S: Shape>(in shape: S) -> some View { background { PulseSurface(shape: shape) } }
+    func pulseSurface<S: Shape>(in shape: S, bordered: Bool = true) -> some View {
+        background { PulseSurface(shape: shape) }
+            .overlay {
+                if bordered {
+                    // Clip the centered stroke to keep a 1 pt rim inside shapes with tails too.
+                    shape.stroke(PulsePalette.border, style: StrokeStyle(lineWidth: 2, lineJoin: .round))
+                        .clipShape(shape)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+    }
     func pulsePresentation(_ state: AppState) -> some View { modifier(PulsePresentation(state: state)) }
 }
