@@ -60,24 +60,34 @@ enum SettingsStateChecks {
         let oldest = try! JSONDecoder().decode(AppState.Persisted.self, from: Data(#"{"enabled":["claude"],"order":["claude"],"alwaysOnTop":true,"showOverlay":true}"#.utf8))
         assert(oldest.battery == BatterySettings() && oldest.breaks == BreakSettings() && oldest.dock == nil && oldest.appearance == .solid)
         checkTrackRendering()
-        print("Settings state checks passed: saved values preserved, Tint migrated, opaque ring track independent of backdrop")
+        print("Settings state checks passed: saved values preserved, Tint migrated, ring and battery tracks match menu grey in both looks")
     }
 
     @MainActor private static func checkTrackRendering() {
-        var samples: [[UInt8]] = []
-        for background in [Color.black, .white] {
-            let renderer = ImageRenderer(content: RingView(account: .claude, percent: 0, showPercent: false)
-                .padding(4).background(background).environment(\.colorScheme, .dark))
-            renderer.scale = 2
-            let image = renderer.cgImage!
-            let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
-                                    bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)!
-            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-            let pixel = context.data!.assumingMemoryBound(to: UInt8.self).advanced(by: (60 * image.width + 10) * 4)
-            samples.append(Array(UnsafeBufferPointer(start: pixel, count: 4)))
+        for appearance in [PulseAppearance.glass, .solid] {
+            for background in [Color.black, .white] {
+                for size: CGFloat in [28, 52] {
+                    let views = [
+                        AnyView(RingView(account: .claude, percent: 0, size: size, showPercent: false)),
+                        AnyView(BatteryRing(reading: BatteryReading(percent: 0, onAC: false, minutesLeft: nil),
+                                            level: .critical, size: size, showPercent: false))
+                    ]
+                    for view in views {
+                        let renderer = ImageRenderer(content: view.padding(4).background(background)
+                            .environment(\.colorScheme, .dark).environment(\.pulseAppearance, appearance))
+                        renderer.scale = 2
+                        let image = renderer.cgImage!
+                        let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
+                                                bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)!
+                        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+                        let pixel = context.data!.assumingMemoryBound(to: UInt8.self).advanced(by: ((image.height / 2) * image.width + 10) * 4)
+                        let sample = Array(UnsafeBufferPointer(start: pixel, count: 4))
+                        assert(sample == [37, 37, 39, 255],
+                               "ring and battery tracks must match the menu grey, opaque in both looks and sizes over any backdrop: \(sample)")
+                    }
+                }
+            }
         }
-        assert(samples[0] == samples[1] && samples[0][3] == 255,
-               "the empty ring's track must paint opaque ink, independent of the content underneath")
     }
 }

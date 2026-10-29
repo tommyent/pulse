@@ -14,8 +14,8 @@ extension EnvironmentValues {
 
 enum PulsePalette {
     static let surface = Color(.sRGB, red: 0.07, green: 0.07, blue: 0.08, opacity: 1)
-    // Opaque sRGB ink, independent of semantic vibrancy and the desktop beneath the glass.
-    static let track = Color(.sRGB, red: 0.8, green: 0.8, blue: 0.8, opacity: 1)
+    // Match the dark menu progress track with opaque ink, independent of glass and backdrop.
+    static let track = Color(.sRGB, red: 37.0 / 255, green: 37.0 / 255, blue: 39.0 / 255, opacity: 1)
     static let secondary = Color(.sRGB, red: 0.9, green: 0.9, blue: 0.9, opacity: 1)
 }
 
