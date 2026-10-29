@@ -26,7 +26,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1</string>
     <key>CFBundleVersion</key><string>1</string>
-    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>LSUIElement</key><true/>
     <key>NSMicrophoneUsageDescription</key><string>Live voice with the Codex pet uses your microphone.</string>
 </dict></plist>
@@ -36,6 +36,7 @@ cp "$BIN_DIR/Pulse" "$APP/Contents/MacOS/Pulse"
 cp -R "$BIN_DIR/Pulse_Pulse.bundle" "$APP/Contents/Resources/"
 cp Sources/Pulse/Resources/AppIcon.icns "$APP/Contents/Resources/"
 
+./scripts/stamp-sdk.sh "$APP/Contents/MacOS/Pulse"
 codesign -f -s "${CODE_SIGN_IDENTITY:--}" --identifier app.pulse "$APP"
 codesign --verify --strict "$APP"
 

@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Pulse",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS("26.0")],
     targets: [
         .executableTarget(name: "Pulse", resources: [.copy("Resources")])
     ]

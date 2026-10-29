@@ -12,7 +12,7 @@ Everything runs on your own subscription sign-ins. There are no API keys, no acc
 
 ## Requirements
 
-- **Run:** macOS 14 Sonoma or later. The glass styling needs macOS 26. Tested on Apple Silicon with macOS 27; Intel is untested.
+- **Run:** macOS 26 or later. Tested on Apple Silicon; Intel is untested.
 - **Build:** Xcode 26 or later (the Command Line Tools alone lack the SwiftUI macro plugin) and Swift 6.2 or later. No third-party packages.
 - **Codex:** a signed-in Codex CLI (`codex login`). Voice needs a CLI package containing `codex-voice-host` (tested with 0.160.0), microphone permission, and an account that supports the CLI's experimental realtime protocol.
 - **Claude and Grok:** sign in through their CLIs, or use **Connect** in Pulse's Settings. Grok CLI support reads Grok Build's `~/.grok/auth.json`.

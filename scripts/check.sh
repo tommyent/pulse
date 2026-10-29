@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"   # shared across runs, rebuilt only when sources change
+./Checks/SDKStampChecks.sh
 swiftc Sources/Pulse/DockGeometry.swift Sources/Pulse/Models.swift Checks/OverlayChecks.swift -o "$OUT/overlay"
 "$OUT/overlay"
 swiftc Sources/Pulse/Models.swift Checks/LimitAlertChecks.swift -o "$OUT/limit"

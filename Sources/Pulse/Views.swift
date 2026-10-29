@@ -21,7 +21,7 @@ extension EnvironmentValues {
     }
 }
 
-/// Liquid Glass on macOS 26+, a flat card on older systems. Follows the view's colorScheme.
+/// Liquid Glass following the view's colorScheme.
 private struct GlassCard<S: Shape>: ViewModifier {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.glassTint) private var tinted
@@ -34,11 +34,8 @@ private struct GlassCard<S: Shape>: ViewModifier {
                                                          startPoint: .top, endPoint: .bottom))
                                     .shadow(color: .black.opacity(0.45), radius: 7, y: 3))
                 .overlay(rim)
-        } else if #available(macOS 26.0, *) {
-            content.glassEffect(tinted ? .regular.tint(Color.white.opacity(0.35)) : .regular, in: shape)
-                .overlay(rim)
         } else {
-            content.background(scheme == .dark ? cardBackground : Color(white: 0.95), in: shape)
+            content.glassEffect(tinted ? .regular.tint(Color.white.opacity(0.35)) : .regular, in: shape)
                 .overlay(rim)
         }
     }
@@ -690,14 +687,10 @@ private struct FadesIn: ViewModifier {
 private struct FollowsBottom: ViewModifier {
     @Binding var following: Bool
 
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(macOS 15, *) {
-            content.onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { old, new in
-                following = transcriptFollows(following, oldOffset: old.contentOffset.y, offset: new.contentOffset.y,
-                                              visible: new.containerSize.height, content: new.contentSize.height)
-            }
-        } else {
-            content   // ponytail: macOS 14 has no scroll geometry, so it always follows as before
+    func body(content: Content) -> some View {
+        content.onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { old, new in
+            following = transcriptFollows(following, oldOffset: old.contentOffset.y, offset: new.contentOffset.y,
+                                          visible: new.containerSize.height, content: new.contentSize.height)
         }
     }
 }
