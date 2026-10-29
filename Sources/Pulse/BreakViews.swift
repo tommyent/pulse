@@ -212,7 +212,7 @@ struct BreakOverlayView: View {
         Text(controller.phase.isPaused ? "paused" : "left in your break")
             .font(.system(size: 17 * s))
             .tracking(0.8 * s)
-            .foregroundStyle(Color(white: 0.5))
+            .foregroundStyle(Color.secondary)
     }
 
     private func buttons(_ s: CGFloat) -> some View {
