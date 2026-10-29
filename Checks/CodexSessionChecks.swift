@@ -3,7 +3,12 @@ import AppKit
 
 // This binary supplies a fake CLI. It never launches the user's Codex or reads its credentials.
 func locateBinary(_ name: String) -> URL? {
-    ProcessInfo.processInfo.environment["PULSE_CHECK_CODEX"].map { URL(fileURLWithPath: $0) }
+    let environment = ProcessInfo.processInfo.environment
+    guard let path = environment["PULSE_CHECK_CODEX"] else { return nil }
+    // Fixture controls travel on disk so production never needs a test-only environment exception.
+    let flags = environment.filter { ["PULSE_CHECK_LOG", "PULSE_CHECK_SLOW_START"].contains($0.key) }
+    try! JSONSerialization.data(withJSONObject: flags).write(to: URL(fileURLWithPath: path + ".fixture-env"))
+    return URL(fileURLWithPath: path)
 }
 
 @main
@@ -74,7 +79,10 @@ enum CodexSessionChecks {
         #!/usr/bin/env node
         const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
         const assert = require('node:assert/strict');
-        const log = word => process.env.PULSE_CHECK_LOG && require('node:fs').appendFileSync(process.env.PULSE_CHECK_LOG, word + '\\n');
+        const fixture = JSON.parse(require('node:fs').readFileSync(__filename + '.fixture-env', 'utf8'));
+        assert.equal(process.env.PULSE_CHECK_SECRET, undefined, 'unlisted parent secrets never reach Codex');
+        assert.equal(process.env.PULSE_CHECK_LOG, undefined, 'fixture controls must not weaken the production allowlist');
+        const log = word => fixture.PULSE_CHECK_LOG && require('node:fs').appendFileSync(fixture.PULSE_CHECK_LOG, word + '\\n');
         log('spawn');
         let dieNext = false, rejectNext = false, slowThread = false, listMode = 'empty', reports = 0, earlyEnd = false;
         let holdReport = false, heldEarlyReportReply = null, configDefault = {}, teamSaved = 'high', silentReads = false;
@@ -100,7 +108,14 @@ enum CodexSessionChecks {
             assert(hint.includes('never start helpers') && hint.includes("Helpers don't open browsers or apps unless the owner asked"), 'delegation keeps recursion and user-authorization boundaries');
           }
           assert(!m.method || !m.method.startsWith('config/') || m.method === 'config/read', 'Pulse opens must not mutate global configuration');
-          if (m.method === 'initialize') setTimeout(() => send({ id: m.id, result: {} }), process.env.PULSE_CHECK_SLOW_START ? 600 : 0);
+          if (m.method === 'initialize') setTimeout(() => send({ id: m.id, result: {} }), fixture.PULSE_CHECK_SLOW_START ? 600 : 0);
+          if (m.method === 'fixture/environment') {
+            assert(process.env.HOME && process.env.PATH, 'home and command lookup stay available');
+            const git = require('node:path').join(__dirname, 'git-fixture');
+            require('node:child_process').execFileSync('/usr/bin/git', ['init', '-q', git]);
+            const status = require('node:child_process').execFileSync('/usr/bin/git', ['-C', git, 'status', '--porcelain'], {encoding:'utf8'});
+            send({id:m.id, result:{status}});
+          }
           if (m.method === 'thread/start') {
             assert.equal(m.params.approvalPolicy, 'on-request');
             assert.equal(m.params.approvalsReviewer, 'auto_review');
@@ -442,6 +457,8 @@ enum CodexSessionChecks {
         try script.write(to: cli, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
         setenv("PULSE_CHECK_CODEX", cli.path, 1)
+        setenv("PULSE_CHECK_SECRET", "fixture-credential", 1)
+        defer { unsetenv("PULSE_CHECK_SECRET") }
         checkDir = dir
         let session = CodexPetSession(workspace: dir.appendingPathComponent("pet"), defaults: isolatedDefaults())
         defer { CodexAppServer.shared.stop() }
@@ -456,6 +473,9 @@ enum CodexSessionChecks {
         assert(!session.thinking, "Stop must interrupt the active turn using its ID")
         assert(session.status == nil)
         print("Codex session check passed: text Stop supplies the active thread and turn IDs")
+        let environmentCheck = try await CodexAppServer.shared.request("fixture/environment", [:])
+        assert(environmentCheck["status"] as? String == "", "a child git status must work with the restricted environment")
+        print("Codex environment check passed: parent secrets excluded, child git status works")
 
         if let option = CommandLine.arguments.firstIndex(of: "--suite") {
             guard option + 1 < CommandLine.arguments.count else {

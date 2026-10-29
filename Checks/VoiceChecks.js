@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // Fake native helper for CodexSessionChecks; no audio devices or network.
 const assert = require('node:assert/strict');
+const stderr = require('node:fs').fstatSync(2);
+assert(stderr.isFile() && (stderr.mode & 0o777) === 0o600 && stderr.nlink === 0,
+  'voice stderr must be a private, unlinked temporary file');
 let buffer = Buffer.alloc(0), stage = 'hello', controls = 0, dying = false, refusing = false;
 function send(message) {
   const body = Buffer.from(JSON.stringify(message));

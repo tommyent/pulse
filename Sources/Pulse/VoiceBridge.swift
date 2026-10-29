@@ -26,7 +26,6 @@ final class VoiceBridge {
     private var helperVersion: String?   // the helper's Codex version, named when it fails
     private var errorHandle: FileHandle?
     static let speakingFloor = 512
-    private let errorLog = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("pulse-voice.err")
     private var prewarmDevice: (AudioDeviceID, AudioDeviceIOProcID)?
     private var bluetoothInput = false
     private var devicesOpenedAt: Date?
@@ -89,9 +88,13 @@ final class VoiceBridge {
         child.environment = environment
         child.standardInput = stdin
         child.standardOutput = stdout
-        FileManager.default.createFile(atPath: errorLog.path, contents: nil)
-        errorHandle = try? FileHandle(forWritingTo: errorLog)
-        child.standardError = errorHandle ?? FileHandle.nullDevice
+        var errorPath = Array((NSTemporaryDirectory() + "pulse-voice.XXXXXX").utf8CString)
+        let fd = mkstemp(&errorPath)
+        guard fd >= 0 else { close(); throw CodexAppServer.Failure.remote("Could not create private voice diagnostics.") }
+        errorHandle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        // The child keeps the private descriptor; no named file or helper stderr survives the call.
+        guard unlink(errorPath) == 0 else { close(); throw CodexAppServer.Failure.remote("Could not secure private voice diagnostics.") }
+        child.standardError = errorHandle
         stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             Task { @MainActor in
@@ -163,9 +166,6 @@ final class VoiceBridge {
         }
         if warmupStart != nil { mark("failed: \(message)") }
         else { log.notice("voice failed: \(message, privacy: .public)") }
-        if let line = helperStderrTail() {
-            log.notice("voice helper stderr: \(line, privacy: .public)")
-        }
         warmupStart = nil
         let waiter = offerWaiter; offerWaiter = nil
         close()
@@ -257,18 +257,6 @@ final class VoiceBridge {
         let state = muted ? "muted" : "unmuted"
         log.notice("voice: microphone \(state, privacy: .public)")
         send(["type": "setAudioControls", "controls": ["microphoneMuted": muted, "speakerSuppressed": false]], expecting: "audioControlsApplied")
-    }
-
-    /// The helper's own last line, read straight off its stderr file so a failure explains itself.
-    /// Bounded at both ends: the last 4 KiB of the file, then the last 200 characters of one line.
-    private func helperStderrTail() -> String? {
-        guard let handle = try? FileHandle(forReadingFrom: errorLog) else { return nil }
-        defer { try? handle.close() }
-        let end = (try? handle.seekToEnd()) ?? 0
-        try? handle.seek(toOffset: end > 4096 ? end - 4096 : 0)
-        guard let data = try? handle.readToEnd(), !data.isEmpty,
-              let line = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).last else { return nil }
-        return String(line.suffix(200))
     }
 
     // MARK: Bluetooth microphones
