@@ -355,11 +355,11 @@ final class BreakController: ObservableObject {
     private func requestIdea(surprise: Bool) {
         let s = schedule.settings
         if let text = UserDefaults.standard.simulatedIdea, kind != nil { idea = .shown(BreakIdea(text: text)); return }
-        guard s.ideas, kind != nil else { idea = .hidden; return }
+        guard s.ideas, let kind else { idea = .hidden; return }
         var recent = recentIdeas
         if case let .shown(current) = idea { recent.append(current.text) }
         var rng = SystemRandomNumberGenerator()
-        idea = BreakIdeaList.pick(from: BreakIdeas.all, level: surprise ? nil : s.ideaLevel, own: BreakIdeaList.own(s.ownIdeas),
+        idea = BreakIdeaList.pick(from: BreakIdeas.all.map { $0.fitting(s.length(kind)) }, level: surprise ? nil : s.ideaLevel, own: BreakIdeaList.own(s.ownIdeas),
                                   recent: recent, using: &rng).map(Idea.shown) ?? .hidden
         rememberShownIdea()
     }

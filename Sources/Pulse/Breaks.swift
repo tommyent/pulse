@@ -485,6 +485,15 @@ struct BreakIdea: Equatable {
     var name = ""
     var text: String
     var level = 0
+
+    /// Timed catalog ideas last at most 30 seconds, capped by the configured break length.
+    func fitting(_ length: TimeInterval) -> Self {
+        let seconds = String(Int(max(1, min(30, length))))
+        var fitted = self
+        fitted.name = name.replacingOccurrences(of: "{seconds}", with: seconds)
+        fitted.text = text.replacingOccurrences(of: "{seconds}", with: seconds)
+        return fitted
+    }
 }
 
 /// Picking the break's idea, from Pulse's list (Resources/break-ideas.json) or the person's own.

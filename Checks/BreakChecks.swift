@@ -265,6 +265,18 @@ enum BreakChecks {
         assert(list.allSatisfy { !$0.name.isEmpty && !$0.text.isEmpty })
         assert(Set(list.map { $0.name.lowercased() }).count == list.count)
         assert(BreakIdeaList.parse(Data("nope".utf8)).isEmpty)
+        let timed = list.filter { $0.text.contains("{seconds}") }
+        assert(timed.count > 30, "the 30-second catalog suggestions must fit shorter micro breaks")
+        for length in [10.0, 20.0, 300.0] {
+            for idea in timed {
+                let fitted = idea.fitting(length)
+                assert(!fitted.name.contains("{seconds}") && !fitted.text.contains("{seconds}"))
+                let seconds = Int(min(30, length))
+                assert(fitted.text.contains("\(seconds) seconds") || fitted.text.contains("\(seconds)-second"), "\(fitted.text)")
+            }
+        }
+        let custom = BreakIdea(text: "An idea with no timed instruction")
+        assert(custom.fitting(20) == custom)
 
         let own = BreakIdeaList.own("  Water the fern \n\n\tHum a tune\n   \n")
         assert(own == [BreakIdea(text: "Water the fern"), BreakIdea(text: "Hum a tune")] && BreakIdeaList.own("").isEmpty)

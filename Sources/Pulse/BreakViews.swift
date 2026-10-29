@@ -252,8 +252,7 @@ struct BreakOverlayView: View {
     @ViewBuilder private func ideaLine(_ s: CGFloat, width: CGFloat, font: CGFloat, top: CGFloat, bar: UInt32) -> some View {
         if case let .shown(shown) = controller.idea {
             VStack(spacing: 14 * s) {
-                (Text(Image(systemName: "sparkle")).foregroundColor(Color(rgb: bar)) + Text("  ")
-                    + Text(shown.name.isEmpty ? "" : shown.name + ". ").bold() + Text(shown.text))
+                Text("\(Text(Image(systemName: "sparkle")).foregroundStyle(Color(rgb: bar)))  \(Text(shown.name.isEmpty ? "" : shown.name + ". ").bold())\(shown.text)")
                 .font(.system(size: font))
                 .multilineTextAlignment(.center)
                 .perch(.ideaRow)   // measured on the words themselves, not the wider frame
