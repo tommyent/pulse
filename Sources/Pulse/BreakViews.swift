@@ -53,7 +53,7 @@ struct BreakPill: View {
                         TimelineView(.periodic(from: .now, by: 1)) { context in
                             let left = max(0, endsAt.timeIntervalSince(context.date))
                             ZStack {
-                                Circle().stroke(PulsePalette.track, lineWidth: 4)
+                                RingTrack(lineWidth: 4)
                                 Circle().trim(from: 0, to: left / BreakSchedule.countdown)
                                     .stroke(bar, style: StrokeStyle(lineWidth: 4, lineCap: .round))
                                     .rotationEffect(.degrees(-90))

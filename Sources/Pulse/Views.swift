@@ -79,7 +79,11 @@ private struct CodexPet: View {
     var body: some View {
         let still = reduceMotion || (state == .idle && !animateIdle)
         ZStack {
-            Circle().stroke(session.voiceTint ?? PulsePalette.track, lineWidth: size * 0.12)
+            if let tint = session.voiceTint {
+                Circle().stroke(tint, lineWidth: size * 0.12)
+            } else {
+                RingTrack(lineWidth: size * 0.12)
+            }
             TimelineView(.animation(minimumInterval: 0.1, paused: still)) { context in
                 if let frames = Self.frames[state], frames.count == CodexPetSprite.track(state).durations.count {
                     let index = still ? 0 : CodexPetSprite.frame(state, at: context.date.timeIntervalSinceReferenceDate)
@@ -128,7 +132,7 @@ struct RingView: View {
                         .frame(width: d, height: d, alignment: .bottom)
                         .clipShape(Circle())
                 }
-                Circle().stroke(PulsePalette.track, lineWidth: size * 0.12)
+                RingTrack(lineWidth: size * 0.12)
                 if let percent {
                     arc(percent, lineWidth: size * 0.12)
                 }
@@ -179,7 +183,7 @@ struct BatteryRing: View {
     var body: some View {
         VStack(spacing: 6) {
             ZStack {
-                Circle().stroke(PulsePalette.track, lineWidth: size * 0.12)
+                RingTrack(lineWidth: size * 0.12)
                 Circle()
                     .trim(from: 0, to: CGFloat(max(reading.percent, 1)) / 100)
                     .stroke(level.color, style: StrokeStyle(lineWidth: size * 0.12, lineCap: .round))

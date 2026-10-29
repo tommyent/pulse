@@ -60,10 +60,17 @@ enum SettingsStateChecks {
         let oldest = try! JSONDecoder().decode(AppState.Persisted.self, from: Data(#"{"enabled":["claude"],"order":["claude"],"alwaysOnTop":true,"showOverlay":true}"#.utf8))
         assert(oldest.battery == BatterySettings() && oldest.breaks == BreakSettings() && oldest.dock == nil && oldest.appearance == .solid)
         checkTrackRendering()
-        print("Settings state checks passed: saved values preserved, Tint migrated, ring and battery tracks match menu grey in both looks")
+        print("Settings state checks passed: saved values preserved, Tint migrated, menu-grey track cores and visible boundaries in both looks")
     }
 
     @MainActor private static func checkTrackRendering() {
+        func luminance(_ rgb: [UInt8]) -> Double {
+            let c = rgb.prefix(3).map { value -> Double in
+                let s = Double(value) / 255
+                return s <= 0.04045 ? s / 12.92 : pow((s + 0.055) / 1.055, 2.4)
+            }
+            return c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722
+        }
         for appearance in [PulseAppearance.glass, .solid] {
             for background in [Color.black, .white] {
                 for size: CGFloat in [28, 52] {
@@ -85,6 +92,15 @@ enum SettingsStateChecks {
                         let sample = Array(UnsafeBufferPointer(start: pixel, count: 4))
                         assert(sample == [37, 37, 39, 255],
                                "ring and battery tracks must match the menu grey, opaque in both looks and sizes over any backdrop: \(sample)")
+                        let edgeX = Int(ceil(8 - size * 0.12))
+                        let edgePixel = context.data!.assumingMemoryBound(to: UInt8.self)
+                            .advanced(by: ((image.height / 2) * image.width + edgeX) * 4)
+                        let edge = Array(UnsafeBufferPointer(start: edgePixel, count: 4))
+                        assert(edge[3] == 255)
+                        for surface: [UInt8] in [[18, 18, 20], [14, 10, 22]] {
+                            assert((luminance(edge) + 0.05) / (luminance(surface) + 0.05) >= 3,
+                                   "the track boundary must remain visible against the dark surface and near-black page: \(edge)")
+                        }
                     }
                 }
             }
