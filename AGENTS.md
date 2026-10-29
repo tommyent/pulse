@@ -7,3 +7,4 @@
 - WKWebView: call async page functions as `void fn()`; a returned Promise makes evaluateJavaScript fail with "unsupported type".
 - Use canonical Codex realtime item IDs for voice bubbles and keep delegated agent text separate. Verify interleaved speaker deltas, full-text completions, repeated events, and late completions after voice ends.
 - For live voice, keep connecting, listening and a paused microphone visibly distinct in the ring, card and accessibility values; a connected call with a muted mic must not look as if it is starting.
+- Grouped Settings forms can separate captions from native controls. Give checkboxes and steppers explicit accessibility names, distinguish repeated controls by purpose, and verify the live accessibility tree and activation instead of relying on visible labels.

@@ -965,10 +965,12 @@ struct SettingsView: View {
                             try? on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
                             loginItem = SMAppService.mainApp.status
                         }))
+                        .accessibilityLabel("Launch at login")
                     if loginItem == .requiresApproval {
                         Button("Allow Pulse in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
                     }
                     Toggle("Tint the glass", isOn: state.glassTintBinding)
+                        .accessibilityLabel("Tint the glass")
                         .help("Adds a black tint to the dark glass. Off leaves the dark system glass untinted.")
                 }
             }
@@ -1015,6 +1017,7 @@ struct SettingsView: View {
                                     .help("Reads agy's own /usage report; sign in by running agy once")
                             }
                             Toggle("Enable \(id.displayName)", isOn: state.isEnabled(id)).labelsHidden().toggleStyle(.switch)
+                                .accessibilityLabel("Enable \(id.displayName)")
                         } label: {
                             Text(id.displayName)
                             if let snap = state.snapshots[id] {
@@ -1031,10 +1034,13 @@ struct SettingsView: View {
             tab("Rings", "circle.circle", height: 240) {
                 Section {
                     Toggle("Show usage rings on desktop", isOn: $state.persisted.showOverlay)
+                        .accessibilityLabel("Show usage rings on desktop")
                     Toggle("Always on top", isOn: $state.persisted.alwaysOnTop)
+                        .accessibilityLabel("Always on top")
                     Text("Drag the usage rings to any screen edge. Top and bottom arrange horizontally.")
                         .font(.caption).foregroundStyle(.secondary)
                     Toggle("Show what's left", isOn: state.showsRemainingBinding)
+                        .accessibilityLabel("Show what's left")
                         .help("Rings, bars and percentages show what's left of each limit instead of what's used, emptying as you use it.")
                 }
             }
@@ -1044,6 +1050,7 @@ struct SettingsView: View {
             tab("Codex pet", "pawprint", height: 290) {
                 Section {
                     Toggle("Show the Codex pet", isOn: state.showPetBinding)
+                        .accessibilityLabel("Show the Codex pet")
                         .help("Chat and live voice with Codex, separate from the Codex usage ring. Off hides the pet, ends a call, frees the shortcut and starts nothing new; work already running finishes, then Codex stops.")
                     LabeledContent("Shortcut") { HotKeyRecorder(combo: state.voiceHotKeyBinding) }.disabled(!state.showsPet)
                     Text("Tap to start hands-free voice; tap again to pause or resume the microphone. Hold to talk; letting go pauses the microphone while replies keep playing. Double-tap to end the call; Escape also ends it and closes the card.")
@@ -1088,16 +1095,22 @@ struct BatterySettingsSection: View {
     @ViewBuilder private var rows: some View {
         let b = settings
         Toggle("Show the battery in the rail", isOn: $settings.showInRail)
+            .accessibilityLabel("Show the battery in the rail")
             .onAppear {
                 sounds = BatterySounds.all().map(\.name)
                 pushoverReady = Pushover.configured
             }
         Toggle("Alert when the battery is low", isOn: $settings.alerts)
+            .accessibilityLabel("Alert when the battery is low")
         LabeledContent("Yellow and low alert at") {
             Stepper("\(b.lowPercent)%", value: $settings.lowPercent, in: (b.criticalPercent + 5)...90, step: 5)
+                .accessibilityLabel("Yellow and low battery alert threshold")
+                .accessibilityValue("\(b.lowPercent) percent")
         }
         LabeledContent("Red and critical alert at") {
             Stepper("\(b.criticalPercent)%", value: $settings.criticalPercent, in: 5...(b.lowPercent - 5), step: 5)
+                .accessibilityLabel("Red and critical battery alert threshold")
+                .accessibilityValue("\(b.criticalPercent) percent")
         }
         soundRow("Low sound", sound: $settings.lowSound, loops: $settings.lowLoops)
         soundRow("Critical sound", sound: $settings.criticalSound, loops: $settings.criticalLoops)
@@ -1120,6 +1133,7 @@ struct BatterySettingsSection: View {
             Text(pushoverReady ? "Through Pushover, with the keys in ~/.config/pushover.env"
                  : "Needs Pushover's PUSHOVER_USER and PUSHOVER_TOKEN in ~/.config/pushover.env")
         }
+        .accessibilityLabel("Push to your phone when critical")
         .disabled(!pushoverReady)
         if pushoverReady {
             LabeledContent(pushNote) {
@@ -1141,6 +1155,7 @@ struct BatterySettingsSection: View {
         LabeledContent(title) {
             SoundChoice(title: title, sound: sound, sounds: sounds)
             Toggle("Loop", isOn: loops).toggleStyle(.checkbox).disabled(sound.wrappedValue == nil)
+                .accessibilityLabel("Loop \(title.lowercased())")
         }
     }
 }

@@ -738,6 +738,7 @@ struct BreakSettingsSection: View {
     var body: some View {
         Section("Schedule") {
             Toggle("Remind me to take breaks", isOn: $settings.enabled)
+                .accessibilityLabel("Remind me to take breaks")
             LabeledContent("Micro break") {
                 HStack(spacing: 6) {
                     Text("every").foregroundStyle(.secondary)
@@ -753,6 +754,7 @@ struct BreakSettingsSection: View {
                     Text("for").foregroundStyle(.secondary)
                     minutes($settings.longLength, [2, 3, 5, 10, 15])
                     Toggle("Long break", isOn: $settings.longEnabled).labelsHidden().toggleStyle(.switch)
+                        .accessibilityLabel("Long break")
                 }
             }
             Picker("Time away counts as a break", selection: $settings.awayMode) {
@@ -764,6 +766,7 @@ struct BreakSettingsSection: View {
                 Text("Wait during calls")
                 Text("A break that comes due while an app is using the microphone, as on a video call, waits until the call ends; the call doesn't count as time away")
             }
+            .accessibilityLabel("Wait during calls")
             Text("Breaks keep to their times: every 10 minutes means every 10 minutes, however long each break takes. A long break takes the place of a micro break due within two minutes of it. A break waits while the screen is locked, during a Pulse voice call, and during other calls when Wait during calls is on. To skip breaks through a meeting, hover over the rail and choose Pause. Choose a fixed schedule if you watch the screen without touching the keyboard or mouse.")
                 .font(.caption).foregroundStyle(.secondary)
         }
@@ -797,21 +800,25 @@ struct BreakSettingsSection: View {
                 Text("Show agents")
                 Text("The Codex pet, and the agents open in Rex on this Mac and the Macs it connects to: working, waiting for you, just finished, or asleep")
             }
+            .accessibilityLabel("Show agents")
             Toggle(isOn: $settings.partyMode) {
                 Text("Party mode")
                 Text("Hats, costumes and props on the agents")
             }
+            .accessibilityLabel("Party mode")
             .disabled(!settings.showAgents)
             Toggle(isOn: $settings.holidays) {
                 Text("Holiday surprises")
                 Text("A short film behind the countdown on Halloween and Thanksgiving; in Party mode, holiday hats all that week and in December")
             }
+            .accessibilityLabel("Holiday surprises")
         }
         Section("Ideas") {
             Toggle(isOn: $settings.ideas) {
                 Text("Suggest something to do")
                 Text("From Pulse's list of quick ideas, or your own")
             }
+            .accessibilityLabel("Suggest something to do")
             LabeledContent {
                 HStack(spacing: 8) {
                     Text("Easy").foregroundStyle(.secondary)
