@@ -23,6 +23,8 @@ struct PulseApp: App {
     }()
 
     init() {
+        // Set the application so AppKit panels and SwiftUI presentations share one appearance.
+        NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
         // A write to a Codex child that just exited raises SIGPIPE, which would kill Pulse silently.
         // Ignored, the write throws EPIPE instead and the existing error paths report it.
         signal(SIGPIPE, SIG_IGN)
@@ -43,6 +45,7 @@ struct PulseApp: App {
     var body: some Scene {
         MenuBarExtra {
             MenuBarPopover(state: state)
+                .preferredColorScheme(.dark)
         } label: {
             if let icon = Self.menuBarIcon {
                 Image(nsImage: icon)
@@ -54,6 +57,7 @@ struct PulseApp: App {
 
         Settings {
             SettingsView(state: state)
+                .preferredColorScheme(.dark)
         }
     }
 }
@@ -65,7 +69,21 @@ private final class OverlayPanel: NSPanel {
 
 /// The panel is rarely key, and a first click on a non-key window only makes it key: the rail's drag would need a
 /// second click. Accepting the first mouse lets that first click reach the overlay too.
-final class OverlayHostingView<Content: View>: NSHostingView<Content> {
+final class OverlayHostingView: NSHostingView<AnyView> {
+    convenience init<Content: View>(rootView: Content) {
+        self.init(rootView: AnyView(rootView))
+    }
+
+    required init(rootView: AnyView) {
+        // Set the hosting presentation, so default text and AppKit-backed semantic colors agree.
+        super.init(rootView: AnyView(rootView.preferredColorScheme(.dark)))
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        rootView = AnyView(rootView.preferredColorScheme(.dark))
+    }
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 

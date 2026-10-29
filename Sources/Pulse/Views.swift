@@ -11,20 +11,23 @@ extension EnvironmentValues {
         set { self[ShowsRemainingKey.self] = newValue }
     }
 
-    /// A light or dark tint on system glass. Off leaves the system material untinted.
+    /// A black tint on dark glass. Off leaves the system material untinted.
     var glassTint: Bool {
         get { self[GlassTintKey.self] }
         set { self[GlassTintKey.self] = newValue }
     }
 }
 
-/// Liquid Glass following the view's colorScheme.
+/// Dark Liquid Glass, with the optional black tint.
 private struct GlassCard<S: Shape>: ViewModifier {
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.glassTint) private var tinted
     let shape: S
     func body(content: Content) -> some View {
-        content.glassEffect(tinted ? .regular.tint(scheme == .dark ? .black : .white.opacity(0.35)) : .regular, in: shape)
+        content.background {
+            // Glass's adaptive foreground effect can invert semantic text independently of our dark surface.
+            Color.clear.glassEffect(tinted ? .regular.tint(.black) : .regular, in: shape)
+                .background(.black, in: shape)
+        }
     }
 }
 
@@ -332,7 +335,6 @@ struct UsageCard: View {
 /// The pet's popout: Codex quick chat, live voice, and what the agent is doing, on the same bubble
 /// as the usage cards. Everything here is the Codex app-server's own session (see CodexChat.swift).
 struct PetCard: View {
-    @Environment(\.colorScheme) private var scheme
     @ObservedObject private var session = CodexPetSession.shared
     @FocusState private var composing: Bool
     @State private var following = true   // the transcript is at its bottom, so new text scrolls it
@@ -354,10 +356,9 @@ struct PetCard: View {
 
     private struct Bubble: View, Equatable {
         let message: ChatMessage
-        let scheme: ColorScheme
 
         static func == (lhs: Self, rhs: Self) -> Bool {
-            lhs.scheme == rhs.scheme && lhs.message.id == rhs.message.id && lhs.message.role == rhs.message.role
+            lhs.message.id == rhs.message.id && lhs.message.role == rhs.message.role
                 && lhs.message.text == rhs.message.text && lhs.message.caption == rhs.message.caption
         }
 
@@ -379,7 +380,7 @@ struct PetCard: View {
                             .background(RoundedRectangle(cornerRadius: 12)
                                 .fill(m.role == .user ? AccountID.codex.accent.opacity(0.35)
                                                       : m.caption != nil ? Color.clear
-                                                      : (scheme == .dark ? Color(white: 0.16) : Color(white: 0.9))))
+                                                      : Color(white: 0.16)))
                             .overlay { if m.caption != nil { RoundedRectangle(cornerRadius: 12).strokeBorder(Color.secondary.opacity(0.5)) } }
                     }
                     .accessibilityElement(children: .combine)
@@ -512,7 +513,7 @@ struct PetCard: View {
                             .font(.caption).foregroundStyle(Color.secondary)
                     }
                     ForEach(session.messages) { m in
-                        Bubble(message: m, scheme: scheme)
+                        Bubble(message: m)
                     }
                     if session.waitingOnYou {
                         Label("Waiting for your answer in the Codex prompt", systemImage: "hand.raised")
@@ -727,7 +728,6 @@ struct OverlayView: View {
             }
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { onSize?($0) }
-        .colorScheme(state.isLight ? .light : .dark)
         .environment(\.glassTint, state.glassTint)
         .environment(\.showsRemaining, state.showsRemaining)
     }
@@ -775,7 +775,7 @@ struct OverlayView: View {
             : AnyLayout(HStackLayout(alignment: .top, spacing: expanded ? 18 : 10))
         return layout {
             if state.showsPet {
-                PetRailItem(expanded: expanded, isLight: state.isLight, onFrame: { itemFrames["pet"] = $0 }, toggle: togglePet)
+                PetRailItem(expanded: expanded, onFrame: { itemFrames["pet"] = $0 }, toggle: togglePet)
             }
             ForEach(state.enabledAccounts) { id in
                 let windows = state.snapshots[id]?.windows ?? []
@@ -821,7 +821,6 @@ struct OverlayView: View {
     private struct PetRailItem: View {
         @ObservedObject private var session = CodexPetSession.shared
         let expanded: Bool
-        let isLight: Bool
         let onFrame: (CGRect) -> Void
         let toggle: (Bool) -> Void
 
@@ -842,7 +841,7 @@ struct OverlayView: View {
                     Button { toggle(true) } label: {
                         Image(systemName: session.voiceState == .off ? "waveform.circle" : "waveform.circle.fill")
                             .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(session.voiceTint ?? (isLight ? Color.black : Color.white))
+                            .foregroundStyle(session.voiceTint ?? Color.primary)
                             .symbolEffect(.variableColor.iterative, isActive: session.voiceState == .connecting)
                             .frame(width: 52)
                             .contentShape(Rectangle())
@@ -945,7 +944,7 @@ struct MenuBarPopover: View {
         }
         .padding(14)
         .frame(width: 300)
-        .colorScheme(state.isLight ? .light : .dark)   // drives .primary text and system controls
+        .background(Color(nsColor: .windowBackgroundColor))
         .environment(\.showsRemaining, state.showsRemaining)
     }
 }
@@ -969,16 +968,8 @@ struct SettingsView: View {
                     if loginItem == .requiresApproval {
                         Button("Allow Pulse in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
                     }
-                    LabeledContent("Appearance") {
-                        Picker("Appearance", selection: state.lightModeBinding) {
-                            Text("Light").tag(true)
-                            Text("Dark").tag(false)
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                    }
                     Toggle("Tint the glass", isOn: state.glassTintBinding)
-                        .help("Off shows plain Liquid Glass in both appearances, following the whole range of the Liquid Glass slider in System Settings → Appearance")
+                        .help("Adds a black tint to the dark glass. Off leaves the dark system glass untinted.")
                 }
             }
             tab("Accounts", "person.crop.circle", height: 360) {
@@ -1066,7 +1057,6 @@ struct SettingsView: View {
             }
         }
         .onAppear { loginItem = SMAppService.mainApp.status }
-        .preferredColorScheme(state.isLight ? .light : .dark)
     }
 
     private func tab<Content: View>(_ title: String, _ symbol: String, height: CGFloat,

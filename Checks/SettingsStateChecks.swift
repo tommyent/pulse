@@ -19,16 +19,23 @@ enum SettingsStateChecks {
         """.utf8)
         let p = try! JSONDecoder().decode(AppState.Persisted.self, from: legacy)
         assert(p.enabled == [.claude, .codex, .grok] && p.order == [.codex, .claude, .grok, .antigravity])
-        assert(!p.alwaysOnTop && p.showOverlay && p.lightMode == true && p.glassTint == false && p.dock == .bottom)
+        assert(!p.alwaysOnTop && p.showOverlay && p.glassTint == false && p.dock == .bottom)
         assert(p.showPet == false && p.showRemaining == true && p.voiceHotKey?.label == "⌥⇧Space")
         assert(p.limitAlerts?["claude.session_5h"] == Date(timeIntervalSinceReferenceDate: 782000000))
         assert(p.battery.lowPercent == 30 && p.battery.criticalPercent == 15 && !p.battery.showInRail && p.battery.criticalSound == nil)
         assert(p.breakSettings == nil && p.breaks == BreakSettings())
 
-        // saved again, the file keeps every old key as it was and adds breakSettings only once breaks are changed
+        // Saving drops the obsolete appearance key, preserves other keys, and adds breakSettings only when changed.
         let again = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(p)) as! [String: Any]
         let before = try! JSONSerialization.jsonObject(with: legacy) as! [String: Any]
-        for key in before.keys { assert(again[key] != nil, "lost \(key)") }
+        for key in before.keys where key != "lightMode" { assert(again[key] != nil, "lost \(key)") }
+        assert(again["lightMode"] == nil, "the obsolete appearance setting is ignored and not saved again")
+        for obsolete in ["true", "false", "null", "\"obsolete\""] {
+            let data = Data("{\"enabled\":[],\"order\":[],\"alwaysOnTop\":true,\"showOverlay\":true,\"lightMode\":\(obsolete)}".utf8)
+            let decoded = try! JSONDecoder().decode(AppState.Persisted.self, from: data)
+            let encoded = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(decoded)) as! [String: Any]
+            assert(encoded["lightMode"] == nil && decoded.showOverlay, "unknown legacy values never affect current settings")
+        }
         assert(again["breakSettings"] == nil)
         var changed = p
         changed.breaks.enabled = true

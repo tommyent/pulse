@@ -17,7 +17,6 @@ enum AlertPanel {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
         let hosting = OverlayHostingView(rootView: content
-            .colorScheme(state.isLight ? .light : .dark)
             .environment(\.glassTint, state.glassTint)
             .environment(\.showsRemaining, state.showsRemaining))
         panel.contentView = hosting

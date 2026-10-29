@@ -391,7 +391,7 @@ final class BreakController: ObservableObject {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
         let hosting = OverlayHostingView(rootView: BreakPill(controller: self, tail: .trailing).padding(12)
-            .colorScheme(state?.isLight == true ? .light : .dark).environment(\.glassTint, state?.glassTint ?? true))
+            .environment(\.glassTint, state?.glassTint ?? true))
         panel.contentView = hosting
         let size = CGSize(width: 220, height: 80)
         panel.setFrame(CGRect(x: screen.maxX - size.width - 4, y: screen.midY - size.height / 2, width: size.width, height: size.height), display: false)
@@ -420,7 +420,7 @@ final class BreakController: ObservableObject {
             panel.level = .screenSaver   // above the rings, alerts and full-screen apps
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
             panel.isReleasedWhenClosed = false
-            panel.contentView = NSHostingView(rootView: BreakOverlayView(
+            panel.contentView = OverlayHostingView(rootView: BreakOverlayView(
                 controller: self, size: screen.frame.size,
                 agents: agents && screen == main, holidayScreen: screen == main, showPet: state?.showsPet ?? true,
                 petOnRight: petOnRight))

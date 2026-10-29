@@ -8,8 +8,7 @@ final class AppState: ObservableObject {
         var order: [AccountID] = AccountID.allCases
         var alwaysOnTop: Bool = true
         var showOverlay: Bool = true
-        var lightMode: Bool?   // optional so old state.json still decodes
-        var glassTint: Bool?   // nil = on: the white wash over light-mode glass
+        var glassTint: Bool?   // nil = on: a black tint over dark glass
         var dock: DockEdge?
         var voiceHotKey: HotKeyCombo?   // nil = the default shortcut
         var showPet: Bool?   // nil = shown; independent of the Codex usage switch
@@ -44,11 +43,6 @@ final class AppState: ObservableObject {
     var showsRemaining: Bool { persisted.showRemaining ?? false }
     var showsRemainingBinding: Binding<Bool> {
         Binding(get: { self.showsRemaining }, set: { self.persisted.showRemaining = $0 })
-    }
-
-    var isLight: Bool { persisted.lightMode ?? false }
-    var lightModeBinding: Binding<Bool> {
-        Binding(get: { self.persisted.lightMode ?? false }, set: { self.persisted.lightMode = $0 })
     }
 
     var glassTint: Bool { persisted.glassTint ?? true }

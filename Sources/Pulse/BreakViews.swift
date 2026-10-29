@@ -157,7 +157,6 @@ struct BreakOverlayView: View {
         .frame(width: size.width, height: size.height)
         .coordinateSpace(.named(BreakPerchKey.space))
         .onPreferenceChange(BreakPerchKey.self) { perches = $0 }
-        .environment(\.colorScheme, .dark)
     }
 
     /// On a holiday the countdown, the idea and the buttons share a band along the bottom, so the video's story
