@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import os
 
-private let log = Logger(subsystem: "app.pulse", category: "alerts")
+private let log = Logger(subsystem: "io.github.tommyent.pulse", category: "alerts")
 
 /// Pulse's own alerts: a panel in the middle of the screen, never Notification Center, where alerts get lost.
 @MainActor

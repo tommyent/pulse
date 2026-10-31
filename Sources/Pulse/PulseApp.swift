@@ -30,7 +30,7 @@ struct PulseApp: App {
         signal(SIGPIPE, SIG_IGN)
         // single instance: a new launch replaces any running one
         for app in NSWorkspace.shared.runningApplications
-        where app.bundleIdentifier == (Bundle.main.bundleIdentifier ?? "app.pulse")
+        where app.bundleIdentifier == (Bundle.main.bundleIdentifier ?? "io.github.tommyent.pulse")
             && app.processIdentifier != ProcessInfo.processInfo.processIdentifier {
             app.forceTerminate()
         }

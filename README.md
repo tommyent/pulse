@@ -55,7 +55,7 @@ When the charge reaches either level, Pulse shows its own alert in the middle of
 
 **Settings → Battery** sets both levels (20% and 10% by default), a sound for each, and whether it loops until you act. The sounds are macOS's alert sounds, anything in `~/Library/Sounds`, and audio files you add with **Import Sounds…**, which copies them into `~/Library/Application Support/Pulse/Sounds`. If `~/.config/pushover.env` holds `PUSHOVER_USER` and `PUSHOVER_TOKEN` (and optionally `PUSHOVER_DEVICE`) for [Pushover](https://pushover.net), a critical alert is also pushed to your phone; **Send Test Push** checks the setup.
 
-To try the alerts without draining the battery, simulate a charge: `defaults write app.pulse simulatedBattery "8 25"` is 8% with 25 minutes left, `"8 ac"` is plugged in, and `defaults delete app.pulse simulatedBattery` returns to the real battery.
+To try the alerts without draining the battery, simulate a charge: `defaults write io.github.tommyent.pulse simulatedBattery "8 25"` is 8% with 25 minutes left, `"8 ac"` is plugged in, and `defaults delete io.github.tommyent.pulse simulatedBattery` returns to the real battery.
 
 ### Breaks
 
@@ -92,7 +92,7 @@ The break covers every display: a dark screen with a coloured glow at its edges,
   <img src="docs/screenshots/break-history.png" width="400" alt="Settings, Breaks, History: today 2 taken, 1 ended early, 1 snoozed, 1 skipped, 2 away, and the latest breaks with their times and how each ended">
 </p>
 
-To try it without waiting, turn breaks on and run `defaults write app.pulse simulatedBreak micro` (or `long`): each run is one countdown, and a simulated break leaves the schedule alone. `defaults write app.pulse simulatedAgents "claude-code working, codex blocked"` shows stand-in agents instead of Rex's, and `defaults write app.pulse simulatedIdea "…"` shows that text as every break's idea; `defaults delete app.pulse simulatedAgents` (or `simulatedIdea`) undoes either. Pulse logs what breaks do, from each countdown to how it ended and what counted as time away: `log stream --predicate 'subsystem == "app.pulse" AND category == "breaks"'`.
+To try it without waiting, turn breaks on and run `defaults write io.github.tommyent.pulse simulatedBreak micro` (or `long`): each run is one countdown, and a simulated break leaves the schedule alone. `defaults write io.github.tommyent.pulse simulatedAgents "claude-code working, codex blocked"` shows stand-in agents instead of Rex's, and `defaults write io.github.tommyent.pulse simulatedIdea "…"` shows that text as every break's idea; `defaults delete io.github.tommyent.pulse simulatedAgents` (or `simulatedIdea`) undoes either. Pulse logs what breaks do, from each countdown to how it ended and what counted as time away: `log stream --predicate 'subsystem == "io.github.tommyent.pulse" AND category == "breaks"'`.
 
 ### The Codex pet
 
@@ -121,7 +121,7 @@ For bigger requests, such as building something, research or multi-step changes,
 ## Privacy
 
 - Pulse reads the current user's own CLI credentials: Claude Code's Keychain item (through Apple's `security` tool, so it never prompts) or `~/.claude/.credentials.json`, `~/.codex/auth.json`, and `~/.grok/auth.json`. Grok's file is refreshed in place with an atomic, owner-only write.
-- Web sign-ins made through **Connect** live in macOS WebKit storage; Grok's saved cookie header uses the Keychain service `app.pulse.auth`. Preferences and usage snapshots live in `~/Library/Application Support/Pulse`. Voice failures log a fixed reason and the helper version; raw helper errors use a private, unlinked temporary file that disappears when the call closes.
+- Web sign-ins made through **Connect** live in macOS WebKit storage; Grok's saved cookie header uses the Keychain service `io.github.tommyent.pulse.auth`. Preferences and usage snapshots live in `~/Library/Application Support/Pulse`. Voice failures log a fixed reason and the helper version; raw helper errors use a private, unlinked temporary file that disappears when the call closes.
 - Antigravity usage comes from the CLI's own report: Pulse runs `agy -p /usage --output-format json` in a private temporary folder on each refresh and never reads the Google sign-in. The report is a local command, so it sends no prompt and uses no quota; agy writes its usual log file for each run. Before each run Pulse sends one empty HEAD request to `oauth2.googleapis.com` and skips agy when it gets no answer, because agy opens a browser sign-in when its token refresh hits a network error. If agy reports a sign-out or stalls, Pulse stops running it until you click **Refresh**.
 - **Wait during calls** asks macOS's audio system whether any app is recording from a microphone, which needs no microphone permission; Pulse doesn't open the microphone for it or record anything.
 - Battery alerts read the battery through macOS's power-source API, which needs no permission. Pulse reads `~/.config/pushover.env` only to check it and to send a push, sends the keys only to `api.pushover.net`, and never saves or logs them.

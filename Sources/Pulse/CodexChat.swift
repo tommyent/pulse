@@ -6,7 +6,7 @@ import os
 import UniformTypeIdentifiers
 
 /// What Pulse decided about speaking voice work: IDs and reasons only, never what was said or written.
-private let voiceLog = Logger(subsystem: "app.pulse", category: "voice-results")
+private let voiceLog = Logger(subsystem: "io.github.tommyent.pulse", category: "voice-results")
 
 // MARK: - Codex app-server over stdio (JSON-RPC, one JSON object per line)
 //

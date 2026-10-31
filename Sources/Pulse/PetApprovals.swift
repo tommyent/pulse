@@ -2,7 +2,7 @@ import AppKit
 import CryptoKit
 import os
 
-private let log = Logger(subsystem: "app.pulse", category: "approvals")
+private let log = Logger(subsystem: "io.github.tommyent.pulse", category: "approvals")
 
 struct PetApproval {
     /// `dismiss` decides nothing; for a consent request `deny` is a decision the server remembers.

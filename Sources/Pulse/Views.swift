@@ -1119,7 +1119,7 @@ struct BatterySettingsSection: View {
         Text("An alert stays on screen with its sound until you click Dismiss or plug in. It never goes to Notification Center.")
             .font(.caption).foregroundStyle(PulsePalette.secondary)
         if battery.reading?.simulated == true {
-            Text("Simulated battery. `defaults delete app.pulse simulatedBattery` returns to the real one.")
+            Text("Simulated battery. `defaults delete io.github.tommyent.pulse simulatedBattery` returns to the real one.")
                 .font(.caption).foregroundStyle(.orange)
         }
     }

@@ -56,7 +56,7 @@ enum CodexSessionChecks {
             assert(opens(name) == false, "\(name) is only shown in Finder, never opened from a reply")
         }
         assert(opens("missing.txt") == nil, "nothing there, nothing opened")
-        if CommandLine.arguments.contains("--approval-ui") || Bundle.main.bundleIdentifier == "app.pulse.approval-check" {
+        if CommandLine.arguments.contains("--approval-ui") || Bundle.main.bundleIdentifier == "io.github.tommyent.pulse.approval-check" {
             _ = NSApplication.shared
             NSApp.setActivationPolicy(.accessory)
             NSApp.finishLaunching()

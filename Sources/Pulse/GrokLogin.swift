@@ -2,7 +2,7 @@ import AppKit
 import WebKit
 
 enum Keychain {
-    static let service = "app.pulse.auth"
+    static let service = "io.github.tommyent.pulse.auth"
 
     /// Update in place, add if absent: a failed write never destroys the existing item.
     @discardableResult

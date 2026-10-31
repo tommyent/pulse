@@ -32,7 +32,7 @@ final class VoiceBridge {
     /// The helper dying moments after its devices open is the signature of an audio device changing
     /// under it. The chat reads this to retry the call once instead of showing an error.
     private(set) var lastFailureWasEarlyDeath = false
-    private let log = Logger(subsystem: "app.pulse", category: "voice")
+    private let log = Logger(subsystem: "io.github.tommyent.pulse", category: "voice")
     /// Set when a voice start begins; cleared once audio is ready. See `mark`.
     var warmupStart: Date?
 

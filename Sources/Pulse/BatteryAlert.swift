@@ -5,7 +5,7 @@ import SystemConfiguration
 import UniformTypeIdentifiers
 import os
 
-private let log = Logger(subsystem: "app.pulse", category: "battery")
+private let log = Logger(subsystem: "io.github.tommyent.pulse", category: "battery")
 
 /// Low and critical battery alerts: Pulse's own panel and sound, never Notification Center, where they get lost.
 @MainActor

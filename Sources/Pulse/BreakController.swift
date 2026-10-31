@@ -6,15 +6,15 @@ import CoreGraphics
 import SwiftUI
 import os
 
-private let log = Logger(subsystem: "app.pulse", category: "breaks")
+private let log = Logger(subsystem: "io.github.tommyent.pulse", category: "breaks")
 
 extension UserDefaults {
-    /// Starts a countdown at once, for testing: `defaults write app.pulse simulatedBreak long` (or `micro`). Breaks
+    /// Starts a countdown at once, for testing: `defaults write io.github.tommyent.pulse simulatedBreak long` (or `micro`). Breaks
     /// must be on in Settings. Pulse clears it once used, so each write is one countdown.
     @objc dynamic var simulatedBreak: String? { string(forKey: "simulatedBreak") }
-    /// Shows this text as every break's idea, for testing and screenshots: `defaults write app.pulse simulatedIdea "…"`.
+    /// Shows this text as every break's idea, for testing and screenshots: `defaults write io.github.tommyent.pulse simulatedIdea "…"`.
     var simulatedIdea: String? { string(forKey: "simulatedIdea") }
-    /// Dresses every break as this holiday, for testing on any day: `defaults write app.pulse simulatedHoliday halloween`.
+    /// Dresses every break as this holiday, for testing on any day: `defaults write io.github.tommyent.pulse simulatedHoliday halloween`.
     var simulatedHoliday: String? { string(forKey: "simulatedHoliday") }
 }
 

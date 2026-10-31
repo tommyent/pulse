@@ -56,7 +56,7 @@ struct BreakAgent: Equatable, Identifiable {
 }
 
 extension UserDefaults {
-    /// Stand-in agents for testing without Rex: `defaults write app.pulse simulatedAgents "claude-code working,
+    /// Stand-in agents for testing without Rex: `defaults write io.github.tommyent.pulse simulatedAgents "claude-code working,
     /// claude-code blocked, codex working"`. Also works as `--args -simulatedAgents "…"`.
     @objc dynamic var simulatedAgents: String? { string(forKey: "simulatedAgents") }
 }

@@ -9,8 +9,8 @@ struct BatteryReading: Equatable {
     var minutesLeft: Int?   // on battery only; nil while macOS is still estimating
     var simulated = false
 
-    /// `defaults write app.pulse simulatedBattery "8"`: on battery at 8%. "8 25" adds 25 minutes left, "8 ac" is plugged in.
-    /// `defaults delete app.pulse simulatedBattery` goes back to the real battery. Also works as `--args -simulatedBattery 8`.
+    /// `defaults write io.github.tommyent.pulse simulatedBattery "8"`: on battery at 8%. "8 25" adds 25 minutes left, "8 ac" is plugged in.
+    /// `defaults delete io.github.tommyent.pulse simulatedBattery` goes back to the real battery. Also works as `--args -simulatedBattery 8`.
     static func simulated(_ spec: String) -> BatteryReading? {
         let parts = spec.split(separator: " ")
         guard let first = parts.first, let percent = Int(first), (0...100).contains(percent) else { return nil }
