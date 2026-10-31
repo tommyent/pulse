@@ -1,7 +1,7 @@
 #!/bin/zsh
 # SPM stamps its deployment target as the SDK; record the SDK actually used before signing.
 set -euo pipefail
-SDK="$(xcrun --show-sdk-version)"
+SDK="$(xcrun --sdk macosx --show-sdk-version)"
 xcrun vtool -set-build-version macos 26.0 "$SDK" -replace -output "$1" "$1"
 BUILD="$(xcrun vtool -show-build "$1")"
 if ! print -r -- "$BUILD" | awk -v sdk="$SDK" '

@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 check_stamp() (
     local observed_sdk="$1" observed_min="$2"
     xcrun() {
-        if [[ "$1" == --show-sdk-version ]]; then print 27.0
+        if [[ "$*" == "--sdk macosx --show-sdk-version" ]]; then print 27.0
         elif [[ "$2" == -show-build ]]; then
             print "    minos $observed_min"
             print "      sdk $observed_sdk"
