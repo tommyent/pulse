@@ -20,7 +20,13 @@ Everything runs on your own subscription sign-ins. There are no API keys, no acc
 
 Pulse looks for the Codex and `agy` executables in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`, and for Codex also in `~/.codex/bin`. If yours lives elsewhere, link it into `~/.local/bin`; apps launched from Finder do not inherit your shell's PATH.
 
-## Build and install
+## Install
+
+Download `Pulse-<version>.dmg` from [Releases](https://github.com/tommyent/pulse/releases), open it and drag Pulse to Applications. These official builds are signed with the project's Developer ID, use the hardened runtime and are notarized by Apple. They are built for Apple silicon. To check a download against the release's checksum file, run `shasum -a 256 -c Pulse-<version>.dmg.sha256` in the folder that holds both.
+
+## Build from source
+
+Builds from source are development builds:
 
 ```sh
 ./package.sh --install     # builds .build/Pulse.app and puts it in /Applications
@@ -29,9 +35,9 @@ open /Applications/Pulse.app
 
 Without `--install` the bundle stays in `.build`. An existing installed copy is moved to the Trash, never deleted. `./build.sh` makes a development executable instead.
 
-Signing is ad-hoc by default, so no certificate is needed. macOS ties microphone permission to the code signature, and an ad-hoc signature changes on every build, so if you rebuild often set `CODE_SIGN_IDENTITY` to a self-signed identity from Keychain Access. A `.env` file in the project folder is sourced by the scripts and ignored by git, so it is a good place for that.
+Development builds are signed ad-hoc by default, so no certificate is needed, and they are not notarized. macOS ties microphone permission to the code signature, and an ad-hoc signature changes on every build, so if you rebuild often set `CODE_SIGN_IDENTITY` to a self-signed identity from Keychain Access. A `.env` file in the project folder is sourced by the scripts and ignored by git, so it is a good place for that.
 
-Releases are source only: download a tagged release or clone the repository, then build as above.
+`./scripts/release.sh` makes an official build from a clean checkout: it signs with a Developer ID Application identity (set `DEVELOPER_ID` if the keychain has more than one), the hardened runtime and the microphone entitlement, then notarizes and staples both the app and the DMG, using the `notarytool` keychain profile `notary` (or `NOTARY_PROFILE`). It stops with an error unless Apple accepts both submissions and Gatekeeper accepts the app and the DMG. The DMG, its checksum and a manifest land in `.build/release.*`.
 
 ## Use
 

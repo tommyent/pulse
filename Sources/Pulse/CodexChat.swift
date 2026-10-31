@@ -92,7 +92,7 @@ final class CodexAppServer: @unchecked Sendable {
             buffer = Data()
         }
         do {
-            _ = try await request("initialize", ["clientInfo": ["name": "pulse", "title": "Pulse", "version": "0.1"],
+            _ = try await request("initialize", ["clientInfo": ["name": "pulse", "title": "Pulse", "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"],
                                                  "capabilities": ["experimentalApi": true]])
         } catch { stop(); throw error }
         notify("initialized", [:])
