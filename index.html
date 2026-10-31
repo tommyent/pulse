@@ -1,0 +1,440 @@
+<!doctype html>
+<!--
+  Switches (edit these three attributes):
+    data-season  auto = by date (Halloween week, 24-31 October) | halloween | none
+    data-media   video = the season's film in the break section | still = the break-screen screenshot
+    data-logos   on = vendor icons as the app shows them | off = the app's plain glyphs, and stills without icons
+-->
+<html lang="en" data-season="auto" data-media="video" data-logos="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pulse: usage rings and a Codex pet for your Mac</title>
+<meta name="description" content="Pulse is a free macOS menu bar app with floating usage rings for Claude, Codex, Grok and Antigravity, a Codex pet you can talk to, battery alerts and breaks.">
+<meta property="og:title" content="Pulse for Mac">
+<meta property="og:description" content="Floating usage rings for Claude, Codex, Grok and Antigravity, a Codex pet you can talk to, and breaks that keep to their times.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tommyent.github.io/pulse/">
+<meta property="og:image" content="https://tommyent.github.io/pulse/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#0f0d16">
+<link rel="icon" type="image/png" href="assets/favicon.png">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="preload" href="assets/fonts/BricolageGrotesque-latin.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+@font-face { font-family: "Bricolage Grotesque"; src: url(assets/fonts/BricolageGrotesque-latin.woff2) format("woff2"); font-weight: 600 800; font-display: swap; }
+@font-face { font-family: "Figtree"; src: url(assets/fonts/Figtree-latin.woff2) format("woff2"); font-weight: 400 600; font-display: swap; }
+
+/* the season changes only these; Pulse's own default break colour is violet */
+:root {
+  --night: #0f0d16; --night-2: #1a1630; --text: #f2f0f7; --muted: #b7b1c8; --faint: #8d86a3;
+  --glow: #6e52cf; --bar: #a993ff; --on-bar: #150d33;
+  /* from the app's source (Models.swift, Appearance.swift, Battery.swift, Breaks.swift) */
+  --p-surface: #121214; --p-track: #252527; --p-label: rgba(255, 255, 255, 0.85);   /* SwiftUI .primary in dark mode is labelColor, white at 85% */
+  --p-claude: #ff5700; --p-codex: #216dff; --p-grok: #ffb400; --p-agy: #00c53f;
+  --p-green: #30d158; --p-yellow: #ffd60a; --p-break-bar: #a993ff;
+}
+@supports (color: color(display-p3 1 1 1)) {
+  :root { --p-claude: color(display-p3 1 0.40 0.16); --p-codex: color(display-p3 0.22 0.42 1); --p-grok: color(display-p3 1 0.72 0.10); --p-agy: color(display-p3 0 0.76 0.32); }
+}
+[data-theme="halloween"] { --night: #0d0a14; --night-2: #1d1330; --glow: #e8822a; --bar: #ffb050; --on-bar: #2a1203; }
+
+* { box-sizing: border-box; margin: 0; }
+html { background: var(--night); color: var(--text); scroll-behavior: smooth; color-scheme: dark; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body { font: 400 1.125rem/1.55 Figtree, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+::selection { background: var(--bar); color: var(--on-bar); }
+a { color: inherit; text-decoration-thickness: 1.5px; text-underline-offset: .28em; }
+a:hover { text-decoration-color: var(--bar); }
+:focus-visible { outline: 3px solid var(--bar); outline-offset: 3px; border-radius: 8px; }
+img, video { max-width: 100%; display: block; }
+.skip { position: absolute; left: -999px; top: 8px; padding: .5rem 1rem; background: var(--bar); color: var(--on-bar); border-radius: 8px; z-index: 20; }
+.skip:focus { left: 8px; }
+
+/* ---------- the page is the desktop ---------- */
+.menubar { position: sticky; top: 0; z-index: 10; height: 2.4rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: 0 calc(110px + 1rem) 0 1.1rem; font: 500 .95rem Figtree; color: var(--muted);
+  background: color-mix(in oklab, var(--night) 72%, transparent); backdrop-filter: blur(18px) saturate(1.3); -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  border-bottom: 1px solid rgba(255,255,255,.06); }
+.menubar nav, .menubar .end { display: flex; gap: 1.4rem; align-items: center; }
+.menubar a { text-decoration: none; }
+.menubar a:hover { color: var(--text); }
+.menubar .brand { display: flex; gap: .45rem; align-items: center; color: var(--text); font-weight: 600; }
+.menubar .brand svg { width: 1.15rem; height: 1.15rem; }
+.menubar .get { color: var(--text); font-weight: 600; }
+
+.desktop { position: relative; min-height: calc(100svh - 2.4rem); display: grid; align-content: center; padding: 6vh calc(130px + 4vw) 10vh 7vw; overflow: hidden;
+  background: linear-gradient(180deg, var(--night-2), var(--night) 78%); }
+h1 { font: 800 clamp(2.9rem, 7.2vw, 6rem)/0.95 "Bricolage Grotesque", Figtree, sans-serif; letter-spacing: -0.035em; text-wrap: balance; max-width: 13ch; }
+h1 em { font-style: normal; color: var(--bar); }
+.lede { font-size: clamp(1.15rem, 1.6vw, 1.35rem); color: var(--muted); max-width: 40ch; margin-top: 1.4rem; }
+.actions { display: flex; gap: 1.2rem 1.6rem; align-items: center; margin-top: 2.2rem; flex-wrap: wrap; }
+.download { display: inline-flex; align-items: center; gap: .7rem; padding: 1rem 1.55rem; border-radius: 999px; text-decoration: none;
+  background: var(--bar); color: var(--on-bar); font: 700 1.1rem Figtree;
+  box-shadow: 0 8px 20px rgba(0,0,0,.4); transition: transform .25s cubic-bezier(.16,1,.3,1), box-shadow .25s; }
+.download:hover { transform: translateY(-2px); box-shadow: 0 12px 26px rgba(0,0,0,.45); text-decoration: none; }
+.download svg { width: 1.25rem; height: 1.25rem; }
+.download small { font-weight: 500; }
+.textlink { font-weight: 600; }
+.specs { margin-top: 1rem; font-size: .95rem; color: var(--faint); }
+.live-note { margin-top: 2.6rem; font-size: .9rem; color: var(--faint); max-width: 44ch; }
+
+/* ---------- Pulse's rail, drawn from the app's own values ---------- */
+.p { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; color: var(--p-label); }
+.rail { position: fixed; z-index: 12; right: 12px; top: 50%; transform: translateY(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 16px 12px; border-radius: 26px;
+  background: var(--p-surface); box-shadow: inset 0 0 0 1px var(--p-track), 0 10px 30px rgba(0,0,0,.45); }
+.item { display: flex; flex-direction: column; align-items: center; gap: 6px; text-decoration: none; color: inherit; border-radius: 30px; }
+.ring { width: 52px; height: 52px; position: relative; }
+.ring svg.arcs { position: absolute; inset: 0; width: 52px; height: 52px; overflow: visible; transform: rotate(-90deg); }
+.ring .track { fill: none; stroke: var(--p-track); stroke-width: 6.24; }
+.ring .arc { fill: none; stroke-width: 6.24; stroke-linecap: round; transition: stroke-dasharray 1.4s cubic-bezier(.16,1,.3,1); }
+.ring .arc.inner { stroke-width: 3.64; }
+.ring .cap { position: absolute; left: 10.14px; top: 10.14px; width: 31.72px; height: 31.72px; border-radius: 50%; overflow: hidden; }
+.ring .cap i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--p-track); transition: height 1.4s cubic-bezier(.16,1,.3,1); }
+.ring .icon { position: absolute; left: 15.6px; top: 15.6px; width: 20.8px; height: 20.8px; object-fit: contain; }
+.ring .bolt { position: absolute; left: 17.2px; top: 16px; width: 17.6px; height: 20px; color: var(--p-label); }
+.ring .glyph { display: none; position: absolute; left: 15.6px; top: 15.6px; width: 20.8px; height: 20.8px; color: var(--p-label); }
+[data-logos="off"] .ring .icon { display: none; }
+[data-logos="off"] .ring .glyph { display: block; }
+.pct { font-size: 15px; line-height: 19px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.pet { width: 52px; height: 52px; position: relative; }
+.pet .sprite { position: absolute; left: 7.28px; top: 5.72px; width: 37.44px; height: 40.56px; background: url(assets/pet-idle.png) 0 0 / 800% 100% no-repeat; image-rendering: pixelated; animation: idle 1.1s steps(1) infinite; }
+.pet.waving .sprite { background-image: url(assets/pet-waving.png); background-size: 400% 100%; animation: wave .7s steps(1) infinite; }
+.wave { width: 52px; height: 18.5px; display: grid; place-items: center; background: none; border: 0; padding: 0; color: var(--p-label); cursor: pointer; border-radius: 9px; }
+.wave svg { width: 17px; height: 17px; }
+/* the idle track mirrors CodexPetSprite: 0.28, 0.11, 0.11, 0.14, 0.14, 0.32 s */
+@keyframes idle { 0% { background-position-x: 0 } 25.45% { background-position-x: calc(100% / 7) } 35.45% { background-position-x: calc(200% / 7) } 45.45% { background-position-x: calc(300% / 7) } 58.18% { background-position-x: calc(400% / 7) } 70.9% { background-position-x: calc(500% / 7) } }
+@keyframes wave { 0% { background-position-x: 0 } 20% { background-position-x: calc(100% / 3) } 40% { background-position-x: calc(200% / 3) } 60% { background-position-x: 100% } }
+
+/* the countdown beside the rail (BreakPill) */
+.chip { position: fixed; z-index: 12; right: calc(12px + 76px + 10px); top: 50%; height: 52px; padding: 0 19px 0 7px; display: flex; align-items: center; gap: 6px;
+  transform: translateY(-50%) scale(.5); transform-origin: right center; opacity: 0; pointer-events: none; transition: transform .45s cubic-bezier(.34,1.56,.64,1), opacity .2s; }
+.chip.on { transform: translateY(-50%) scale(1); opacity: 1; pointer-events: auto; }
+.chip .shape { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.chip .start { position: relative; display: flex; align-items: center; gap: 9px; background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; border-radius: 19px; }
+.chip .cd { width: 38px; height: 38px; position: relative; }
+.chip .cd svg { position: absolute; inset: 0; transform: rotate(-90deg); overflow: visible; }
+.chip .cd b { position: absolute; inset: 0; display: grid; place-items: center; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.chip .len { font-size: 13px; font-weight: 500; white-space: nowrap; }
+.chip .x { position: relative; width: 17px; height: 17px; border-radius: 50%; border: 0; background: rgba(255,255,255,.1); color: var(--p-label); display: grid; place-items: center; cursor: pointer; }
+.chip .x svg { width: 7.5px; height: 7.5px; }
+
+/* ---------- sections ---------- */
+section.band { padding: 18vh calc(130px + 4vw) 0 7vw; }
+.feature { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 6vw; align-items: center; }
+.feature.flip > :first-child { order: 2; }
+h2 { font: 800 clamp(2.2rem, 4.4vw, 3.6rem)/1 "Bricolage Grotesque", Figtree, sans-serif; letter-spacing: -0.032em; text-wrap: balance; max-width: 16ch; }
+.feature p, .break-copy p { color: var(--muted); max-width: 46ch; margin-top: 1.2rem; }
+.feature ul { list-style: none; padding: 0; margin-top: 1.4rem; display: grid; gap: .75rem; max-width: 46ch; }
+.feature li { padding-left: 1.4rem; position: relative; color: var(--muted); }
+.feature li::before { content: ""; position: absolute; left: 0; top: .62em; width: .55rem; height: .55rem; border-radius: 50%; border: 2px solid var(--bar); }
+.feature li strong { color: var(--text); font-weight: 600; }
+kbd { font: 600 .92em Figtree; padding: .05em .4em; border-radius: 6px; background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.14); }
+.shot { border-radius: 18px; box-shadow: 0 0 0 1px rgba(255,255,255,.07), 0 28px 60px rgba(0,0,0,.5); background: #0b0a10; }
+.shot-nologo { display: none; }
+[data-logos="off"] .shot-logo { display: none; }
+[data-logos="off"] .shot-nologo { display: block; }
+
+/* the break: the season's film, or the break screen */
+.break { position: relative; margin-top: 18vh; padding: 14vh calc(130px + 4vw) 14vh 7vw; isolation: isolate;
+  background: radial-gradient(120% 90% at 50% 46%, transparent 52%, color-mix(in oklab, var(--glow) 38%, transparent)), var(--night); }
+.break h2 { margin-bottom: 2.4rem; }
+.screen { position: relative; max-width: 1060px; border-radius: 22px; overflow: hidden; box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 30px 80px rgba(0,0,0,.6); }
+.screen video, .screen img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
+.screen .film { display: none; }
+[data-film="on"] .screen .film { display: block; }
+[data-film="on"] .screen .still { display: none; }
+.under { max-width: 1060px; display: flex; justify-content: space-between; align-items: start; gap: 1.5rem 3rem; margin-top: 1.4rem; flex-wrap: wrap; }
+.sound { display: none; align-items: center; gap: .5rem; padding: .55rem .95rem; border-radius: 999px; border: 1px solid rgba(255,255,255,.26); background: rgba(255,255,255,.06); color: var(--text); font: 600 .95rem Figtree; cursor: pointer; }
+[data-film="on"] .sound { display: inline-flex; }
+.sound:hover { background: rgba(255,255,255,.12); }
+.sound svg { width: 1.05rem; height: 1.05rem; }
+.break-copy { max-width: 1060px; display: flex; justify-content: space-between; align-items: end; gap: 2rem 4rem; flex-wrap: wrap; margin-top: 2.6rem; }
+.break-copy p { margin-top: 0; }
+.caption { color: var(--faint); font-size: .95rem; }
+
+.facts { padding: 18vh calc(130px + 4vw) 0 7vw; }
+.facts dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 0 4vw; border-top: 1px solid rgba(255,255,255,.12); }
+.facts div { padding: 1.8rem 0; border-bottom: 1px solid rgba(255,255,255,.12); }
+.facts dt { font: 800 1.45rem/1.15 "Bricolage Grotesque", Figtree, sans-serif; letter-spacing: -0.02em; }
+.facts dd { margin-top: .6rem; color: var(--muted); }
+
+.closing { padding: 20vh calc(130px + 4vw) 16vh 7vw; }
+.closing h2 { font-size: clamp(2.8rem, 6vw, 5rem); max-width: 12ch; }
+.closing .meta { margin-top: 1.4rem; color: var(--muted); max-width: 52ch; }
+.closing .meta code { font: 500 .9em ui-monospace, SFMono-Regular, Menlo, monospace; background: rgba(255,255,255,.08); padding: .1em .4em; border-radius: 6px; }
+footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(255,255,255,.08); color: var(--faint); font-size: .92rem; display: flex; flex-wrap: wrap; gap: .6rem 2rem; justify-content: space-between; }
+
+/* ---------- phones: the rail docks to the bottom edge, collapsed, as Pulse lays out at the bottom ---------- */
+@media (max-width: 760px) {
+  .menubar { padding: 0 1rem; }
+  .menubar nav a:not(.brand) { display: none; }
+  .desktop, section.band, .break, .facts, .closing, footer { padding-left: 1.25rem; padding-right: 1.25rem; }
+  .desktop { min-height: auto; padding-top: 12vh; padding-bottom: 12vh; }
+  section.band { padding-top: 12vh; }
+  .feature { grid-template-columns: 1fr; gap: 2.4rem; }
+  .feature.flip > :first-child { order: 0; }
+  body { padding-bottom: 76px; }
+  .rail { top: auto; bottom: 12px; right: 50%; transform: translateX(50%); flex-direction: row; gap: 10px; padding: 8px 10px; border-radius: 18px; }
+  .rail .item { gap: 0; }
+  .rail .pct, .rail .wave { display: none; }
+  .rail .ring, .rail .pet { width: 28px; height: 28px; }
+  .rail .ring svg.arcs { width: 28px; height: 28px; }
+  .rail .ring .track, .rail .ring .arc { stroke-width: 3.36; }
+  .rail .ring .arc.inner { stroke-width: 1.96; }
+  .rail .ring .cap { left: 5.46px; top: 5.46px; width: 17.08px; height: 17.08px; }
+  .rail .ring .icon, .rail .ring .glyph { left: 8.4px; top: 8.4px; width: 11.2px; height: 11.2px; }
+  .rail .ring .bolt { left: 9.26px; top: 8.6px; width: 9.48px; height: 10.8px; }
+  .rail .pet .sprite { left: 3.92px; top: 3.08px; width: 20.16px; height: 21.84px; }
+  .chip { right: 50%; top: auto; bottom: calc(12px + 44px + 10px); transform: translateX(50%) scale(.5); transform-origin: center bottom; }
+  .chip.on { transform: translateX(50%) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pet .sprite { animation: none; }
+  .ring .arc, .ring .cap i { transition: none; }
+  .chip { transition: opacity .2s; }
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="menubar">
+  <nav aria-label="Sections">
+    <a class="brand" href="#top"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2 12h4.2l1.6-3.8 2.4 9.6 2.2-12.4L15.2 16 17 12h5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Pulse</a>
+    <a href="#rings">Rings</a><a href="#pet">Pet</a><a href="#breaks">Breaks</a>
+  </nav>
+  <div class="end"><a href="https://github.com/tommyent/pulse">Source</a><a class="get" href="#get">Download</a></div>
+</header>
+
+<main id="main">
+<section class="desktop" id="top">
+  <h1>Watch every limit. <em>No scary surprises.</em></h1>
+  <p class="lede">Pulse puts floating usage rings for Claude, Codex, Grok and Antigravity at the edge of your screen, with a Codex pet you can talk to.</p>
+  <div class="actions">
+    <a class="download" href="https://github.com/tommyent/pulse/releases/download/v0.2.0/Pulse-0.2.0.dmg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg>Download for Mac <small>0.2.0</small></a>
+    <a class="textlink" href="https://github.com/tommyent/pulse">Source on GitHub</a>
+  </div>
+  <p class="specs">macOS 26 or later · Apple silicon · signed and notarized · free and open source</p>
+  <p class="live-note">That rail at the edge of this page is Pulse, drawn the way the app draws it, with sample numbers.</p>
+</section>
+
+<section class="band" id="rings">
+  <div class="feature">
+    <div>
+      <h2>Every limit, at the edge of your screen.</h2>
+      <p>Each ring's outer arc is the account's leading window, usually the 5-hour session, and the inner arc the next, usually the weekly limit. Click a ring for that account's windows and reset times. Usage refreshes every 2 minutes.</p>
+      <ul>
+        <li><strong>98%, 99%, 100%.</strong> The ring gets a red badge and an alert stays in the middle of the screen until you dismiss it.</li>
+        <li><strong>Per-model caps</strong> fill the disc behind the logo as they're used.</li>
+        <li><strong>Show what's left</strong> turns the rings around, so they empty as you use them.</li>
+        <li><strong>Any screen edge.</strong> Drag the rail anywhere; top and bottom lay out horizontally.</li>
+      </ul>
+    </div>
+    <div>
+      <img class="shot shot-logo" src="assets/usage-card.png" width="898" height="1026" loading="lazy" alt="The rail of usage rings with the Claude card open: current session, all models and a per-model window, each with its reset time">
+      <img class="shot shot-nologo" src="assets/usage-card-nologo.png" width="898" height="1026" loading="lazy" alt="The rail of usage rings with a usage card open: current session, all models and a per-model window, each with its reset time">
+    </div>
+  </div>
+</section>
+
+<section class="band" id="pet">
+  <div class="feature flip">
+    <div>
+      <h2>A Codex pet you can talk to.</h2>
+      <p>Click the pet to chat by text, or talk to it live. It runs your own Codex sign-in, keeps one conversation across restarts, and hands bigger jobs to Codex helpers while you keep talking.</p>
+      <ul>
+        <li><strong>Voice:</strong> the waveform button under the pet, or Command-click the pet.</li>
+        <li><strong><kbd>⌃</kbd> <kbd>⌥</kbd> <kbd>Space</kbd></strong> opens the pet hands-free. Hold it to talk.</li>
+        <li><strong>Your call:</strong> requests to act outside its folder come to you as a permission dialog.</li>
+      </ul>
+    </div>
+    <div>
+      <img class="shot shot-logo" src="assets/pet-card.png" width="754" height="392" loading="lazy" alt="The Codex pet card: the work model and effort in the header, a text field, Send and the voice button">
+      <img class="shot shot-nologo" src="assets/pet-card-nologo.png" width="754" height="392" loading="lazy" alt="The pet card: the work model and effort in the header, a text field, Send and the voice button">
+    </div>
+  </div>
+</section>
+
+<section class="break" id="breaks" aria-labelledby="breaks-h">
+  <h2 id="breaks-h">Time for a break.</h2>
+  <div class="screen">
+    <video class="film" muted loop playsinline preload="none" poster="assets/promo-halloween-poster.jpg" aria-label="Pulse's Halloween promo: the rings, a usage card, the pet and a break with the Halloween film">
+      <source data-src="assets/promo-halloween.mp4" type="video/mp4">
+    </video>
+    <img class="still shot-logo" src="assets/break-screen.png" width="1200" height="750" loading="lazy" alt="The break screen: Time to take a break, 0:18 left, an idea with Reroll and Surprise me, Back to Work, Pause and Snooze 5 min, with the Codex pet and agents around the edges">
+    <img class="still shot-nologo" src="assets/break-screen-nologo.png" width="1200" height="750" loading="lazy" alt="The break screen: Time to take a break, 0:18 left, an idea with Reroll and Surprise me, Back to Work, Pause and Snooze 5 min">
+  </div>
+  <div class="under">
+    <span class="caption film-caption" hidden>Halloween: the promo plays here this week.</span>
+    <button class="sound" type="button" aria-pressed="false"><svg class="muted-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9zM17 9l4 6m0-6-4 6"/></svg><span>Sound off</span></button>
+  </div>
+  <div class="break-copy">
+    <p>Breaks keep to their times: by default a 20-second micro break every 20 minutes and a 5-minute break every hour. Thirty seconds before, a countdown grows out of the rail. The break covers every display, waits during calls, and time away counts as a break. On Halloween and Thanksgiving a short film plays behind the countdown.</p>
+    <a class="download" href="https://github.com/tommyent/pulse/releases/download/v0.2.0/Pulse-0.2.0.dmg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg>Download for Mac <small>0.2.0</small></a>
+  </div>
+</section>
+
+<section class="facts" id="battery" aria-label="More">
+  <dl>
+    <div><dt>Battery alerts you can't miss.</dt><dd>The last ring is the battery. At the low and critical levels Pulse shows an alert in the middle of the screen until you dismiss it or plug in.</dd></div>
+    <div><dt>Your own sign-ins.</dt><dd>No API keys, no accounts with Pulse, and no backend of its own. Usage requests go straight to each provider.</dd></div>
+    <div><dt>Signed and notarized.</dt><dd>Built with a Developer ID and checked by Apple. Free, with the source on GitHub under the MIT licence.</dd></div>
+  </dl>
+</section>
+
+<section class="closing" id="get">
+  <h2>Get Pulse for your Mac.</h2>
+  <div class="actions">
+    <a class="download" href="https://github.com/tommyent/pulse/releases/download/v0.2.0/Pulse-0.2.0.dmg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg>Download Pulse 0.2.0</a>
+    <a class="textlink" href="https://github.com/tommyent/pulse/releases/tag/v0.2.0">Release notes</a>
+    <a class="textlink" href="https://github.com/tommyent/pulse">Source</a>
+  </div>
+  <p class="meta">For Apple silicon Macs on macOS 26 or later. Open the DMG and drag Pulse to Applications. To check the download, save <a href="https://github.com/tommyent/pulse/releases/download/v0.2.0/Pulse-0.2.0.dmg.sha256">Pulse-0.2.0.dmg.sha256</a> beside it and run <code>shasum -a 256 -c Pulse-0.2.0.dmg.sha256</code>.</p>
+</section>
+</main>
+
+<footer>
+  <span>Pulse is an independent project, not affiliated with Anthropic, OpenAI, xAI or Google. Claude, Codex, Grok and Antigravity are their owners' trademarks.</span>
+  <span><a href="https://github.com/tommyent/pulse/blob/main/LICENSE">MIT licence</a></span>
+</footer>
+
+<!-- Pulse's rail: sample numbers -->
+<aside class="rail p" aria-label="Pulse's rail, with sample usage">
+  <div class="item">
+    <a class="pet" href="#pet" aria-label="Codex pet"><svg class="arcs" viewBox="0 0 52 52" style="position:absolute;inset:0;overflow:visible" aria-hidden="true"><circle class="pet-ring" cx="26" cy="26" r="26" fill="none" stroke="var(--p-track)" stroke-width="6.24"/></svg><span class="sprite"></span></a>
+    <button class="wave" type="button" aria-label="Start live voice (a preview of the pet's states)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="wave-disc" cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path class="wave-bars" d="M7 11v2M9.5 8.5v7M12 10v4M14.5 9v6M17 11v2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+  </div>
+  <a class="item" href="#rings" data-ring="claude" data-used="42" data-week="61" data-cap="3"></a>
+  <a class="item" href="#rings" data-ring="codex" data-used="26" data-week="40"></a>
+  <a class="item" href="#rings" data-ring="grok" data-used="38" data-week="52"></a>
+  <a class="item" href="#rings" data-ring="antigravity" data-used="12" data-week="30"></a>
+  <a class="item" href="#battery" data-battery="100"></a>
+</aside>
+
+<div class="chip p" role="status" aria-live="off">
+  <svg class="shape" aria-hidden="true"></svg>
+  <button class="start" type="button" aria-label="Go to breaks"><span class="cd"><svg viewBox="0 0 38 38"><circle cx="19" cy="19" r="19" fill="none" stroke="var(--p-track)" stroke-width="4"/><circle class="cd-arc" cx="19" cy="19" r="19" fill="none" stroke="var(--p-break-bar)" stroke-width="4" stroke-linecap="round"/></svg><b>30</b></span><span class="len">20-sec break</span></button>
+  <button class="x" type="button" aria-label="Hide the countdown"><svg viewBox="0 0 10 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1.5 1.5l7 7m0-7-7 7"/></svg></button>
+</div>
+
+<script>
+(() => {
+  const root = document.documentElement;
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // season: by date unless pinned by hand
+  const seasons = { halloween: { from: [10, 24], to: [10, 31], film: true } };
+  let season = root.dataset.season;
+  if (season === "auto") {
+    const d = new Date(), md = (d.getMonth() + 1) * 100 + d.getDate();
+    season = Object.keys(seasons).find(k => { const s = seasons[k]; return md >= s.from[0] * 100 + s.from[1] && md <= s.to[0] * 100 + s.to[1]; }) || "none";
+  }
+  if (seasons[season]) root.dataset.theme = season;
+
+  // the film shows only with a season that has one, media on video, and logos on (the promo shows the vendors' icons)
+  const film = !!(seasons[season] && seasons[season].film) && root.dataset.media === "video" && root.dataset.logos === "on";
+  const video = document.querySelector(".film"), sound = document.querySelector(".sound");
+  if (film) {
+    root.dataset.film = "on";
+    document.querySelector(".film-caption").hidden = false;
+    const src = video.querySelector("source"); src.src = src.dataset.src; video.load();
+    if (reduce) video.controls = true;
+    else new IntersectionObserver(([e]) => { e.isIntersecting ? video.play().catch(() => {}) : video.pause(); }, { threshold: .25 }).observe(video);
+    sound.addEventListener("click", () => {
+      video.muted = !video.muted;
+      if (!video.muted && video.paused) video.play().catch(() => {});
+      sound.setAttribute("aria-pressed", String(!video.muted));
+      sound.querySelector("span").textContent = video.muted ? "Sound off" : "Sound on";
+    });
+  }
+
+  // the rail: rings as RingView draws them (52 pt, outer 0.12, inner 0.07 inset 0.16, cap disc 0.61)
+  const C = r => 2 * Math.PI * r;
+  const glyphs = {   // the app's fallback SF Symbols, redrawn: asterisk, circle.hexagongrid, line.diagonal, sparkle
+    claude: '<path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>',
+    codex: '<circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="2"/><g fill="currentColor"><circle cx="12" cy="8" r="1.6"/><circle cx="8.5" cy="10" r="1.6"/><circle cx="15.5" cy="10" r="1.6"/><circle cx="8.5" cy="14" r="1.6"/><circle cx="15.5" cy="14" r="1.6"/><circle cx="12" cy="16" r="1.6"/><circle cx="12" cy="12" r="1.6"/></g>',
+    grok: '<path d="M5 19L19 5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>',
+    antigravity: '<path d="M12 2.5c.9 5.2 3.3 7.6 9.5 9.5-6.2 1.9-8.6 4.3-9.5 9.5-.9-5.2-3.3-7.6-9.5-9.5 6.2-1.9 8.6-4.3 9.5-9.5z" fill="currentColor"/>'
+  };
+  const icons = { claude: "assets/claude.svg", codex: "assets/codex.svg", grok: "assets/grok.svg", antigravity: "assets/antigravity.png" };
+  const color = { claude: "var(--p-claude)", codex: "var(--p-codex)", grok: "var(--p-grok)", antigravity: "var(--p-agy)" };
+  const names = { claude: "Claude", codex: "Codex", grok: "Grok", antigravity: "Antigravity" };
+  const rings = [];
+  document.querySelectorAll("[data-ring]").forEach(el => {
+    const id = el.dataset.ring, used = el.dataset.used === "" ? null : +el.dataset.used, week = el.dataset.week === undefined || el.dataset.week === "" ? null : +el.dataset.week, cap = el.dataset.cap;
+    el.setAttribute("aria-label", used === null ? `${names[id]}: not signed in` : `${names[id]} usage, sample: ${used}% of the session` + (week === null ? "" : `, ${week}% of the week`));
+    el.innerHTML = `<span class="ring">${cap ? `<span class="cap"><i style="height:0"></i></span>` : ""}<svg class="arcs" viewBox="0 0 52 52" aria-hidden="true">
+      <circle class="track" cx="26" cy="26" r="26"/>
+      <circle class="arc" cx="26" cy="26" r="26" style="stroke:${color[id]};stroke-dasharray:0 ${C(26)}"/>
+      <circle class="arc inner" cx="26" cy="26" r="17.68" style="stroke:${color[id]};stroke-dasharray:0 ${C(17.68)}"/></svg>
+      <img class="icon" src="${icons[id]}" alt=""><svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">${glyphs[id]}</svg></span><span class="pct" aria-hidden="true">0%</span>`;
+    rings.push({ el, used, week, cap: cap ? +cap : null });
+  });
+  const bat = document.querySelector("[data-battery]");
+  if (bat) {
+    const p = +bat.dataset.battery;
+    bat.setAttribute("aria-label", `Battery, sample: ${p}%, plugged in`);
+    bat.innerHTML = `<span class="ring"><svg class="arcs" viewBox="0 0 52 52" aria-hidden="true"><circle class="track" cx="26" cy="26" r="26"/><circle class="arc bat" cx="26" cy="26" r="26" style="stroke:var(--p-green);stroke-dasharray:0 ${C(26)}"/></svg>
+      <svg class="bolt" viewBox="0 0 14 20" aria-hidden="true"><path d="M9.4 0 .6 11.6h5.8L4.6 20 13.4 8.2H7.7z" fill="currentColor" stroke="currentColor" stroke-width=".6" stroke-linejoin="round"/></svg></span><span class="pct" aria-hidden="true">${p}%</span>`;
+  }
+  const draw = () => {
+    rings.forEach(r => {
+      const [outer, inner] = r.el.querySelectorAll(".arc");
+      outer.style.strokeDasharray = `${C(26) * (r.used ?? 0) / 100} ${C(26)}`;
+      inner.style.strokeDasharray = `${C(17.68) * (r.week ?? 0) / 100} ${C(17.68)}`;
+      outer.style.visibility = r.used === null ? "hidden" : ""; inner.style.visibility = r.week === null ? "hidden" : "";
+      r.el.querySelector(".pct").textContent = r.used === null ? "\u2014" : `${Math.round(r.used)}%`;
+      if (r.cap !== null) r.el.querySelector(".cap i").style.height = `${r.cap}%`;
+    });
+    if (bat) bat.querySelector(".bat").style.strokeDasharray = `${C(26) * +bat.dataset.battery / 100} ${C(26)}`;
+  };
+  requestAnimationFrame(() => requestAnimationFrame(draw));
+  // a refresh now and then, as the real rings move; sample numbers only
+  if (!reduce) setInterval(() => { const live = rings.filter(r => r.used !== null && r.used < 90); if (live.length) { const r = live[Math.floor(Math.random() * live.length)]; r.used += 1; if (r.week !== null) r.week = Math.min(95, r.week + 0.5); draw(); } }, 7000);
+
+  // the pet's voice states, as the app tints them: off (track), connecting (yellow), listening (Codex blue)
+  const pet = document.querySelector(".pet"), petRing = document.querySelector(".pet-ring"), wave = document.querySelector(".wave");
+  const states = [["var(--p-track)", false, "Start live voice (a preview of the pet's states)"], ["var(--p-yellow)", true, "Connecting (preview)"], ["var(--p-codex)", true, "Listening (preview)"]];
+  let vs = 0;
+  wave.addEventListener("click", () => {
+    vs = (vs + 1) % states.length;
+    const [c, waving, label] = states[vs];
+    petRing.setAttribute("stroke", c); pet.classList.toggle("waving", waving);
+    wave.style.color = vs ? c : ""; wave.setAttribute("aria-label", label);
+    wave.querySelector(".wave-disc").setAttribute("fill", vs ? "currentColor" : "none");
+    wave.querySelector(".wave-bars").setAttribute("stroke", vs ? "var(--p-surface)" : "currentColor");
+  });
+
+  // the countdown grows out of the rail, as BreakPill does; a click goes to the break, the x hides it
+  const chip = document.querySelector(".chip"), shape = chip.querySelector(".shape"), arc = chip.querySelector(".cd-arc"), num = chip.querySelector(".cd b");
+  const phone = matchMedia("(max-width: 760px)");
+  const drawShape = () => {   // PillShape: a capsule with a 7 pt tail pointing at the rail, a 1 pt rim inside
+    const w = chip.offsetWidth, h = chip.offsetHeight, t = 7;
+    let d;
+    if (phone.matches) { const bh = h - t, r = bh / 2, m = w / 2;
+      d = `M${r},0H${w - r}A${r},${r} 0 0 1 ${w - r},${bh}H${m + 8}L${m},${h}L${m - 8},${bh}H${r}A${r},${r} 0 0 1 ${r},0Z`;
+    } else { const bw = w - t, r = h / 2, m = h / 2;
+      d = `M${r},0H${bw - r}A${r},${r} 0 0 1 ${bw - 4},${m - 8}L${w},${m}L${bw - 4},${m + 8}A${r},${r} 0 0 1 ${bw - r},${h}H${r}A${r},${r} 0 0 1 ${r},0Z`; }
+    shape.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    shape.innerHTML = `<defs><clipPath id="pill"><path d="${d}"/></clipPath></defs><path d="${d}" fill="var(--p-surface)"/><path d="${d}" fill="none" stroke="var(--p-track)" stroke-width="2" clip-path="url(#pill)"/>`;
+    chip.style.padding = phone.matches ? "0 12px 7px 7px" : "0 19px 0 7px";
+  };
+  const total = 30; let left = total, timer = null;
+  const tick = () => {
+    num.textContent = left;
+    arc.style.strokeDasharray = `${C(19) * left / total} ${C(19)}`;
+    if (left-- <= 0) { hide(); setTimeout(show, 12000); }
+  };
+  let heroVisible = true;   // the countdown belongs to the opening view; over the sections below it would cover text
+  const show = () => { if (chip.dataset.dismissed || !heroVisible) return; left = total; chip.classList.add("on"); drawShape(); tick(); clearInterval(timer); timer = setInterval(tick, 1000); };
+  const hide = () => { chip.classList.remove("on"); clearInterval(timer); };
+  chip.querySelector(".start").addEventListener("click", () => { document.getElementById("breaks").scrollIntoView(); hide(); });
+  chip.querySelector(".x").addEventListener("click", () => { chip.dataset.dismissed = "1"; hide(); });
+  phone.addEventListener("change", () => chip.classList.contains("on") && drawShape());
+  new IntersectionObserver(([e]) => { heroVisible = e.isIntersecting; heroVisible ? (chip.classList.contains("on") || setTimeout(show, 600)) : hide(); }, { threshold: .35 }).observe(document.querySelector(".desktop"));
+  setTimeout(show, reduce ? 0 : 2500);
+})();
+</script>
+</body>
+</html>
