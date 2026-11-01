@@ -95,6 +95,12 @@ final class OverlayHostingView: NSHostingView<AnyView> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+/// CADisplayLink calls an Objective-C selector; this hands each frame to a closure.
+private final class FrameTicker: NSObject {
+    var onFrame: (CADisplayLink) -> Void = { _ in }
+    @objc func frame(_ link: CADisplayLink) { onFrame(link) }
+}
+
 @MainActor
 final class OverlayController {
     private let panel: NSPanel
@@ -105,6 +111,11 @@ final class OverlayController {
     private var contentSize = CGSize(width: 68, height: 148)
     private var dragStart: (mouse: CGPoint, origin: CGPoint)?
     private var throwing = ThrowTracker()
+    /// While a drop glides, SwiftUI moves the rings into the new layout and the panel is a box that fits both layouts,
+    /// the content centred in it.
+    private var flight: (glide: RailGlide, box: CGSize, time: CFTimeInterval?)?
+    private var flightLink: CADisplayLink?
+    private let ticker = FrameTicker()
     private var railFrame = CGRect.zero
     private var cardFrame = CGRect.zero
     private var hintFrame = CGRect.zero   // the next-break hint on hover; .zero while it's hidden
@@ -199,6 +210,12 @@ final class OverlayController {
                                      anchor: pinned ?? CGPoint(x: bounds.midX, y: bounds.midY),
                                      in: bounds)
         pinned = state.dock.anchor(of: frame)
+        if var f = flight {   // the glide lands on it; the box keeps room for the old layout too
+            f.glide.target = frame
+            f.box = CGSize(width: max(f.box.width, frame.width + 32), height: max(f.box.height, frame.height + 32))
+            flight = f
+            return
+        }
         guard panel.frame != frame else { return }
         panel.setFrame(frame, display: false)
     }
@@ -210,6 +227,8 @@ final class OverlayController {
     private func drag(_ location: CGPoint) {
         let mouse = screenPoint(location)
         if dragStart == nil {
+            if let flight { land(CGRect(x: flight.glide.center.first - contentSize.width / 2, y: flight.glide.center.second - contentSize.height / 2,
+                                        width: contentSize.width, height: contentSize.height)) }   // caught mid-glide
             dragStart = (mouse, panel.frame.origin)
             state.dragging = true
         }
@@ -224,11 +243,12 @@ final class OverlayController {
         let mouse = screenPoint(location)
         dockScreen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? panel.screen ?? NSScreen.main
         throwing.add(mouse, at: ProcessInfo.processInfo.systemUptime)
+        let velocity = throwing.velocity(at: ProcessInfo.processInfo.systemUptime)
+        var edge = state.dock
         if let screen = dockScreen {
-            let landing = DockEdge.landing(from: mouse, velocity: throwing.velocity(at: ProcessInfo.processInfo.systemUptime),
-                                           current: state.dock, in: screen.visibleFrame)
+            let landing = DockEdge.landing(from: mouse, velocity: velocity, current: state.dock, in: screen.visibleFrame)
             pinned = landing.point
-            state.persisted.dock = landing.edge
+            edge = landing.edge
         }
         dragStart = nil
         throwing = ThrowTracker()
@@ -236,10 +256,46 @@ final class OverlayController {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.state.dragging = false
-            self.state.collapseOverlay()
-            self.contentSized(self.contentSize)
-            self.panel.saveFrame(usingName: "PulseOverlay")
+            guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {   // a plain, immediate move
+                self.state.persisted.dock = edge
+                self.state.collapseOverlay()
+                self.contentSized(self.contentSize)
+                self.panel.saveFrame(usingName: "PulseOverlay")
+                return
+            }
+            let start = self.panel.frame, spring = railSpring()
+            self.flight = (RailGlide(center: AnimatablePair(start.midX, start.midY), velocity: AnimatablePair(velocity.dx, velocity.dy),
+                                     target: start, edge: edge, spring: spring),
+                           CGSize(width: start.width + 32, height: start.height + 32), nil)
+            // only the glide sizes the panel meanwhile: no window resize from Auto Layout before the box catches up
+            (self.panel.contentView as? OverlayHostingView)?.sizingOptions = []
+            withAnimation(.spring(spring)) {
+                self.state.persisted.dock = edge
+                self.state.collapseOverlay()
+            }
+            self.contentSized(self.contentSize)   // a first target; the new layout's size moves it when it arrives
+            self.flightLink = self.panel.contentView?.displayLink(target: self.ticker, selector: #selector(FrameTicker.frame(_:)))
+            self.flightLink?.add(to: .main, forMode: .common)
         }
+    }
+
+    private func glide(_ link: CADisplayLink) {
+        guard var f = flight else { return }
+        let dt = f.time.map { min(link.timestamp - $0, 1.0 / 30) } ?? 0
+        f.time = link.timestamp
+        guard !f.glide.step(dt) else { return land(f.glide.target) }
+        flight = f
+        panel.setFrame(CGRect(x: f.glide.center.first - f.box.width / 2, y: f.glide.center.second - f.box.height / 2,
+                              width: f.box.width, height: f.box.height), display: true)
+    }
+
+    private func land(_ frame: CGRect) {
+        flight = nil
+        flightLink?.invalidate()
+        flightLink = nil
+        panel.setFrame(frame, display: true)
+        (panel.contentView as? OverlayHostingView)?.sizingOptions = .standardBounds
+        panel.saveFrame(usingName: "PulseOverlay")
     }
 
     init(state: AppState) {
@@ -263,6 +319,7 @@ final class OverlayController {
             onPillFrame: { [weak self] in self?.pillFrame = $0 },
             pointerInside: { [weak self] in self.map { $0.panel.frame.insetBy(dx: 1, dy: 1).contains(NSEvent.mouseLocation) } ?? false }))
         panel.contentView = hosting
+        ticker.onFrame = { [weak self] link in MainActor.assumeIsolated { self?.glide(link) } }
         if panel.setFrameUsingName("PulseOverlay"), panel.frame.width > 50 {
             pinned = state.dock.anchor(of: panel.frame)
             dockScreen = panel.screen

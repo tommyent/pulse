@@ -1,6 +1,7 @@
 // Run: swiftc Sources/Pulse/DockGeometry.swift Sources/Pulse/Models.swift Checks/OverlayChecks.swift -o /tmp/pulse-overlay-check && /tmp/pulse-overlay-check
 import Foundation
 import CoreGraphics
+import SwiftUI
 
 @main
 enum OverlayChecks {
@@ -58,6 +59,30 @@ enum OverlayChecks {
         throwing.add(CGPoint(x: 300, y: 500), at: 1.3)
         assert(throwing.velocity(at: 1.3) == .zero, "held still for 140 ms before release")
         assert(ThrowTracker().velocity(at: 5) == .zero)
+        // Each spring settles on its spot, and a hard throw never carries the rail through the screen edge.
+        for name in ["snappy", "smooth", "bouncy"] {
+            for (edge, from, v) in [(DockEdge.right, CGPoint(x: 900, y: 500), CGVector(dx: 4000, dy: 300)),
+                                    (.top, CGPoint(x: 900, y: 100), CGVector(dx: -200, dy: 3000)),
+                                    (.left, CGPoint(x: 60, y: 500), CGVector(dx: 0, dy: -1500)), (.bottom, CGPoint(x: 900, y: 40), .zero)] {
+                let target = edge.frame(size: CGSize(width: 68, height: 148), anchor: edge.anchor(of: CGRect(x: 0, y: 0, width: 1710, height: 1070)),
+                                        in: CGRect(x: 0, y: 0, width: 1710, height: 1070))
+                var glide = RailGlide(center: AnimatablePair(from.x, from.y), velocity: AnimatablePair(v.dx, v.dy), target: target,
+                                      edge: edge, spring: railSpring(name))
+                var settled = false
+                while !settled {
+                    settled = glide.step(1.0 / 120)
+                    let beyond: CGFloat = switch edge {
+                    case .right: glide.center.first - target.midX
+                    case .left: target.midX - glide.center.first
+                    case .top: glide.center.second - target.midY
+                    case .bottom: target.midY - glide.center.second
+                    }
+                    assert(beyond <= 16.001, "\(name) \(edge): \(beyond) pt through the wall")
+                }
+                assert(glide.elapsed < 1.5, "\(name) \(edge) took \(glide.elapsed) s")
+                assert(abs(glide.center.first - target.midX) < 0.5 && abs(glide.center.second - target.midY) < 0.5)
+            }
+        }
         // The short card leaves transparent window space above and below it.
         // Rotate the layout to exercise the same dismissal rules on all four edges.
         for turns in 0..<4 {
@@ -98,6 +123,6 @@ enum OverlayChecks {
         assert(!following, "new text never pulls back a reader who scrolled up")
         following = transcriptFollows(following, oldOffset: 600, offset: 1040, visible: 260, content: 1300)
         assert(following, "back at the bottom, it follows again")
-        print("Overlay checks passed: docking, throws, expansion, displays, persistence, pop-out dismissal, reset labels and transcript following")
+        print("Overlay checks passed: docking, throws, glides, expansion, displays, persistence, pop-out dismissal, reset labels and transcript following")
     }
 }

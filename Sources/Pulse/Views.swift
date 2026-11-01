@@ -673,17 +673,22 @@ struct OverlayView: View {
         let layout = state.dock.isVertical
             ? AnyLayout(HStackLayout(alignment: .center, spacing: 16))
             : AnyLayout(VStackLayout(spacing: 16))
+        let tail: Edge = switch state.dock {
+        case .left: .leading
+        case .top: .top
+        case .bottom: .bottom
+        case .right: .trailing
+        }
         layout {
-            // card sits on the far side of the rail from the docked edge, tail pointing at the rail
-            if state.dock == .top || state.dock == .left {
-                rail
-                card(tail: state.dock == .left ? .leading : .top)
-            } else {
-                card(tail: state.dock == .bottom ? .bottom : .trailing)
-                rail
+            // The card sits on the far side of the rail from the docked edge, its tail pointing at the rail. A ForEach keeps
+            // the rail one view on every edge, so a drop's animation moves its rings into the new layout.
+            ForEach(state.dock == .top || state.dock == .left ? ["rail", "card"] : ["card", "rail"], id: \.self) { part in
+                if part == "rail" { rail } else { card(tail: tail) }
             }
         }
-        .padding(12)   // no layout animation: the panel resizes at once, so an animated rail would slide from its old spot
+        // Only a drop animates layout, inside a glide that sizes the panel for it; elsewhere the panel resizes at once,
+        // so an animated rail would slide from its old spot.
+        .padding(12)
         .onHover { over in
             guard !state.dragging else { return }
             exitWatch?.cancel(); exitWatch = nil

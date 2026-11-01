@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import SwiftUI   // Spring
 
 /// Transparent window space around the visible rail and card is an outside click.
 func overlayClickIsOutside(_ point: CGPoint, in bounds: CGRect, rail: CGRect, card: CGRect?) -> Bool {
@@ -104,5 +105,52 @@ enum DockEdge: String, Codable, CaseIterable {
         case .bottom: origin = CGPoint(x: x, y: bounds.minY)
         }
         return CGRect(origin: origin, size: size)
+    }
+}
+
+/// The drop's spring, from the hidden `railSpring` default while the owner compares them: snappy, smooth (the
+/// default) or bouncy. `defaults write io.github.tommyent.pulse railSpring bouncy` takes effect at the next drop.
+func railSpring(_ name: String? = UserDefaults.standard.string(forKey: "railSpring")) -> Spring {
+    switch name {
+    case "snappy": .snappy(duration: 0.35)
+    case "bouncy": .bouncy(duration: 0.55)
+    default: .smooth(duration: 0.5)
+    }
+}
+
+/// A dropped rail's flight: its centre springs to the docked frame's centre, starting at the throw's velocity.
+struct RailGlide {
+    var center: AnimatablePair<CGFloat, CGFloat>
+    var velocity: AnimatablePair<CGFloat, CGFloat>
+    var target: CGRect
+    let edge: DockEdge
+    let spring: Spring
+    var elapsed: TimeInterval = 0
+
+    /// Advances by `dt` seconds; true once it has settled on the target (or given up after two seconds).
+    mutating func step(_ dt: TimeInterval) -> Bool {
+        elapsed += dt
+        let goal = AnimatablePair(target.midX, target.midY)
+        spring.update(value: &center, velocity: &velocity, target: goal, deltaTime: dt)
+        // The screen edge is a wall: the rail may press up to it (16 pt past its spot: the panel's margin and padding),
+        // then bounces back by the spring's own bounce.
+        let normal: (x: CGFloat, y: CGFloat) = switch edge {
+        case .right: (1, 0)
+        case .left: (-1, 0)
+        case .top: (0, 1)
+        case .bottom: (0, -1)
+        }
+        let past = (center.first - goal.first) * normal.x + (center.second - goal.second) * normal.y - 16
+        if past > 0 {
+            center.first -= past * normal.x
+            center.second -= past * normal.y
+            let into = velocity.first * normal.x + velocity.second * normal.y
+            if into > 0 {
+                velocity.first -= (1 + spring.bounce) * into * normal.x
+                velocity.second -= (1 + spring.bounce) * into * normal.y
+            }
+        }
+        let still = hypot(center.first - goal.first, center.second - goal.second) < 0.5 && hypot(velocity.first, velocity.second) < 10
+        return still || elapsed >= 2
     }
 }
