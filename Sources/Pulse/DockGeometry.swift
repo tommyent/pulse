@@ -13,6 +13,25 @@ func transcriptFollows(_ following: Bool, oldOffset: CGFloat, offset: CGFloat, v
     offset == oldOffset ? following : offset + visible >= content - 24
 }
 
+/// The pointer's velocity at release, in screen points per second. SwiftUI's `DragGesture` velocity is useless here: its
+/// locations are relative to the panel, which follows the pointer, so they barely change. Only the last 80 ms count,
+/// so a pause before letting go reads as a still drop.
+struct ThrowTracker {
+    private var samples: [(time: TimeInterval, point: CGPoint)] = []
+
+    mutating func add(_ point: CGPoint, at time: TimeInterval) {
+        samples.append((time, point))
+        samples.removeAll { $0.time < time - 0.08 }
+    }
+
+    func velocity(at time: TimeInterval) -> CGVector {
+        let recent = samples.filter { $0.time >= time - 0.08 }
+        guard let first = recent.first, let last = recent.last, last.time - first.time > 0.005 else { return .zero }
+        let dt = CGFloat(last.time - first.time)
+        return CGVector(dx: (last.point.x - first.point.x) / dt, dy: (last.point.y - first.point.y) / dt)
+    }
+}
+
 enum DockEdge: String, Codable, CaseIterable {
     case right, left, top, bottom
 
@@ -24,6 +43,28 @@ enum DockEdge: String, Codable, CaseIterable {
             (.top, abs(screen.maxY - point.y)), (.bottom, abs(point.y - screen.minY)),
         ]
         return distances.min { $0.1 < $1.1 }!.0
+    }
+
+    /// Released at `flickSpeed` or faster (points per second), the rail goes to the edge its path reaches first and lands
+    /// where the path meets it. Slower is a drop: the nearest edge, at the release point.
+    static let flickSpeed: CGFloat = 500
+
+    static func landing(from point: CGPoint, velocity v: CGVector, in screen: CGRect) -> (edge: DockEdge, point: CGPoint) {
+        let p = CGPoint(x: min(max(point.x, screen.minX), screen.maxX), y: min(max(point.y, screen.minY), screen.maxY))
+        guard hypot(v.dx, v.dy) >= flickSpeed else { return (nearest(to: p, in: screen), p) }
+        let times: [(DockEdge, CGFloat)] = [
+            (.right, v.dx > 0 ? (screen.maxX - p.x) / v.dx : .infinity), (.left, v.dx < 0 ? (screen.minX - p.x) / v.dx : .infinity),
+            (.top, v.dy > 0 ? (screen.maxY - p.y) / v.dy : .infinity), (.bottom, v.dy < 0 ? (screen.minY - p.y) / v.dy : .infinity),
+        ]
+        let (edge, t) = times.min { $0.1 < $1.1 }!
+        let hit = CGPoint(x: p.x + v.dx * t, y: p.y + v.dy * t)
+        // land exactly on the edge, not a rounding error inside it
+        switch edge {
+        case .right: return (edge, CGPoint(x: screen.maxX, y: hit.y))
+        case .left: return (edge, CGPoint(x: screen.minX, y: hit.y))
+        case .top: return (edge, CGPoint(x: hit.x, y: screen.maxY))
+        case .bottom: return (edge, CGPoint(x: hit.x, y: screen.minY))
+        }
     }
 
     func anchor(of frame: CGRect) -> CGPoint {

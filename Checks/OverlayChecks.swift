@@ -23,6 +23,34 @@ enum OverlayChecks {
                 assert((try! JSONDecoder().decode(DockEdge.self, from: JSONEncoder().encode(edge))) == edge)
             }
         }
+        // A throw docks where it is heading; a slow release docks to the nearest edge. The wide screen matters: from its
+        // middle the top and bottom are nearer than the sides, so nearest-edge alone turned sideways throws upward.
+        for air in [CGRect(x: 0, y: 0, width: 1710, height: 1070), CGRect(x: -1710, y: 400, width: 1710, height: 1070)] {
+            let mid = CGPoint(x: air.midX, y: air.midY)
+            func lands(_ p: CGPoint, _ dx: CGFloat, _ dy: CGFloat) -> (edge: DockEdge, point: CGPoint) {
+                DockEdge.landing(from: p, velocity: CGVector(dx: dx, dy: dy), in: air)
+            }
+            assert(lands(mid, 1500, 200).edge == .right, "sideways throw from mid-screen reaches the far side")
+            assert(lands(mid, -1500, -200).edge == .left)
+            assert(lands(CGPoint(x: air.maxX - 30, y: mid.y), -900, 120).edge == .left, "a rail thrown off the right edge crosses over")
+            let up = lands(CGPoint(x: mid.x, y: air.minY + 150), 120, 1500)
+            assert(up.edge == .top, "bottom-to-top throw lands on top")
+            assert(up.point.y == air.maxY && abs(up.point.x - (mid.x + 120 * (air.height - 150) / 1500)) < 0.5,
+                   "it lands where its path meets the edge")
+            assert(lands(CGPoint(x: mid.x, y: air.minY + 150), 0, 120).edge == .bottom, "a slow drop stays nearest")
+            assert(lands(CGPoint(x: air.maxX - 200, y: mid.y), -150, 0).edge == .right)
+            let still = lands(CGPoint(x: mid.x + 100, y: air.maxY - 50), 0, 0)
+            assert(still.edge == .top && still.point == CGPoint(x: mid.x + 100, y: air.maxY - 50))
+            assert(lands(CGPoint(x: air.maxX + 40, y: mid.y), 0, 0).point.x == air.maxX, "a release past the edge stays on the screen")
+        }
+        // Speed comes from the drag's last moments: a pause before letting go is a drop, not a throw.
+        var throwing = ThrowTracker()
+        for i in 0...20 { throwing.add(CGPoint(x: 100 + 10 * CGFloat(i), y: 500), at: 1 + 0.008 * Double(i)) }
+        let flung = throwing.velocity(at: 1.16)
+        assert(abs(flung.dx - 1250) < 1 && flung.dy == 0, "10 pt every 8 ms is 1250 pt/s, got \(flung)")
+        throwing.add(CGPoint(x: 300, y: 500), at: 1.3)
+        assert(throwing.velocity(at: 1.3) == .zero, "held still for 140 ms before release")
+        assert(ThrowTracker().velocity(at: 5) == .zero)
         // The short card leaves transparent window space above and below it.
         // Rotate the layout to exercise the same dismissal rules on all four edges.
         for turns in 0..<4 {
@@ -63,6 +91,6 @@ enum OverlayChecks {
         assert(!following, "new text never pulls back a reader who scrolled up")
         following = transcriptFollows(following, oldOffset: 600, offset: 1040, visible: 260, content: 1300)
         assert(following, "back at the bottom, it follows again")
-        print("Overlay checks passed: docking, expansion, displays, persistence, pop-out dismissal, reset labels and transcript following")
+        print("Overlay checks passed: docking, throws, expansion, displays, persistence, pop-out dismissal, reset labels and transcript following")
     }
 }

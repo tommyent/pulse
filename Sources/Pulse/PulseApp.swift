@@ -104,6 +104,7 @@ final class OverlayController {
     private var dockScreen: NSScreen?
     private var contentSize = CGSize(width: 68, height: 148)
     private var dragStart: (mouse: CGPoint, origin: CGPoint)?
+    private var throwing = ThrowTracker()
     private var railFrame = CGRect.zero
     private var cardFrame = CGRect.zero
     private var hintFrame = CGRect.zero   // the next-break hint on hover; .zero while it's hidden
@@ -213,6 +214,7 @@ final class OverlayController {
             state.dragging = true
         }
         guard let start = dragStart else { return }
+        throwing.add(mouse, at: ProcessInfo.processInfo.systemUptime)
         panel.setFrameOrigin(CGPoint(x: start.origin.x + mouse.x - start.mouse.x,
                                      y: start.origin.y + mouse.y - start.mouse.y))
     }
@@ -221,11 +223,15 @@ final class OverlayController {
         guard dragStart != nil else { return }
         let mouse = screenPoint(location)
         dockScreen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? panel.screen ?? NSScreen.main
+        throwing.add(mouse, at: ProcessInfo.processInfo.systemUptime)
         if let screen = dockScreen {
-            pinned = mouse
-            state.persisted.dock = DockEdge.nearest(to: mouse, in: screen.visibleFrame)
+            let landing = DockEdge.landing(from: mouse, velocity: throwing.velocity(at: ProcessInfo.processInfo.systemUptime),
+                                           in: screen.visibleFrame)
+            pinned = landing.point
+            state.persisted.dock = landing.edge
         }
         dragStart = nil
+        throwing = ThrowTracker()
         // Keep ring clicks suppressed until the mouse-up event has finished dispatching.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
