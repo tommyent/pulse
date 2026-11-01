@@ -111,21 +111,36 @@ enum OverlayChecks {
                                         in: CGRect(x: 0, y: 0, width: 1710, height: 1070))
                 var glide = RailGlide(center: AnimatablePair(from.x, from.y), velocity: AnimatablePair(v.dx, v.dy), target: target,
                                       edge: edge, spring: railSpring(name))
-                var settled = false
-                while !settled {
-                    settled = glide.step(1.0 / 120)
-                    let beyond: CGFloat = switch edge {
+                func beyond() -> CGFloat {
+                    switch edge {
                     case .right: glide.center.first - target.midX
                     case .left: target.midX - glide.center.first
                     case .top: glide.center.second - target.midY
                     case .bottom: target.midY - glide.center.second
                     }
-                    assert(beyond <= 16.001, "\(name) \(edge): \(beyond) pt through the wall")
+                }
+                let wall = max(16, beyond())   // a rail released past the wall only eases back from there
+                var settled = false
+                while !settled {
+                    settled = glide.step(1.0 / 120)
+                    assert(beyond() <= wall + 0.001, "\(name) \(edge): \(beyond()) pt through the wall")
                 }
                 assert(glide.elapsed < 1.5, "\(name) \(edge) took \(glide.elapsed) s")
                 assert(abs(glide.center.first - target.midX) < 0.5 && abs(glide.center.second - target.midY) < 0.5)
             }
         }
+        // Released hanging past the edge (the pointer at the screen's bottom, a tall rail below it), the rail eases back in:
+        // the wall starts where the rail is instead of snapping it 64 pt in one frame, as the owner's logs showed.
+        let bottomSpot = CGRect(x: 442, y: 4, width: 262, height: 84)
+        var hanging = RailGlide(center: AnimatablePair(652, -34), velocity: AnimatablePair(217, 0), target: bottomSpot, edge: .bottom,
+                                spring: railSpring("bouncy"))
+        var last = hanging.center, settledHanging = false
+        while !settledHanging {
+            settledHanging = hanging.step(1.0 / 120)
+            assert(hypot(hanging.center.first - last.first, hanging.center.second - last.second) < 12, "no jump: \(last) -> \(hanging.center)")
+            last = hanging.center
+        }
+        assert(abs(hanging.center.second - bottomSpot.midY) < 0.5 && hanging.elapsed < 1.5)
         // The short card leaves transparent window space above and below it.
         // Rotate the layout to exercise the same dismissal rules on all four edges.
         for turns in 0..<4 {

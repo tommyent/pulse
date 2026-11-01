@@ -162,21 +162,24 @@ struct RailGlide {
     let edge: DockEdge
     let spring: Spring
     var elapsed: TimeInterval = 0
+    var startDepth: CGFloat? = nil   // how far toward the edge it began: a rail released past the wall starts the wall there
 
     /// Advances by `dt` seconds; true once it has settled on the target (or given up after two seconds).
     mutating func step(_ dt: TimeInterval) -> Bool {
-        elapsed += dt
-        let goal = AnimatablePair(target.midX, target.midY)
-        spring.update(value: &center, velocity: &velocity, target: goal, deltaTime: dt)
-        // The screen edge is a wall: the rail may press up to it (16 pt past its spot: the panel's margin and padding),
-        // then bounces back by the spring's own bounce.
         let normal: (x: CGFloat, y: CGFloat) = switch edge {
         case .right: (1, 0)
         case .left: (-1, 0)
         case .top: (0, 1)
         case .bottom: (0, -1)
         }
-        let past = (center.first - goal.first) * normal.x + (center.second - goal.second) * normal.y - 16
+        func depth(_ p: AnimatablePair<CGFloat, CGFloat>) -> CGFloat { p.first * normal.x + p.second * normal.y }
+        if startDepth == nil { startDepth = depth(center) }
+        elapsed += dt
+        let goal = AnimatablePair(target.midX, target.midY)
+        spring.update(value: &center, velocity: &velocity, target: goal, deltaTime: dt)
+        // The screen edge is a wall: the rail may press up to it (16 pt past its spot: the panel's margin and padding),
+        // then bounces back by the spring's own bounce. One released further out eases back in rather than snapping.
+        let past = depth(center) - max(depth(goal) + 16, startDepth ?? 0)
         if past > 0 {
             center.first -= past * normal.x
             center.second -= past * normal.y
