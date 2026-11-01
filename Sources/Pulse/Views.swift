@@ -964,6 +964,7 @@ struct MenuBarPopover: View {
                 }
                 Button("Quit") { NSApp.terminate(nil) }
             }
+            CheckForUpdatesButton()
         }
         .padding(14)
         .frame(width: 300)
