@@ -644,7 +644,7 @@ struct OverlayView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var exitWatch: Task<Void, Never>?
 
-    private var expanded: Bool { state.hoveringOverlay || state.cardVisible || state.petVisible }
+    private var expanded: Bool { !state.tuckedAway && (state.hoveringOverlay || state.cardVisible || state.petVisible) }
     @State private var itemFrames: [String: CGRect] = [:]   // the pet and each ring, so a card's tail points at its own
     @State private var cardFrame = CGRect.zero
     @State private var railFrame = CGRect.zero
@@ -692,6 +692,15 @@ struct OverlayView: View {
         .onHover { over in
             guard !state.dragging else { return }
             exitWatch?.cancel(); exitWatch = nil
+            if state.tuckedAway {   // the sliver never expands; with peeking on, a rest on it slides the rail out
+                guard over, state.persisted.tuckPeek == true else { return }
+                exitWatch = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(400))
+                    // a click restore in the meantime leaves nothing to peek
+                    if !Task.isCancelled, pointerInside?() == true, state.tuckedAway { state.peeking = true }
+                }
+                return
+            }
             if over { state.hoveringOverlay = true; return }
             guard !state.petVisible else { return }   // a chat stays open until a click outside
             // Hover also ends without the pointer leaving: when Pulse hands focus back as the pet closes, and while a
@@ -768,6 +777,17 @@ struct OverlayView: View {
                 }
                 .buttonStyle(.plain)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { itemFrames[id.rawValue] = $0 }
+                .overlay(alignment: tuckBand.alignment) {
+                    let used = windows.first?.percentUsed ?? 0
+                    let shown = max(0, min(state.showsRemaining ? 100 - used : used, 100))
+                    Capsule().fill(windows.contains(where: \.isNearLimit) ? Color.red : id.accent)
+                        .frame(width: state.dock.isVertical ? 3 : 4 + 16 * shown / 100, height: state.dock.isVertical ? 4 + 16 * shown / 100 : 3)
+                        .offset(tuckBand.offset)
+                        .opacity(state.tuckedAway && windows.first?.percentUsed != nil ? 1 : 0)
+                        .animation(.easeOut(duration: 0.25), value: state.tuckedAway)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
                 .accessibilityLabel("\(id.displayName) usage")
                 .accessibilityValue(windows.filter(\.isNearLimit).map { w in
                     let p = w.percentUsed ?? 0
@@ -786,10 +806,34 @@ struct OverlayView: View {
         .padding(state.dock.isVertical ? .horizontal : .vertical, expanded ? 12 : 8)
         .pulseSurface(in: RoundedRectangle(cornerRadius: expanded ? 26 : 18))
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { railFrame = $0; onRailFrame?($0) }
+        .overlay {
+            // Tucked, the sliver and 12 pt beside it are one handle: a click brings the rail back; the drag below pulls it out.
+            if state.tuckedAway {
+                Color.clear.contentShape(Rectangle())
+                    .padding(tuckBand.inner, -12)
+                    .onTapGesture { if !state.dragging { state.tuckedBinding.wrappedValue = false } }
+                    .accessibilityElement()
+                    .accessibilityLabel("Usage rings, minimized")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityHint("Shows the rings again")
+                    .help("Click to bring the rings back, or drag them out")
+            }
+        }
         .simultaneousGesture(DragGesture(minimumDistance: 4, coordinateSpace: .global)
             .onChanged { onDrag?($0.location) }
             .onEnded { onDrop?($0.location) })
-        .help("Drag to any screen edge")
+        .help("Drag to any screen edge, or throw into this one to minimize")
+    }
+
+    /// The side of the rail a tuck leaves on screen (away from the edge), and where a ring's tick sits in that 7 pt band:
+    /// the band's middle is 3.5 pt in from the rail's side, the ring 8 pt in.
+    private var tuckBand: (inner: Edge.Set, alignment: Alignment, offset: CGSize) {
+        switch state.dock {
+        case .right: (.leading, .leading, CGSize(width: -6, height: 0))
+        case .left: (.trailing, .trailing, CGSize(width: 6, height: 0))
+        case .top: (.bottom, .bottom, CGSize(width: 0, height: 6))
+        case .bottom: (.top, .top, CGSize(width: 0, height: -6))
+        }
     }
 
     private struct PetRailItem: View {
@@ -896,6 +940,9 @@ struct MenuBarPopover: View {
                 }
             }
             Toggle("Show usage rings on desktop", isOn: $state.persisted.showOverlay).toggleStyle(.checkbox)
+            Toggle("Minimize the rings to their edge", isOn: state.tuckedBinding).toggleStyle(.checkbox)
+                .disabled(!state.persisted.showOverlay)
+                .accessibilityLabel("Minimize the rings to their edge")
             HStack {
                 Button {
                     Task { await state.refreshAll() }
@@ -1008,14 +1055,17 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(PulsePalette.secondary)
                 }
             }
-            tab("Rings", "circle.circle", height: 240) {
+            tab("Rings", "circle.circle", height: 300) {
                 Section {
                     Toggle("Show usage rings on desktop", isOn: $state.persisted.showOverlay)
                         .accessibilityLabel("Show usage rings on desktop")
                     Toggle("Always on top", isOn: $state.persisted.alwaysOnTop)
                         .accessibilityLabel("Always on top")
-                    Text("Drag the usage rings to any screen edge. Top and bottom arrange horizontally.")
+                    Text("Drag or throw the usage rings to any screen edge; top and bottom arrange horizontally. Throw them into their own edge to minimize them to a sliver, and click it to bring them back.")
                         .font(.caption).foregroundStyle(PulsePalette.secondary)
+                    Toggle("Peek when the pointer rests on the minimized rings", isOn: state.tuckPeekBinding)
+                        .accessibilityLabel("Peek when the pointer rests on the minimized rings")
+                        .help("The rings slide out while the pointer stays on the sliver, and back when it leaves. Off, only a click brings them back.")
                     Toggle("Show what's left", isOn: state.showsRemainingBinding)
                         .accessibilityLabel("Show what's left")
                         .help("Rings, bars and percentages show what's left of each limit instead of what's used, emptying as you use it.")
