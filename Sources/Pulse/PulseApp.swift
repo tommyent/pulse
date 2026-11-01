@@ -71,7 +71,6 @@ struct PulseApp: App {
                         .environment(\.appearsActive, true)
                         .preferredColorScheme(.dark)
                 }
-                .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
                 .pulsePresentation(state)
         }
     }
