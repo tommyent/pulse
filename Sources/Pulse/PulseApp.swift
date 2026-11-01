@@ -39,6 +39,7 @@ struct PulseApp: App {
         overlay = OverlayController(state: state)
         batteryAlerts = BatteryAlerts(state: state)
         BreakController.shared.attach(state)
+        _ = Updates.shared.controller   // starts Sparkle's scheduled checks
         NSApplication.shared.setActivationPolicy(.accessory)   // no Dock icon
     }
 

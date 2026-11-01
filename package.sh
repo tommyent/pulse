@@ -13,7 +13,7 @@ swift build -c release "$@"
 BIN_DIR="$(swift build -c release "$@" --show-bin-path)"
 STAGE="$(mktemp -d .build/package.XXXXXX)"
 APP="$STAGE/Pulse.app"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 
 cat > "$APP/Contents/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -24,17 +24,22 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
     <key>CFBundleExecutable</key><string>Pulse</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.2.0</string>
-    <key>CFBundleVersion</key><string>2</string>
+    <key>CFBundleShortVersionString</key><string>0.3.0</string>
+    <key>CFBundleVersion</key><string>3</string>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>LSUIElement</key><true/>
     <key>NSMicrophoneUsageDescription</key><string>Live voice with the Codex pet uses your microphone.</string>
+    <key>SUFeedURL</key><string>https://tommyent.github.io/pulse/appcast.xml</string>
+    <key>SUPublicEDKey</key><string>b+88Zfi9JKSrvlROjgKWtc55KNWhZp5Pa/XkLT+2EQ4=</string>
 </dict></plist>
 EOF
 
 cp "$BIN_DIR/Pulse" "$APP/Contents/MacOS/Pulse"
 cp -R "$BIN_DIR/Pulse_Pulse.bundle" "$APP/Contents/Resources/"
 cp Sources/Pulse/Resources/AppIcon.icns "$APP/Contents/Resources/"
+# Sparkle with its symlinks and permissions; its XPC services are for sandboxed apps, so they stay out
+rsync -a --exclude XPCServices "$BIN_DIR/Sparkle.framework" "$APP/Contents/Frameworks/"
+codesign -f -s "${CODE_SIGN_IDENTITY:--}" "$APP/Contents/Frameworks/Sparkle.framework"   # resealed without them
 
 ./scripts/stamp-sdk.sh "$APP/Contents/MacOS/Pulse"
 codesign -f -s "${CODE_SIGN_IDENTITY:--}" "$APP"   # the identifier comes from Info.plist

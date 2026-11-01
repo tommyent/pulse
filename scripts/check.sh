@@ -18,7 +18,10 @@ swiftc Sources/Pulse/Breaks.swift Sources/Pulse/BreakTricks.swift Sources/Pulse/
 "$OUT/break"
 swiftc Sources/Pulse/BreakHats.swift Sources/Pulse/BreakTricks.swift Sources/Pulse/CodexPetSprite.swift Checks/BreakHatChecks.swift -o "$OUT/hats"
 "$OUT/hats"
-swiftc $(find Sources/Pulse -name "*.swift" ! -name PulseApp.swift) Checks/SettingsStateChecks.swift -o "$OUT/state"
+swift package resolve   # the views link Sparkle
+SPARKLE="$PWD/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64"
+swiftc -F "$SPARKLE" -Xlinker -rpath -Xlinker "$SPARKLE" \
+    $(find Sources/Pulse -name "*.swift" ! -name PulseApp.swift) Checks/SettingsStateChecks.swift -o "$OUT/state"
 "$OUT/state"
 swiftc Sources/Pulse/HotKey.swift Checks/VoiceShortcutChecks.swift -o "$OUT/voice-shortcut"
 "$OUT/voice-shortcut"

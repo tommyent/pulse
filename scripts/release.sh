@@ -1,13 +1,17 @@
 #!/bin/zsh
 # Official build: Developer ID signature with the hardened runtime, then a notarized, stapled app inside a
-# notarized, stapled DMG, its checksum and a manifest in .build/release.XXXXXX.
+# notarized, stapled DMG, its checksum, Sparkle's appcast and a manifest in .build/release.XXXXXX.
 # Fails closed: it exits non-zero unless Apple accepts both submissions, both staples validate and Gatekeeper
 # accepts the app and the DMG. Needs a "Developer ID Application" identity (DEVELOPER_ID picks one when there
-# are several) and a notarytool keychain profile (NOTARY_PROFILE, default "notary").
+# are several), a notarytool keychain profile (NOTARY_PROFILE, default "notary"), Sparkle's EdDSA key in the
+# login Keychain and the release notes in docs/releases/<version>.md.
+# scripts/site.sh then puts the appcast, the notes and the version on the gh-pages branch.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [[ -f .env ]] && source .env
 PROFILE="${NOTARY_PROFILE:-notary}"
+KEY_ACCOUNT=io.github.tommyent.pulse   # Sparkle's EdDSA key in the login Keychain, kept apart from other apps' keys
+SPARKLE_BIN=.build/artifacts/sparkle/Sparkle/bin
 fail() { print -u2 -- "release: $1"; exit 1 }
 
 git diff --quiet HEAD -- || fail "commit the tracked changes first: a release is built from a commit"
@@ -19,20 +23,31 @@ fi
 TEAM="${${DEVELOPER_ID##*\(}%\)}"
 
 ./package.sh
-VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' .build/Pulse.app/Contents/Info.plist)"
+PLIST=.build/Pulse.app/Contents/Info.plist
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
+BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")"
+NOTES="docs/releases/$VERSION.md"
+[[ -s "$NOTES" ]] || fail "write the release notes first: $NOTES"
+# An update signed with any other key would be refused by every installed copy
+[[ "$("$SPARKLE_BIN/generate_keys" --account "$KEY_ACCOUNT" -p)" == "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$PLIST")" ]] \
+    || fail "SUPublicEDKey in package.sh is not the public half of the Keychain's $KEY_ACCOUNT key"
 OUT="$(mktemp -d .build/release.XXXXXX)"
 APP="$OUT/Pulse.app"
 ditto .build/Pulse.app "$APP"
 
-# Nested code would be signed here, inside-out, before the app; today the main executable is the only code.
-for f in "$APP"/Contents/**/*(.ND); do
-    [[ "$f" == "$APP/Contents/MacOS/Pulse" || "$(file -b "$f")" != Mach-O* ]] || fail "sign nested code first: $f"
+# Nested code first, inside-out and without --deep, as Sparkle's documentation signs it; then the app.
+FW="$APP/Contents/Frameworks/Sparkle.framework"
+for code in "$FW/Versions/B/Autoupdate" "$FW/Versions/B/Updater.app" "$FW"; do
+    codesign -f -s "$DEVELOPER_ID" --options runtime --timestamp "$code"
 done
 codesign -f -s "$DEVELOPER_ID" --options runtime --timestamp --entitlements scripts/Pulse.entitlements "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
-INFO="$(codesign -dv "$APP" 2>&1)"
-[[ "$INFO" == *"flags=0x10000(runtime)"* && "$INFO" == *"TeamIdentifier=$TEAM"* && "$INFO" == *Timestamp=* ]] \
-    || fail "signature lacks the hardened runtime, Team ID $TEAM or a secure timestamp"
+for f in "$APP" "$APP"/Contents/**/*(.ND); do   # every piece of code, so nothing unsigned by us slips in
+    [[ "$f" == "$APP" || "$(file -b "$f")" == Mach-O* ]] || continue
+    INFO="$(codesign -dv "$f" 2>&1)"
+    [[ "$INFO" == *"flags=0x10000(runtime)"* && "$INFO" == *"TeamIdentifier=$TEAM"* && "$INFO" == *Timestamp=* ]] \
+        || fail "$f: signature lacks the hardened runtime, Team ID $TEAM or a secure timestamp"
+done
 ENTITLEMENTS="$(codesign -d --entitlements - --xml "$APP" 2>/dev/null)"
 [[ "$ENTITLEMENTS" == *com.apple.security.device.audio-input* && "$ENTITLEMENTS" != *get-task-allow* ]] \
     || fail "entitlements must hold audio-input and no get-task-allow"
@@ -73,13 +88,31 @@ xcrun stapler validate "$DMG"
 gatekeeper --type open --context context:primary-signature "$DMG"
 
 (cd "$OUT" && shasum -a 256 "${DMG:t}" > "${DMG:t}.sha256")
+
+# Sparkle's feed, one item: the stapled DMG's EdDSA signature, the download on GitHub Releases, notes on the site
+mkdir "$OUT/updates"
+cp "$DMG" "$OUT/updates/"
+cp "$NOTES" "$OUT/updates/Pulse-$VERSION.md"
+"$SPARKLE_BIN/generate_appcast" --account "$KEY_ACCOUNT" --maximum-deltas 0 \
+    --download-url-prefix "https://github.com/tommyent/pulse/releases/download/v$VERSION/" \
+    --release-notes-url-prefix "https://tommyent.github.io/pulse/notes/" \
+    --link "https://tommyent.github.io/pulse/" "$OUT/updates"
+APPCAST="$(<"$OUT/updates/appcast.xml")"
+for want in "<sparkle:version>$BUILD</sparkle:version>" "<sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>" \
+    "url=\"https://github.com/tommyent/pulse/releases/download/v$VERSION/Pulse-$VERSION.dmg\"" \
+    "length=\"$(stat -f %z "$DMG")\"" "sparkle:edSignature=" \
+    "<sparkle:releaseNotesLink>https://tommyent.github.io/pulse/notes/Pulse-$VERSION.md</sparkle:releaseNotesLink>"; do
+    [[ "$APPCAST" == *"$want"* ]] || fail "appcast lacks $want"
+done
+
 cat > "$OUT/manifest.txt" <<EOF
-version: $VERSION ($(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist"))
+version: $VERSION ($BUILD)
 commit: $(git rev-parse HEAD)
 sha256: $(cut -d' ' -f1 "$DMG.sha256")  ${DMG:t}
 identity: $DEVELOPER_ID
 team: $TEAM
 notary: ${(j:, :)NOTARY}
+appcast: $OUT/updates/appcast.xml (EdDSA key: $KEY_ACCOUNT)
 built on: macOS $(sw_vers -productVersion), $(xcodebuild -version | tr '\n' ' ')SDK $(xcrun --sdk macosx --show-sdk-version), $(uname -m)
 EOF
 cat "$OUT/manifest.txt"
