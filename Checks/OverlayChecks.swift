@@ -28,7 +28,7 @@ enum OverlayChecks {
         // middle the top and bottom are nearer than the sides, so nearest-edge alone turned sideways throws upward.
         for air in [CGRect(x: 0, y: 0, width: 1710, height: 1070), CGRect(x: -1710, y: 400, width: 1710, height: 1070)] {
             let mid = CGPoint(x: air.midX, y: air.midY)
-            func lands(_ p: CGPoint, _ dx: CGFloat, _ dy: CGFloat, on current: DockEdge) -> (edge: DockEdge, point: CGPoint) {
+            func lands(_ p: CGPoint, _ dx: CGFloat, _ dy: CGFloat, on current: DockEdge) -> (edge: DockEdge, point: CGPoint, tuck: Bool) {
                 DockEdge.landing(from: p, velocity: CGVector(dx: dx, dy: dy), current: current, in: air)
             }
             // the owner's case: a rail from the top, dragged to mid-screen and thrown sideways, reaches the far side
@@ -86,6 +86,41 @@ enum OverlayChecks {
                    "\(edge): 7 pt of the rail stay on screen, got \(rail.intersection(air))")
             assert(edge.isVertical ? tucked.midY == docked.midY : tucked.midX == docked.midX, "\(edge): tucking keeps its spot along the edge")
         }
+        // The owner's own drags on a 1710 x 1107 pt screen (menu bar 34 pt, Dock hidden), recorded 2026-11-01: the last
+        // 100 ms of each (time, x, y with y up) and the edge it started on. Before the pinned rule, every tuck here failed,
+        // and the 19.37 s drag, slid sideways along the bottom, went to the left edge instead.
+        let display = CGRect(x: 0, y: 0, width: 1710, height: 1107), usable = CGRect(x: 0, y: 0, width: 1710, height: 1073)
+        let recorded: [(DockEdge, String, [(Double, CGFloat, CGFloat)])] = [
+            (.top, "right", [(2.422, 1177, 561), (2.442, 1190, 557), (2.454, 1199, 555), (2.471, 1205, 554), (2.488, 1209, 554), (2.504, 1213, 553), (2.522, 1213, 553)]),
+            (.right, "tuck", [(5.172, 1710, 654), (5.189, 1710, 668), (5.204, 1710, 672), (5.221, 1710, 669), (5.238, 1710, 660), (5.254, 1710, 651), (5.270, 1710, 643), (5.271, 1710, 643)]),
+            (.right, "top", [(7.356, 1609, 636), (7.371, 1570, 658), (7.389, 1525, 688), (7.405, 1478, 723), (7.421, 1439, 754), (7.439, 1412, 776), (7.455, 1395, 789), (7.455, 1395, 789)]),
+            (.top, "tuck", [(10.256, 1030, 998), (10.271, 1030, 1027), (10.288, 1030, 1070), (10.306, 1030, 1107), (10.326, 1033, 1107), (10.338, 1043, 1107), (10.354, 1060, 1107), (10.355, 1060, 1107)]),
+            (.top, "left", [(13.854, 328, 695), (13.872, 123, 690), (13.889, 0, 671), (13.908, 0, 645), (13.922, 0, 627), (13.938, 0, 618), (13.939, 0, 618)]),
+            (.left, "tuck", [(16.105, 0, 669), (16.122, 0, 662), (16.138, 0, 652), (16.155, 0, 645), (16.172, 0, 640), (16.188, 0, 636), (16.188, 0, 636)]),
+            (.left, "tuck", [(17.570, 0, 612), (17.620, 0, 605), (17.638, 0, 598), (17.656, 0, 593), (17.656, 0, 593)]),
+            (.left, "bottom", [(19.820, 656, 0), (19.838, 650, 0), (19.855, 647, 0), (19.904, 647, 0)]),
+            (.left, "bottom", [(22.471, 537, 0), (22.506, 539, 0), (22.524, 545, 0), (22.539, 551, 0), (22.555, 551, 0)]),
+            (.bottom, "tuck", [(25.388, 547, 0), (25.404, 549, 0), (25.405, 549, 0)]),
+        ]
+        for (current, want, samples) in recorded {
+            var hand = ThrowTracker()
+            for (t, x, y) in samples { hand.add(CGPoint(x: x, y: y), at: t) }
+            let (t, x, y) = samples.last!
+            let got = DockEdge.landing(from: CGPoint(x: x, y: y), velocity: hand.velocity(at: t), current: current, in: usable, display: display)
+            assert(want == "tuck" ? got.tuck && got.edge == current : !got.tuck && got.edge.rawValue == want,
+                   "the owner's drag at \(samples[0].0) s from \(current): wanted \(want), got \(got)")
+        }
+        // Pinned against another edge, the rail docks there; pinned against its own, it tucks; anywhere short of the
+        // display's edge, slow, it docks as before.
+        for edge in DockEdge.allCases {
+            let onEdge = edge.anchor(of: display)
+            for other in DockEdge.allCases {
+                let got = DockEdge.landing(from: onEdge, velocity: .zero, current: other, in: usable, display: display)
+                assert(got.edge == edge && got.tuck == (other == edge), "pinned at \(edge) from \(other): \(got)")
+            }
+            let short = edge.anchor(of: usable.insetBy(dx: 30, dy: 30))
+            assert(!DockEdge.landing(from: short, velocity: .zero, current: edge, in: usable, display: display).tuck)
+        }
         // Speed comes from the drag's last moments: a pause before letting go is a drop, not a throw.
         var throwing = ThrowTracker()
         for i in 0...20 { throwing.add(CGPoint(x: 100 + 10 * CGFloat(i), y: 500), at: 1 + 0.008 * Double(i)) }
@@ -94,14 +129,6 @@ enum OverlayChecks {
         throwing.add(CGPoint(x: 300, y: 500), at: 1.3)
         assert(throwing.velocity(at: 1.3) == .zero, "held still for 140 ms before release")
         assert(ThrowTracker().velocity(at: 5) == .zero)
-        // A flick into the screen edge pins the pointer there before the hand lets go: the speed is the one it arrived with.
-        var pinned = ThrowTracker()
-        for i in 0...5 { pinned.add(CGPoint(x: 1660 + 10 * CGFloat(i), y: 500), at: 2 + 0.008 * Double(i)) }
-        for i in 1...15 { pinned.add(CGPoint(x: 1710, y: 500), at: 2.04 + 0.008 * Double(i)) }
-        assert(abs(pinned.velocity(at: 2.16, pinned: true).dx - 1250) < 1, "arrived at 1250 pt/s, got \(pinned.velocity(at: 2.16, pinned: true))")
-        assert(pinned.velocity(at: 2.16) == .zero, "not against the display's edge, the same samples are a drop")
-        pinned.add(CGPoint(x: 1710, y: 500), at: 2.5)
-        assert(pinned.velocity(at: 2.5, pinned: true) == .zero, "held at the edge for over a quarter second, it's a drop")
         // Each spring settles on its spot, and a hard throw never carries the rail through the screen edge.
         for name in ["snappy", "smooth", "bouncy"] {
             for (edge, from, v) in [(DockEdge.right, CGPoint(x: 900, y: 500), CGVector(dx: 4000, dy: 300)),

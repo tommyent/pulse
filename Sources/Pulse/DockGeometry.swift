@@ -16,23 +16,17 @@ func transcriptFollows(_ following: Bool, oldOffset: CGFloat, offset: CGFloat, v
 
 /// The pointer's velocity at release, in screen points per second. SwiftUI's `DragGesture` velocity is useless here: its
 /// locations are relative to the panel, which follows the pointer, so they barely change. Only the last 80 ms count,
-/// so a pause before letting go reads as a still drop. A pointer `pinned` against the display's edge stopped because the
-/// screen ended, not the hand: if it got there within the last quarter second, its speed is the one it arrived with.
+/// so a pause before letting go reads as a still drop.
 struct ThrowTracker {
     private var samples: [(time: TimeInterval, point: CGPoint)] = []
 
     mutating func add(_ point: CGPoint, at time: TimeInterval) {
         samples.append((time, point))
-        samples.removeAll { $0.time < time - 0.4 }
+        samples.removeAll { $0.time < time - 0.08 }
     }
 
-    func velocity(at time: TimeInterval, pinned: Bool = false) -> CGVector {
-        var end = time
-        if pinned, let last = samples.last, let moving = samples.lastIndex(where: { $0.point != last.point }),
-           time - samples[moving + 1].time <= 0.25 {
-            end = samples[moving + 1].time   // when it arrived at the edge
-        }
-        let recent = samples.filter { $0.time >= end - 0.08 && $0.time <= end }
+    func velocity(at time: TimeInterval) -> CGVector {
+        let recent = samples.filter { $0.time >= time - 0.08 }
         guard let first = recent.first, let last = recent.last, last.time - first.time > 0.005 else { return .zero }
         let dt = CGFloat(last.time - first.time)
         return CGVector(dx: (last.point.x - first.point.x) / dt, dy: (last.point.y - first.point.y) / dt)
@@ -70,15 +64,23 @@ enum DockEdge: String, Codable, CaseIterable {
     static let flickSpeed: CGFloat = 500
     static let slideBand: CGFloat = 160
 
-    static func landing(from point: CGPoint, velocity v: CGVector, current: DockEdge,
-                        in screen: CGRect) -> (edge: DockEdge, point: CGPoint) {
+    ///
+    /// Released with the pointer pinned against the `display`'s edge, the rail was pushed there: the cursor stopped while
+    /// the hand went on, so its speed says nothing (it may even slide along the edge). It goes to that edge, and tucks
+    /// into it if that is the edge it is on. The rail sits 16 pt or more inside its edge, so pinning it takes a push.
+    /// A fast flick into its own edge, released short of the display's edge (the menu bar leaves room), tucks too.
+    static func landing(from point: CGPoint, velocity v: CGVector, current: DockEdge, in screen: CGRect,
+                        display: CGRect = .null) -> (edge: DockEdge, point: CGPoint, tuck: Bool) {
         func clamped(_ q: CGPoint) -> CGPoint {
             CGPoint(x: min(max(q.x, screen.minX), screen.maxX), y: min(max(q.y, screen.minY), screen.maxY))
         }
         let p = clamped(point), coasted = clamped(CGPoint(x: p.x + v.dx * 0.1, y: p.y + v.dy * 0.1))
-        guard hypot(v.dx, v.dy) >= flickSpeed else { return (nearest(to: p, in: screen), coasted) }
+        let pinned = allCases.filter { $0.distance(from: point, in: display) <= 2 }
+        if let pushed = pinned.contains(current) ? current : pinned.first { return (pushed, p, pushed == current) }
+        if current.tucks(from: point, velocity: v, in: screen) { return (current, p, true) }
+        guard hypot(v.dx, v.dy) >= flickSpeed else { return (nearest(to: p, in: screen), coasted, false) }
         let along = current.isVertical ? abs(v.dy) > abs(v.dx) : abs(v.dx) > abs(v.dy)
-        if along, current.distance(from: p, in: screen) <= slideBand { return (current, coasted) }
+        if along, current.distance(from: p, in: screen) <= slideBand { return (current, coasted, false) }
         let times: [(DockEdge, CGFloat)] = [
             (.right, v.dx > 0 ? (screen.maxX - p.x) / v.dx : .infinity), (.left, v.dx < 0 ? (screen.minX - p.x) / v.dx : .infinity),
             (.top, v.dy > 0 ? (screen.maxY - p.y) / v.dy : .infinity), (.bottom, v.dy < 0 ? (screen.minY - p.y) / v.dy : .infinity),
@@ -87,10 +89,10 @@ enum DockEdge: String, Codable, CaseIterable {
         let hit = CGPoint(x: p.x + v.dx * t, y: p.y + v.dy * t)
         // land exactly on the edge, not a rounding error inside it
         switch edge {
-        case .right: return (edge, CGPoint(x: screen.maxX, y: hit.y))
-        case .left: return (edge, CGPoint(x: screen.minX, y: hit.y))
-        case .top: return (edge, CGPoint(x: hit.x, y: screen.maxY))
-        case .bottom: return (edge, CGPoint(x: hit.x, y: screen.minY))
+        case .right: return (edge, CGPoint(x: screen.maxX, y: hit.y), false)
+        case .left: return (edge, CGPoint(x: screen.minX, y: hit.y), false)
+        case .top: return (edge, CGPoint(x: hit.x, y: screen.maxY), false)
+        case .bottom: return (edge, CGPoint(x: hit.x, y: screen.minY), false)
         }
     }
 

@@ -297,16 +297,14 @@ final class OverlayController {
         let mouse = screenPoint(location)
         dockScreen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? panel.screen ?? NSScreen.main
         throwing.add(mouse, at: ProcessInfo.processInfo.systemUptime)
-        // the cursor stops at the display's edge while the hand flicks on: a throw into the rail's own edge ends there
-        let display = dockScreen?.frame ?? .null
-        let atEdge = mouse.x <= display.minX + 2 || mouse.x >= display.maxX - 2 || mouse.y <= display.minY + 2 || mouse.y >= display.maxY - 2
-        let velocity = throwing.velocity(at: ProcessInfo.processInfo.systemUptime, pinned: atEdge)
+        let velocity = throwing.velocity(at: ProcessInfo.processInfo.systemUptime)
         var edge = state.dock, tuck = false
         if let screen = dockScreen {
-            let landing = DockEdge.landing(from: mouse, velocity: velocity, current: state.dock, in: screen.visibleFrame)
+            let landing = DockEdge.landing(from: mouse, velocity: velocity, current: state.dock, in: screen.visibleFrame,
+                                           display: screen.frame)
             pinned = landing.point
             edge = landing.edge
-            tuck = state.dock.tucks(from: mouse, velocity: velocity, in: screen.visibleFrame)
+            tuck = landing.tuck
         }
         dragStart = nil
         throwing = ThrowTracker()
