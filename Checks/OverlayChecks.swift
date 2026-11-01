@@ -31,7 +31,7 @@ enum OverlayChecks {
             func lands(_ p: CGPoint, _ dx: CGFloat, _ dy: CGFloat, on current: DockEdge) -> (edge: DockEdge, point: CGPoint, tuck: Bool) {
                 DockEdge.landing(from: p, velocity: CGVector(dx: dx, dy: dy), current: current, in: air)
             }
-            // the owner's case: a rail from the top, dragged to mid-screen and thrown sideways, reaches the far side
+            // a rail from the top, dragged to mid-screen and thrown sideways, reaches the far side, not the top or bottom
             assert(lands(mid, 1500, 200, on: .top).edge == .right, "sideways throw from mid-screen reaches the far side")
             assert(lands(mid, -1500, -200, on: .bottom).edge == .left)
             assert(lands(CGPoint(x: air.maxX - 30, y: mid.y), -900, 120, on: .right).edge == .left, "a rail thrown off the right edge crosses over")
@@ -90,7 +90,7 @@ enum OverlayChecks {
             let thickTucked = edge.tucked(thick, in: air)
             assert(edge.anchor(of: thickTucked) == edge.anchor(of: tucked), "\(edge): the tucked outer edge doesn't depend on what's beside the rail")
         }
-        // The owner's own drags on a 1710 x 1107 pt screen (menu bar 34 pt, Dock hidden), recorded 2026-11-01: the last
+        // Real drags recorded on a 1710 x 1107 pt screen (menu bar 34 pt, Dock hidden): the last
         // 100 ms of each (time, x, y with y up) and the edge it started on. Before the pinned rule, every tuck here failed,
         // and the 19.37 s drag, slid sideways along the bottom, went to the left edge instead.
         let display = CGRect(x: 0, y: 0, width: 1710, height: 1107), usable = CGRect(x: 0, y: 0, width: 1710, height: 1073)
@@ -112,7 +112,7 @@ enum OverlayChecks {
             let (t, x, y) = samples.last!
             let got = DockEdge.landing(from: CGPoint(x: x, y: y), velocity: hand.velocity(at: t), current: current, in: usable, display: display)
             assert(want == "tuck" ? got.tuck && got.edge == current : !got.tuck && got.edge.rawValue == want,
-                   "the owner's drag at \(samples[0].0) s from \(current): wanted \(want), got \(got)")
+                   "the recorded drag at \(samples[0].0) s from \(current): wanted \(want), got \(got)")
         }
         // Pinned against another edge, the rail docks there; pinned against its own, it tucks; anywhere short of the
         // display's edge, slow, it docks as before.
@@ -125,7 +125,7 @@ enum OverlayChecks {
             let short = edge.anchor(of: usable.insetBy(dx: 30, dy: 30))
             assert(!DockEdge.landing(from: short, velocity: .zero, current: edge, in: usable, display: display).tuck)
         }
-        // Pushed into the menu bar short of the display's top (the owner's 05:22:50 push stopped at 1104 of 1107): 8 pt past
+        // Pushed into the menu bar short of the display's top (a recorded push stopped at 1104 of 1107): 8 pt past
         // the usable screen is a push too. From another edge it docks there instead.
         assert(DockEdge.landing(from: CGPoint(x: 1118, y: 1104), velocity: .zero, current: .top, in: usable, display: display).tuck)
         let intoMenuBar = DockEdge.landing(from: CGPoint(x: 900, y: 1084), velocity: .zero, current: .left, in: usable, display: display)
@@ -135,7 +135,7 @@ enum OverlayChecks {
         // Already pulling away from the edge at release, it isn't a push.
         assert(!DockEdge.landing(from: CGPoint(x: 1710, y: 500), velocity: CGVector(dx: -900, dy: 0), current: .right, in: usable,
                                  display: display).tuck)
-        // Sliding along the edge with the pointer pinned against it is still a push: three of the owner's tucks above slid at
+        // Sliding along the edge with the pointer pinned against it is still a push: three of the recorded tucks above slid at
         // about 330-430 pt/s, so a rule that checks for a slide first would lose them.
         // Speed comes from the drag's last moments: a pause before letting go is a drop, not a throw.
         var throwing = ThrowTracker()
@@ -183,7 +183,7 @@ enum OverlayChecks {
         }
         assert(tucking.elapsed < 1)
         // A fast tuck (a sliver pulled out and flicked straight back, up to the 3200 pt/s cap) stops at its tucked spot and
-        // never goes further in: the 7 pt sliver must not vanish. Sol measured a 16 pt overshoot before. Every edge.
+        // never goes further in: the 7 pt sliver must not vanish. A 3200 pt/s tuck overshot by 16 pt before this. Every edge.
         let tuckScreen = CGRect(x: 0, y: 0, width: 1710, height: 1070)
         for edge in DockEdge.allCases {
             let size = edge.isVertical ? CGSize(width: 84, height: 262) : CGSize(width: 262, height: 84)
@@ -201,7 +201,7 @@ enum OverlayChecks {
             assert(abs(depth()) < 0.5 && flick.elapsed < 1, "\(edge): settles on its spot")
         }
         // Released hanging past the edge (the pointer at the screen's bottom, a tall rail below it), the rail eases back in:
-        // the wall starts where the rail is instead of snapping it 64 pt in one frame, as the owner's logs showed.
+        // the wall starts where the rail is instead of snapping it 64 pt in one frame, as it did before this.
         let bottomSpot = CGRect(x: 442, y: 4, width: 262, height: 84)
         var hanging = RailGlide(center: AnimatablePair(652, -34), velocity: AnimatablePair(217, 0), target: bottomSpot, edge: .bottom,
                                 spring: railSpring("bouncy"))
