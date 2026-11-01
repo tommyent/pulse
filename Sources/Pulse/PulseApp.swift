@@ -73,6 +73,9 @@ struct PulseApp: App {
 /// Borderless panels refuse key status by default; the pet's composer needs it (without activating Pulse).
 private final class OverlayPanel: NSPanel {
     override var canBecomeKey: Bool { true }
+    /// AppKit keeps a window's top below the menu bar. A glide's box and a rail tucked into the top must pass it: what
+    /// lies past the usable screen is masked instead (the owner's logs showed the panel held 274 pt short mid-glide).
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
 /// The panel is rarely key, and a first click on a non-key window only makes it key: the rail's drag would need a
