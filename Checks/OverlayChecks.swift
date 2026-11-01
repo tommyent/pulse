@@ -85,6 +85,10 @@ enum OverlayChecks {
             assert(rail.intersection(air).width * rail.intersection(air).height == 7 * (edge.isVertical ? rail.height : rail.width),
                    "\(edge): 7 pt of the rail stay on screen, got \(rail.intersection(air))")
             assert(edge.isVertical ? tucked.midY == docked.midY : tucked.midX == docked.midX, "\(edge): tucking keeps its spot along the edge")
+            // a break's countdown beside the rail makes the frame thicker inward: the rail's outer side, and so the sliver, stay put
+            let thick = edge.frame(size: edge.isVertical ? CGSize(width: 330, height: 228) : CGSize(width: 228, height: 241), anchor: near, in: air)
+            let thickTucked = edge.tucked(thick, in: air)
+            assert(edge.anchor(of: thickTucked) == edge.anchor(of: tucked), "\(edge): the tucked outer edge doesn't depend on what's beside the rail")
         }
         // The owner's own drags on a 1710 x 1107 pt screen (menu bar 34 pt, Dock hidden), recorded 2026-11-01: the last
         // 100 ms of each (time, x, y with y up) and the edge it started on. Before the pinned rule, every tuck here failed,
@@ -121,6 +125,18 @@ enum OverlayChecks {
             let short = edge.anchor(of: usable.insetBy(dx: 30, dy: 30))
             assert(!DockEdge.landing(from: short, velocity: .zero, current: edge, in: usable, display: display).tuck)
         }
+        // Pushed into the menu bar short of the display's top (the owner's 05:22:50 push stopped at 1104 of 1107): 8 pt past
+        // the usable screen is a push too. From another edge it docks there instead.
+        assert(DockEdge.landing(from: CGPoint(x: 1118, y: 1104), velocity: .zero, current: .top, in: usable, display: display).tuck)
+        let intoMenuBar = DockEdge.landing(from: CGPoint(x: 900, y: 1084), velocity: .zero, current: .left, in: usable, display: display)
+        assert(intoMenuBar.edge == .top && !intoMenuBar.tuck)
+        assert(!DockEdge.landing(from: CGPoint(x: 900, y: 1078), velocity: .zero, current: .top, in: usable, display: display).tuck,
+               "5 pt into the menu bar is still an ordinary drop")
+        // Already pulling away from the edge at release, it isn't a push.
+        assert(!DockEdge.landing(from: CGPoint(x: 1710, y: 500), velocity: CGVector(dx: -900, dy: 0), current: .right, in: usable,
+                                 display: display).tuck)
+        // Sliding along the edge with the pointer pinned against it is still a push: three of the owner's tucks above slid at
+        // about 330-430 pt/s, so a rule that checks for a slide first would lose them.
         // Speed comes from the drag's last moments: a pause before letting go is a drop, not a throw.
         var throwing = ThrowTracker()
         for i in 0...20 { throwing.add(CGPoint(x: 100 + 10 * CGFloat(i), y: 500), at: 1 + 0.008 * Double(i)) }
@@ -156,6 +172,16 @@ enum OverlayChecks {
                 assert(abs(glide.center.first - target.midX) < 0.5 && abs(glide.center.second - target.midY) < 0.5)
             }
         }
+        // A tuck slides in on its own spring, without bouncing back out of the edge (the sliver would bob).
+        let tuckTarget = DockEdge.right.tucked(CGRect(x: 1638, y: 400, width: 68, height: 228), in: CGRect(x: 0, y: 0, width: 1710, height: 1070))
+        var tucking = RailGlide(center: AnimatablePair(1672, 514), velocity: AnimatablePair(0, 0), target: tuckTarget, edge: .right,
+                                spring: tuckSpring)
+        var furthest = tucking.center.first
+        while !tucking.step(1.0 / 120) {
+            assert(tucking.center.first >= furthest - 0.01, "a tuck never comes back out: \(tucking.center.first) after \(furthest)")
+            furthest = max(furthest, tucking.center.first)
+        }
+        assert(tucking.elapsed < 1)
         // Released hanging past the edge (the pointer at the screen's bottom, a tall rail below it), the rail eases back in:
         // the wall starts where the rail is instead of snapping it 64 pt in one frame, as the owner's logs showed.
         let bottomSpot = CGRect(x: 442, y: 4, width: 262, height: 84)

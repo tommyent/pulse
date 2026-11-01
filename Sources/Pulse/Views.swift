@@ -632,8 +632,8 @@ private struct FollowsBottom: ViewModifier {
 struct OverlayView: View {
     @ObservedObject var state: AppState
     var onSize: ((CGSize) -> Void)? = nil
-    var onDrag: ((CGPoint) -> Void)? = nil
-    var onDrop: ((CGPoint) -> Void)? = nil
+    var onDrag: (() -> Void)? = nil
+    var onDrop: (() -> Void)? = nil
     var onRailFrame: ((CGRect) -> Void)? = nil
     var onCardFrame: ((CGRect) -> Void)? = nil
     var onHintFrame: ((CGRect) -> Void)? = nil
@@ -690,7 +690,7 @@ struct OverlayView: View {
         // so an animated rail would slide from its old spot.
         .padding(12)
         .onHover { over in
-            guard !state.dragging else { return }
+            guard !state.dragging, !state.gliding else { return }
             exitWatch?.cancel(); exitWatch = nil
             if state.tuckedAway {   // the sliver never expands; with peeking on, a rest on it slides the rail out
                 guard over, state.persisted.tuckPeek == true else { return }
@@ -784,7 +784,8 @@ struct OverlayView: View {
                         .frame(width: state.dock.isVertical ? 3 : 4 + 16 * shown / 100, height: state.dock.isVertical ? 4 + 16 * shown / 100 : 3)
                         .offset(tuckBand.offset)
                         .opacity(state.tuckedAway && windows.first?.percentUsed != nil ? 1 : 0)
-                        .animation(.easeOut(duration: 0.25), value: state.tuckedAway)
+                        // in only as the rail reaches its slot, so the ticks never sit on top of the rings
+                        .animation(state.tuckedAway ? .easeOut(duration: 0.16).delay(0.18) : .easeOut(duration: 0.1), value: state.tuckedAway)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
@@ -808,7 +809,8 @@ struct OverlayView: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { railFrame = $0; onRailFrame?($0) }
         .overlay {
             // Tucked, the sliver and 12 pt beside it are one handle: a click brings the rail back; the drag below pulls it out.
-            if state.tuckedAway {
+            // kept while it's dragged out by the sliver: removing the view a drag began on would cancel the drag
+            if state.tuckedAway || (state.dragging && state.persisted.tucked == true) {
                 Color.clear.contentShape(Rectangle())
                     .padding(tuckBand.inner, -12)
                     .onTapGesture { if !state.dragging { state.tuckedBinding.wrappedValue = false } }
@@ -820,8 +822,8 @@ struct OverlayView: View {
             }
         }
         .simultaneousGesture(DragGesture(minimumDistance: 4, coordinateSpace: .global)
-            .onChanged { onDrag?($0.location) }
-            .onEnded { onDrop?($0.location) })
+            .onChanged { _ in onDrag?() }
+            .onEnded { _ in onDrop?() })
         .help("Drag to any screen edge, or throw into this one to minimize")
     }
 

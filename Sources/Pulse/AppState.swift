@@ -65,8 +65,9 @@ final class AppState: ObservableObject {
 
     var dock: DockEdge { persisted.dock ?? .right }
 
-    /// Tucked and not peeking out: the rail rests past its edge with only a sliver on screen.
-    var tuckedAway: Bool { persisted.tucked == true && !peeking }
+    /// Tucked and not peeking out: the rail rests past its edge with only a sliver on screen. Dragged out by its sliver,
+    /// it shows as a rail at once; it stays tucked in `persisted` until the drop decides.
+    var tuckedAway: Bool { persisted.tucked == true && !peeking && !dragging }
     var tuckedBinding: Binding<Bool> {
         Binding(get: { self.persisted.tucked == true }, set: {
             if $0 { self.collapseOverlay() }   // nothing stays open beside a rail that's going away
@@ -92,6 +93,7 @@ final class AppState: ObservableObject {
     @Published var refreshing = false
     @Published var dragging = false
     @Published var peeking = false   // a tucked rail slid out while the pointer rests on it
+    var gliding = false   // the rail is moving to its edge: hover changes would move its target mid-flight
     private var refreshRequested = false
     private var agy = AgyPause()   // agy signed out or stalled: only a manual refresh runs it again
 

@@ -1,5 +1,11 @@
 import SwiftUI
 import Combine
+import os
+
+/// One line per drop and per landing: how a hand test went, read with
+/// `/usr/bin/log show --last 5m --predicate 'subsystem == "io.github.tommyent.pulse" AND category == "rail"'`.
+private let railLog = Logger(subsystem: "io.github.tommyent.pulse", category: "rail")
+private func describe(_ f: CGRect) -> String { String(format: "(%.0f,%.0f %.0fx%.0f)", f.minX, f.minY, f.width, f.height) }
 
 extension Bundle {
     /// Packaged app keeps Pulse_Pulse.bundle in Contents/Resources, where SPM's
@@ -231,28 +237,14 @@ final class OverlayController {
                                      anchor: pinned ?? CGPoint(x: bounds.midX, y: bounds.midY),
                                      in: bounds)
         pinned = state.dock.anchor(of: frame)
-        return state.tuckedAway ? state.dock.tucked(frame, inset: railInset(), in: bounds) : frame
-    }
-
-    /// The rail's distance inside the content from its inner side (away from the edge): its padding, plus a break's
-    /// countdown beside it.
-    private func railInset() -> CGFloat {
-        guard railFrame != .zero else { return 12 }
-        // railFrame is in window coordinates (y down), and the content is centred in the panel (a glide's box is larger)
-        let rail = railFrame.offsetBy(dx: -(panel.frame.width - contentSize.width) / 2,
-                                      dy: -(panel.frame.height - contentSize.height) / 2)
-        return switch state.dock {
-        case .right: rail.minX
-        case .left: contentSize.width - rail.maxX
-        case .top: contentSize.height - rail.maxY
-        case .bottom: rail.minY
-        }
+        return state.tuckedAway ? state.dock.tucked(frame, in: bounds) : frame
     }
 
     /// Moves the panel. Whatever lies past the screen's usable area (a tucked rail, a glide pressing on the edge) is masked
     /// away, so it never shows under the transparent menu bar, through the Dock or on a neighbouring display.
-    private func place(_ frame: CGRect, display: Bool = true) {
-        if panel.frame != frame { panel.setFrame(frame, display: display) }
+    private func place(_ target: CGRect, display: Bool = true) {
+        if panel.frame != target { panel.setFrame(target, display: display) }
+        let frame = panel.frame   // what the window really got
         guard let view = panel.contentView, let screen = dockScreen ?? panel.screen else { return }
         let visible = frame.intersection(screen.visibleFrame)
         guard visible != frame, !visible.isNull else { view.layer?.mask = nil; return }
@@ -273,12 +265,9 @@ final class OverlayController {
         return visible.isNull ? panel.frame : visible
     }
 
-    private func screenPoint(_ location: CGPoint) -> CGPoint {
-        CGPoint(x: panel.frame.minX + location.x, y: panel.frame.maxY - location.y)
-    }
-
-    private func drag(_ location: CGPoint) {
-        let mouse = screenPoint(location)
+    /// The pointer in screen coordinates; the gesture's own locations move with the panel, which a landing resizes.
+    private func drag() {
+        let mouse = NSEvent.mouseLocation
         if dragStart == nil {
             if let flight { land(CGRect(x: flight.glide.center.first - contentSize.width / 2, y: flight.glide.center.second - contentSize.height / 2,
                                         width: contentSize.width, height: contentSize.height)) }   // caught mid-glide
@@ -292,9 +281,9 @@ final class OverlayController {
                      size: panel.frame.size))
     }
 
-    private func drop(_ location: CGPoint) {
+    private func drop() {
         guard dragStart != nil else { return }
-        let mouse = screenPoint(location)
+        let mouse = NSEvent.mouseLocation
         dockScreen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? panel.screen ?? NSScreen.main
         throwing.add(mouse, at: ProcessInfo.processInfo.systemUptime)
         let velocity = throwing.velocity(at: ProcessInfo.processInfo.systemUptime)
@@ -306,6 +295,7 @@ final class OverlayController {
             edge = landing.edge
             tuck = landing.tuck
         }
+        railLog.notice("drop at \(String(format: "%.0f,%.0f", mouse.x, mouse.y), privacy: .public) v \(String(format: "%.0f,%.0f", velocity.dx, velocity.dy), privacy: .public) \(self.state.dock.rawValue, privacy: .public) -> \(edge.rawValue, privacy: .public)\(tuck ? " tucked" : "", privacy: .public)")
         dragStart = nil
         throwing = ThrowTracker()
         // Keep ring clicks suppressed until the mouse-up event has finished dispatching.
@@ -313,18 +303,18 @@ final class OverlayController {
             guard let self else { return }
             self.state.dragging = false
             let still = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion   // a plain, immediate move
-            withAnimation(still ? nil : .spring(railSpring())) {
+            withAnimation(still ? nil : .spring(morphSpring)) {
                 self.state.persisted.dock = edge
                 self.state.collapseOverlay()
                 self.state.tuckedBinding.wrappedValue = tuck
             }
-            self.settle(velocity: velocity)
+            self.settle(velocity: velocity, spring: tuck ? tuckSpring : railSpring())
         }
     }
 
-    /// Moves the rail to where it rests now: docked, or tucked into its edge. On the spring, starting at `velocity`;
-    /// under Reduce Motion at once (a drop) or with a crossfade (`fade`: tucking, peeking).
-    private func settle(velocity: CGVector = .zero, fade: Bool = false) {
+    /// Moves the rail to where it rests now: docked, or tucked into its edge. On `spring` (a drop's is the owner's bouncy
+    /// one), starting at `velocity`; under Reduce Motion at once (a drop) or with a crossfade (`fade`: tucking, peeking).
+    private func settle(velocity: CGVector = .zero, fade: Bool = false, spring: Spring = tuckSpring) {
         guard !state.dragging else { return }   // the drop settles it
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, flight == nil {
             guard let target = restingFrame(), target != panel.frame else { return }   // a drop already moved it
@@ -345,13 +335,16 @@ final class OverlayController {
         }
         if flight == nil {
             let start = panel.frame
-            flight = (RailGlide(center: AnimatablePair(start.midX, start.midY), velocity: AnimatablePair(velocity.dx, velocity.dy),
-                                target: start, edge: state.dock, spring: railSpring()),
+            // the fastest flicks (9000 pt/s in the owner's logs) only overshoot further: 3200 pt/s already feels immediate
+            let cap = min(1, 3200 / max(1, hypot(velocity.dx, velocity.dy)))
+            flight = (RailGlide(center: AnimatablePair(start.midX, start.midY), velocity: AnimatablePair(velocity.dx * cap, velocity.dy * cap),
+                                target: start, edge: state.dock, spring: spring),
                       CGSize(width: start.width + 32, height: start.height + 32), nil)
             // only the glide sizes the panel meanwhile: no window resize from Auto Layout before the box catches up
             (panel.contentView as? OverlayHostingView)?.sizingOptions = []
             flightLink = panel.contentView?.displayLink(target: ticker, selector: #selector(FrameTicker.frame(_:)))
             flightLink?.add(to: .main, forMode: .common)
+            state.gliding = true   // hover waits: the box sliding under a still pointer would expand the rail mid-flight
         }
         contentSized(contentSize)   // a first target; a new layout's size moves it when it arrives
     }
@@ -367,6 +360,8 @@ final class OverlayController {
     }
 
     private func land(_ frame: CGRect) {
+        railLog.notice("land \(describe(frame), privacy: .public) after \(String(format: "%.2f", self.flight?.glide.elapsed ?? 0), privacy: .public) s from \(describe(self.panel.frame), privacy: .public)")
+        state.gliding = false
         flight = nil
         flightLink?.invalidate()
         flightLink = nil
@@ -388,13 +383,9 @@ final class OverlayController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         let hosting = OverlayHostingView(rootView: OverlayView(state: state,
             onSize: { [weak self] size in self?.contentSized(size) },
-            onDrag: { [weak self] in self?.drag($0) },
-            onDrop: { [weak self] in self?.drop($0) },
-            onRailFrame: { [weak self] in
-                guard let self else { return }
-                railFrame = $0
-                if state.tuckedAway { contentSized(contentSize) }   // the tucked spot follows the rail's own frame
-            },
+            onDrag: { [weak self] in self?.drag() },
+            onDrop: { [weak self] in self?.drop() },
+            onRailFrame: { [weak self] in self?.railFrame = $0 },
             onCardFrame: { [weak self] in self?.cardFrame = $0 },
             onHintFrame: { [weak self] in self?.hintFrame = $0 },
             onPillFrame: { [weak self] in self?.pillFrame = $0 },
