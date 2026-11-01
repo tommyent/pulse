@@ -108,13 +108,13 @@ enum DockEdge: String, Codable, CaseIterable {
     }
 }
 
-/// The drop's spring, from the hidden `railSpring` default while the owner compares them: snappy, smooth (the
-/// default) or bouncy. `defaults write io.github.tommyent.pulse railSpring bouncy` takes effect at the next drop.
+/// The drop's spring: bouncy, the owner's pick. The hidden `railSpring` default keeps the others to compare:
+/// `defaults write io.github.tommyent.pulse railSpring snappy` (or smooth) takes effect at the next drop.
 func railSpring(_ name: String? = UserDefaults.standard.string(forKey: "railSpring")) -> Spring {
     switch name {
     case "snappy": .snappy(duration: 0.35)
-    case "bouncy": .bouncy(duration: 0.55)
-    default: .smooth(duration: 0.5)
+    case "smooth": .smooth(duration: 0.5)
+    default: .bouncy(duration: 0.55)
     }
 }
 
