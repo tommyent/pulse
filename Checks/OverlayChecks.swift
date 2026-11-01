@@ -51,6 +51,31 @@ enum OverlayChecks {
             assert(lands(CGPoint(x: air.maxX - 60, y: mid.y), 150, -1500, on: .top).edge == .bottom, "the same throw near another edge goes where it heads")
             assert(lands(CGPoint(x: air.maxX - 300, y: mid.y), 150, -1500, on: .right).edge == .bottom, "pulled out of its edge, it is thrown")
         }
+        // Tuck: a fast throw into the edge the rail is on, released near it, tucks the rail. An ordinary drop near the
+        // edge, a slide along it, a throw from further out, toward another edge or away never does. Rotated to all edges.
+        for (edge, near, into, along) in [(DockEdge.right, CGPoint(x: 1650, y: 500), CGVector(dx: 1, dy: 0), CGVector(dx: 0, dy: 1)),
+                                          (.left, CGPoint(x: 60, y: 500), CGVector(dx: -1, dy: 0), CGVector(dx: 0, dy: 1)),
+                                          (.top, CGPoint(x: 800, y: 1010), CGVector(dx: 0, dy: 1), CGVector(dx: 1, dy: 0)),
+                                          (.bottom, CGPoint(x: 800, y: 60), CGVector(dx: 0, dy: -1), CGVector(dx: 1, dy: 0))] {
+            let air = CGRect(x: 0, y: 0, width: 1710, height: 1070)
+            func v(_ i: CGFloat, _ a: CGFloat) -> CGVector { CGVector(dx: into.dx * i + along.dx * a, dy: into.dy * i + along.dy * a) }
+            assert(edge.tucks(from: near, velocity: v(1500, 300), in: air), "\(edge): a throw into its own edge tucks")
+            assert(!edge.tucks(from: near, velocity: v(150, 0), in: air), "\(edge): an ordinary drop near the edge doesn't")
+            assert(!edge.tucks(from: near, velocity: v(300, 1500), in: air), "\(edge): a slide along the edge doesn't")
+            assert(!edge.tucks(from: near, velocity: v(-1500, 0), in: air), "\(edge): a throw away from the edge doesn't")
+            let far = CGPoint(x: near.x - into.dx * 300, y: near.y - into.dy * 300)
+            assert(!edge.tucks(from: far, velocity: v(1500, 0), in: air), "\(edge): a throw from 300 pt out re-docks instead")
+            for other in DockEdge.allCases where other != edge {
+                assert(!other.tucks(from: near, velocity: v(1500, 300), in: air), "\(edge): only the rail's own edge tucks")
+            }
+            // the tucked frame leaves exactly 7 pt of the rail (12 pt inside its frame) on screen, at the same spot along the edge
+            let docked = edge.frame(size: edge.isVertical ? CGSize(width: 68, height: 228) : CGSize(width: 228, height: 68), anchor: near, in: air)
+            let tucked = edge.tucked(docked, in: air)
+            let rail = tucked.insetBy(dx: 12, dy: 12)
+            assert(rail.intersection(air).width * rail.intersection(air).height == 7 * (edge.isVertical ? rail.height : rail.width),
+                   "\(edge): 7 pt of the rail stay on screen, got \(rail.intersection(air))")
+            assert(edge.isVertical ? tucked.midY == docked.midY : tucked.midX == docked.midX, "\(edge): tucking keeps its spot along the edge")
+        }
         // Speed comes from the drag's last moments: a pause before letting go is a drop, not a throw.
         var throwing = ThrowTracker()
         for i in 0...20 { throwing.add(CGPoint(x: 100 + 10 * CGFloat(i), y: 500), at: 1 + 0.008 * Double(i)) }
@@ -59,6 +84,14 @@ enum OverlayChecks {
         throwing.add(CGPoint(x: 300, y: 500), at: 1.3)
         assert(throwing.velocity(at: 1.3) == .zero, "held still for 140 ms before release")
         assert(ThrowTracker().velocity(at: 5) == .zero)
+        // A flick into the screen edge pins the pointer there before the hand lets go: the speed is the one it arrived with.
+        var pinned = ThrowTracker()
+        for i in 0...5 { pinned.add(CGPoint(x: 1660 + 10 * CGFloat(i), y: 500), at: 2 + 0.008 * Double(i)) }
+        for i in 1...15 { pinned.add(CGPoint(x: 1710, y: 500), at: 2.04 + 0.008 * Double(i)) }
+        assert(abs(pinned.velocity(at: 2.16, pinned: true).dx - 1250) < 1, "arrived at 1250 pt/s, got \(pinned.velocity(at: 2.16, pinned: true))")
+        assert(pinned.velocity(at: 2.16) == .zero, "not against the display's edge, the same samples are a drop")
+        pinned.add(CGPoint(x: 1710, y: 500), at: 2.5)
+        assert(pinned.velocity(at: 2.5, pinned: true) == .zero, "held at the edge for over a quarter second, it's a drop")
         // Each spring settles on its spot, and a hard throw never carries the rail through the screen edge.
         for name in ["snappy", "smooth", "bouncy"] {
             for (edge, from, v) in [(DockEdge.right, CGPoint(x: 900, y: 500), CGVector(dx: 4000, dy: 300)),
@@ -123,6 +156,6 @@ enum OverlayChecks {
         assert(!following, "new text never pulls back a reader who scrolled up")
         following = transcriptFollows(following, oldOffset: 600, offset: 1040, visible: 260, content: 1300)
         assert(following, "back at the bottom, it follows again")
-        print("Overlay checks passed: docking, throws, glides, expansion, displays, persistence, pop-out dismissal, reset labels and transcript following")
+        print("Overlay checks passed: docking, throws, tucks, glides, expansion, displays, persistence, pop-out dismissal, reset labels and transcript following")
     }
 }

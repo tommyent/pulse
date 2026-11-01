@@ -16,17 +16,23 @@ func transcriptFollows(_ following: Bool, oldOffset: CGFloat, offset: CGFloat, v
 
 /// The pointer's velocity at release, in screen points per second. SwiftUI's `DragGesture` velocity is useless here: its
 /// locations are relative to the panel, which follows the pointer, so they barely change. Only the last 80 ms count,
-/// so a pause before letting go reads as a still drop.
+/// so a pause before letting go reads as a still drop. A pointer `pinned` against the display's edge stopped because the
+/// screen ended, not the hand: if it got there within the last quarter second, its speed is the one it arrived with.
 struct ThrowTracker {
     private var samples: [(time: TimeInterval, point: CGPoint)] = []
 
     mutating func add(_ point: CGPoint, at time: TimeInterval) {
         samples.append((time, point))
-        samples.removeAll { $0.time < time - 0.08 }
+        samples.removeAll { $0.time < time - 0.4 }
     }
 
-    func velocity(at time: TimeInterval) -> CGVector {
-        let recent = samples.filter { $0.time >= time - 0.08 }
+    func velocity(at time: TimeInterval, pinned: Bool = false) -> CGVector {
+        var end = time
+        if pinned, let last = samples.last, let moving = samples.lastIndex(where: { $0.point != last.point }),
+           time - samples[moving + 1].time <= 0.25 {
+            end = samples[moving + 1].time   // when it arrived at the edge
+        }
+        let recent = samples.filter { $0.time >= end - 0.08 && $0.time <= end }
         guard let first = recent.first, let last = recent.last, last.time - first.time > 0.005 else { return .zero }
         let dt = CGFloat(last.time - first.time)
         return CGVector(dx: (last.point.x - first.point.x) / dt, dy: (last.point.y - first.point.y) / dt)
@@ -79,6 +85,30 @@ enum DockEdge: String, Codable, CaseIterable {
         case .left: return (edge, CGPoint(x: screen.minX, y: hit.y))
         case .top: return (edge, CGPoint(x: hit.x, y: screen.maxY))
         case .bottom: return (edge, CGPoint(x: hit.x, y: screen.minY))
+        }
+    }
+
+    /// A throw into this edge (the rail's own), released within `slideBand` of it, tucks the rail in. A slower release
+    /// is a drop and a throw mostly along the edge is a slide; neither tucks.
+    func tucks(from point: CGPoint, velocity v: CGVector, in screen: CGRect) -> Bool {
+        let into: CGFloat = switch self {
+        case .right: v.dx
+        case .left: -v.dx
+        case .top: v.dy
+        case .bottom: -v.dy
+        }
+        return hypot(v.dx, v.dy) >= Self.flickSpeed && into > (isVertical ? abs(v.dy) : abs(v.dx))
+            && distance(from: point, in: screen) <= Self.slideBand
+    }
+
+    /// The docked frame pushed out past this edge until only `sliver` points of the rail (`inset` inside the frame) stay
+    /// on screen, at the same spot along the edge.
+    func tucked(_ frame: CGRect, inset: CGFloat = 12, sliver: CGFloat = 7, in screen: CGRect) -> CGRect {
+        switch self {
+        case .right: frame.offsetBy(dx: screen.maxX - sliver - (frame.minX + inset), dy: 0)
+        case .left: frame.offsetBy(dx: screen.minX + sliver - (frame.maxX - inset), dy: 0)
+        case .top: frame.offsetBy(dx: 0, dy: screen.maxY - sliver - (frame.minY + inset))
+        case .bottom: frame.offsetBy(dx: 0, dy: screen.minY + sliver - (frame.maxY - inset))
         }
     }
 

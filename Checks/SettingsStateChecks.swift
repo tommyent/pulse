@@ -53,12 +53,16 @@ enum SettingsStateChecks {
         var changed = p
         changed.breaks.enabled = true
         changed.breaks.ownIdeas = "Hum a tune"
+        changed.tucked = true
+        changed.tuckPeek = true
         let back = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(changed))
         assert(back.breaks.enabled && back.breaks.ownIdeas == "Hum a tune" && back.battery == p.battery && back.dock == .bottom)
+        assert(back.tucked == true && back.tuckPeek == true, "a tucked rail stays tucked across launches")
 
         // the oldest form: only the keys Pulse has always written
         let oldest = try! JSONDecoder().decode(AppState.Persisted.self, from: Data(#"{"enabled":["claude"],"order":["claude"],"alwaysOnTop":true,"showOverlay":true}"#.utf8))
-        assert(oldest.battery == BatterySettings() && oldest.breaks == BreakSettings() && oldest.dock == nil && oldest.appearance == .solid)
+        assert(oldest.battery == BatterySettings() && oldest.breaks == BreakSettings() && oldest.dock == nil && oldest.appearance == .solid
+               && oldest.tucked == nil && oldest.tuckPeek == nil)
         checkTrackRendering()
         print("Settings state checks passed: saved values preserved, Tint migrated, plain menu-grey tracks without keylines in both looks")
     }

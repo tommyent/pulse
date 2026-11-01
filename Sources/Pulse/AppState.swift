@@ -10,6 +10,8 @@ final class AppState: ObservableObject {
         var showOverlay: Bool = true
         var appearance: PulseAppearance = .solid
         var dock: DockEdge?
+        var tucked: Bool?   // nil = out: the rail tucked into its edge, a sliver left on screen
+        var tuckPeek: Bool?   // nil = off: resting the pointer on the sliver slides the rail out until it leaves
         var voiceHotKey: HotKeyCombo?   // nil = the default shortcut
         var showPet: Bool?   // nil = shown; independent of the Codex usage switch
         var showRemaining: Bool?   // nil = off: rings show what's used
@@ -40,6 +42,8 @@ final class AppState: ObservableObject {
             appearance = (try? c.decode(PulseAppearance.self, forKey: .appearance))
                 ?? ((try? legacy.decode(Bool.self, forKey: .glassTint)) == false ? .glass : .solid)
             dock = try c.decodeIfPresent(DockEdge.self, forKey: .dock)
+            tucked = try c.decodeIfPresent(Bool.self, forKey: .tucked)
+            tuckPeek = try c.decodeIfPresent(Bool.self, forKey: .tuckPeek)
             voiceHotKey = try c.decodeIfPresent(HotKeyCombo.self, forKey: .voiceHotKey)
             showPet = try c.decodeIfPresent(Bool.self, forKey: .showPet)
             showRemaining = try c.decodeIfPresent(Bool.self, forKey: .showRemaining)
@@ -61,6 +65,19 @@ final class AppState: ObservableObject {
 
     var dock: DockEdge { persisted.dock ?? .right }
 
+    /// Tucked and not peeking out: the rail rests past its edge with only a sliver on screen.
+    var tuckedAway: Bool { persisted.tucked == true && !peeking }
+    var tuckedBinding: Binding<Bool> {
+        Binding(get: { self.persisted.tucked == true }, set: {
+            if $0 { self.collapseOverlay() }   // nothing stays open beside a rail that's going away
+            self.persisted.tucked = $0 ? true : nil
+            self.peeking = false
+        })
+    }
+    var tuckPeekBinding: Binding<Bool> {
+        Binding(get: { self.persisted.tuckPeek == true }, set: { self.persisted.tuckPeek = $0 ? true : nil })
+    }
+
     var showsRemaining: Bool { persisted.showRemaining ?? false }
     var showsRemainingBinding: Binding<Bool> {
         Binding(get: { self.showsRemaining }, set: { self.persisted.showRemaining = $0 })
@@ -74,6 +91,7 @@ final class AppState: ObservableObject {
     @Published var snapshots: [AccountID: AccountSnapshot]
     @Published var refreshing = false
     @Published var dragging = false
+    @Published var peeking = false   // a tucked rail slid out while the pointer rests on it
     private var refreshRequested = false
     private var agy = AgyPause()   // agy signed out or stalled: only a manual refresh runs it again
 
@@ -117,6 +135,7 @@ final class AppState: ObservableObject {
         if cardVisible { cardVisible = false }
         if petVisible { petVisible = false }
         if hoveringOverlay { hoveringOverlay = false }
+        if peeking { peeking = false }   // a peeking rail tucks back in
     }
 
     func refreshAll(manual: Bool = true) async {
