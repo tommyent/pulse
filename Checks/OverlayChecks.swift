@@ -44,6 +44,16 @@ enum OverlayChecks {
             let still = lands(CGPoint(x: mid.x + 100, y: air.maxY - 50), 0, 0, on: .right)
             assert(still.edge == .top && still.point == CGPoint(x: mid.x + 100, y: air.maxY - 50))
             assert(lands(CGPoint(x: air.maxX + 40, y: mid.y), 0, 0, on: .right).point.x == air.maxX, "a release past the edge stays on the screen")
+            // Slow drops use diagonal zones: each edge owns the triangle between it and the screen's centre, so a rail drawn
+            // in from a side goes back to it until past the centre line (at mid-height), however wide the screen.
+            for h in [0.35, 0.5, 0.65] as [CGFloat] {
+                let y = air.minY + air.height * h
+                assert(lands(CGPoint(x: air.maxX - air.width * 0.3, y: y), 40, 0, on: .right).edge == .right, "30% in from the right at \(h) docks right")
+                assert(lands(CGPoint(x: air.minX + air.width * 0.3, y: y), -40, 0, on: .left).edge == .left, "30% in from the left at \(h) docks left")
+            }
+            assert(lands(CGPoint(x: air.maxX - air.width * 0.6, y: mid.y), 0, 0, on: .right).edge == .left, "60% in from the right docks left")
+            assert(lands(CGPoint(x: mid.x, y: air.maxY - air.height * 0.1), 0, 0, on: .right).edge == .top, "near the top centre docks top")
+            assert(lands(CGPoint(x: mid.x + 200, y: air.minY + air.height * 0.1), 0, 0, on: .left).edge == .bottom)
             // Sliding the rail along its own edge and letting go while moving is a reposition: it keeps the edge and coasts.
             let slid = lands(CGPoint(x: air.maxX - 60, y: mid.y), 150, -1500, on: .right)
             assert(slid.edge == .right && abs(slid.point.y - (mid.y - 150)) < 0.5, "a fast slide down the right edge stays right")

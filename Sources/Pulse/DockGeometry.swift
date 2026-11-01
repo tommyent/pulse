@@ -53,13 +53,19 @@ enum DockEdge: String, Codable, CaseIterable {
         }
     }
 
+    /// The edge whose zone holds the point. The screen's diagonals split it into four triangles, one per edge: distances
+    /// are measured as a share of the screen's width or height, so a wide screen's sides keep half of it at mid-height
+    /// instead of losing their middle to the nearer top and bottom.
     static func nearest(to point: CGPoint, in screen: CGRect) -> DockEdge {
-        allCases.min { $0.distance(from: point, in: screen) < $1.distance(from: point, in: screen) }!
+        func share(_ edge: DockEdge) -> CGFloat {
+            edge.distance(from: point, in: screen) / (edge.isVertical ? screen.width : screen.height)
+        }
+        return allCases.min { share($0) < share($1) }!
     }
 
     /// Released at `flickSpeed` or faster (points per second), the rail goes to the edge its path reaches first and lands
-    /// where the path meets it. Slower is a drop: the nearest edge. A throw mostly along the edge the rail is on, released
-    /// within `slideBand` of it, is a reposition and keeps that edge. Drops and slides coast on for a tenth of a second
+    /// where the path meets it. Slower is a drop: the edge whose zone it is in. A throw mostly along the edge the rail is
+    /// on, released within `slideBand` of it, is a reposition and keeps that edge. Drops and slides coast on for a tenth of a second
     /// (UIScrollView's fast deceleration), so the glide doesn't spring back against the release velocity.
     static let flickSpeed: CGFloat = 500
     static let slideBand: CGFloat = 160
