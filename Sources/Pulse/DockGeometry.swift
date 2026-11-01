@@ -240,7 +240,7 @@ enum LandingHover { case collapse, hover, leave }
 /// Hover events are ignored while the rail glides (the box sliding under a still pointer would move its target), so a
 /// landing settles hover from where the pointer is now. Left during a peek, the peek ends; on the rail, it is hovered; a
 /// tucked sliver never expands, and an open pet card keeps the rail out.
-func hoverAfterLanding(pointerInside: Bool, peeking: Bool, tuckedAway: Bool, petVisible: Bool) -> LandingHover {
+func hoverAfterLanding(pointerInside: Bool, tuckedAway: Bool, petVisible: Bool) -> LandingHover {
     if tuckedAway { return .leave }
     if pointerInside { return .hover }
     return petVisible ? .leave : .collapse

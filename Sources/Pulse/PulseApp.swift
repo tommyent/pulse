@@ -263,8 +263,8 @@ final class OverlayController {
         view.layer?.mask = mask
     }
 
-    /// Where the pointer keeps a peek going (or, otherwise, counts as on the rail): the panel, plus for a peek the 4 pt
-    /// between it and the screen's edge, where the sliver was.
+    /// Where the pointer counts as on the rail, for hover exits, the peek watch and a landing alike: the panel, plus while
+    /// peeking the 4 pt between it and the screen's edge, where the sliver was.
     private var peekArea: CGRect { state.peeking ? visiblePanel.insetBy(dx: -6, dy: -6) : visiblePanel.insetBy(dx: 1, dy: 1) }
 
     /// While peeking, the pointer is watched rather than hover events trusted: exits are ignored mid-glide, and a pointer
@@ -392,8 +392,8 @@ final class OverlayController {
         (panel.contentView as? OverlayHostingView)?.sizingOptions = .standardBounds
         panel.saveFrame(usingName: "PulseOverlay")
         guard !caught else { return }   // the drag that caught it decides the rest
-        switch hoverAfterLanding(pointerInside: peekArea.contains(NSEvent.mouseLocation),
-                                 peeking: state.peeking, tuckedAway: state.tuckedAway, petVisible: state.petVisible) {
+        switch hoverAfterLanding(pointerInside: peekArea.contains(NSEvent.mouseLocation), tuckedAway: state.tuckedAway,
+                                 petVisible: state.petVisible) {
         case .collapse: state.collapseOverlay()   // ends a peek the pointer left mid-glide
         case .hover: state.hoveringOverlay = true
         case .leave: break
@@ -419,7 +419,8 @@ final class OverlayController {
             onCardFrame: { [weak self] in self?.cardFrame = $0 },
             onHintFrame: { [weak self] in self?.hintFrame = $0 },
             onPillFrame: { [weak self] in self?.pillFrame = $0 },
-            pointerInside: { [weak self] in self.map { $0.visiblePanel.insetBy(dx: 1, dy: 1).contains(NSEvent.mouseLocation) } ?? false }))
+            // the same area the peek watch and a landing use, so no path ends a peek the others would keep
+            pointerInside: { [weak self] in self.map { $0.peekArea.contains(NSEvent.mouseLocation) } ?? false }))
         panel.contentView = hosting
         hosting.wantsLayer = true   // the mask that hides what lies past the screen edge
         ticker.onFrame = { [weak self] link in MainActor.assumeIsolated { self?.glide(link) } }
@@ -522,5 +523,6 @@ final class OverlayController {
     deinit {
         if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor) }
         if let globalClickMonitor { NSEvent.removeMonitor(globalClickMonitor) }
+        peekWatch?.invalidate()   // the run loop would keep a repeating timer after its controller is gone
     }
 }
