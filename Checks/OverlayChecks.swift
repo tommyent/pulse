@@ -27,21 +27,28 @@ enum OverlayChecks {
         // middle the top and bottom are nearer than the sides, so nearest-edge alone turned sideways throws upward.
         for air in [CGRect(x: 0, y: 0, width: 1710, height: 1070), CGRect(x: -1710, y: 400, width: 1710, height: 1070)] {
             let mid = CGPoint(x: air.midX, y: air.midY)
-            func lands(_ p: CGPoint, _ dx: CGFloat, _ dy: CGFloat) -> (edge: DockEdge, point: CGPoint) {
-                DockEdge.landing(from: p, velocity: CGVector(dx: dx, dy: dy), in: air)
+            func lands(_ p: CGPoint, _ dx: CGFloat, _ dy: CGFloat, on current: DockEdge) -> (edge: DockEdge, point: CGPoint) {
+                DockEdge.landing(from: p, velocity: CGVector(dx: dx, dy: dy), current: current, in: air)
             }
-            assert(lands(mid, 1500, 200).edge == .right, "sideways throw from mid-screen reaches the far side")
-            assert(lands(mid, -1500, -200).edge == .left)
-            assert(lands(CGPoint(x: air.maxX - 30, y: mid.y), -900, 120).edge == .left, "a rail thrown off the right edge crosses over")
-            let up = lands(CGPoint(x: mid.x, y: air.minY + 150), 120, 1500)
+            // the owner's case: a rail from the top, dragged to mid-screen and thrown sideways, reaches the far side
+            assert(lands(mid, 1500, 200, on: .top).edge == .right, "sideways throw from mid-screen reaches the far side")
+            assert(lands(mid, -1500, -200, on: .bottom).edge == .left)
+            assert(lands(CGPoint(x: air.maxX - 30, y: mid.y), -900, 120, on: .right).edge == .left, "a rail thrown off the right edge crosses over")
+            let up = lands(CGPoint(x: mid.x, y: air.minY + 150), 120, 1500, on: .bottom)
             assert(up.edge == .top, "bottom-to-top throw lands on top")
             assert(up.point.y == air.maxY && abs(up.point.x - (mid.x + 120 * (air.height - 150) / 1500)) < 0.5,
                    "it lands where its path meets the edge")
-            assert(lands(CGPoint(x: mid.x, y: air.minY + 150), 0, 120).edge == .bottom, "a slow drop stays nearest")
-            assert(lands(CGPoint(x: air.maxX - 200, y: mid.y), -150, 0).edge == .right)
-            let still = lands(CGPoint(x: mid.x + 100, y: air.maxY - 50), 0, 0)
+            assert(lands(CGPoint(x: mid.x, y: air.minY + 150), 0, 120, on: .top).edge == .bottom, "a slow drop stays nearest")
+            assert(lands(CGPoint(x: air.maxX - 200, y: mid.y), -150, 0, on: .left).edge == .right)
+            let still = lands(CGPoint(x: mid.x + 100, y: air.maxY - 50), 0, 0, on: .right)
             assert(still.edge == .top && still.point == CGPoint(x: mid.x + 100, y: air.maxY - 50))
-            assert(lands(CGPoint(x: air.maxX + 40, y: mid.y), 0, 0).point.x == air.maxX, "a release past the edge stays on the screen")
+            assert(lands(CGPoint(x: air.maxX + 40, y: mid.y), 0, 0, on: .right).point.x == air.maxX, "a release past the edge stays on the screen")
+            // Sliding the rail along its own edge and letting go while moving is a reposition: it keeps the edge and coasts.
+            let slid = lands(CGPoint(x: air.maxX - 60, y: mid.y), 150, -1500, on: .right)
+            assert(slid.edge == .right && abs(slid.point.y - (mid.y - 150)) < 0.5, "a fast slide down the right edge stays right")
+            assert(lands(CGPoint(x: mid.x, y: air.maxY - 80), 1800, -300, on: .top).edge == .top, "a slide along the top stays on top")
+            assert(lands(CGPoint(x: air.maxX - 60, y: mid.y), 150, -1500, on: .top).edge == .bottom, "the same throw near another edge goes where it heads")
+            assert(lands(CGPoint(x: air.maxX - 300, y: mid.y), 150, -1500, on: .right).edge == .bottom, "pulled out of its edge, it is thrown")
         }
         // Speed comes from the drag's last moments: a pause before letting go is a drop, not a throw.
         var throwing = ThrowTracker()

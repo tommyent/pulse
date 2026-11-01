@@ -37,21 +37,35 @@ enum DockEdge: String, Codable, CaseIterable {
 
     var isVertical: Bool { self == .right || self == .left }
 
+    func distance(from point: CGPoint, in screen: CGRect) -> CGFloat {
+        switch self {
+        case .right: abs(screen.maxX - point.x)
+        case .left: abs(point.x - screen.minX)
+        case .top: abs(screen.maxY - point.y)
+        case .bottom: abs(point.y - screen.minY)
+        }
+    }
+
     static func nearest(to point: CGPoint, in screen: CGRect) -> DockEdge {
-        let distances: [(DockEdge, CGFloat)] = [
-            (.right, abs(screen.maxX - point.x)), (.left, abs(point.x - screen.minX)),
-            (.top, abs(screen.maxY - point.y)), (.bottom, abs(point.y - screen.minY)),
-        ]
-        return distances.min { $0.1 < $1.1 }!.0
+        allCases.min { $0.distance(from: point, in: screen) < $1.distance(from: point, in: screen) }!
     }
 
     /// Released at `flickSpeed` or faster (points per second), the rail goes to the edge its path reaches first and lands
-    /// where the path meets it. Slower is a drop: the nearest edge, at the release point.
+    /// where the path meets it. Slower is a drop: the nearest edge. A throw mostly along the edge the rail is on, released
+    /// within `slideBand` of it, is a reposition and keeps that edge. Drops and slides coast on for a tenth of a second
+    /// (UIScrollView's fast deceleration), so the glide doesn't spring back against the release velocity.
     static let flickSpeed: CGFloat = 500
+    static let slideBand: CGFloat = 160
 
-    static func landing(from point: CGPoint, velocity v: CGVector, in screen: CGRect) -> (edge: DockEdge, point: CGPoint) {
-        let p = CGPoint(x: min(max(point.x, screen.minX), screen.maxX), y: min(max(point.y, screen.minY), screen.maxY))
-        guard hypot(v.dx, v.dy) >= flickSpeed else { return (nearest(to: p, in: screen), p) }
+    static func landing(from point: CGPoint, velocity v: CGVector, current: DockEdge,
+                        in screen: CGRect) -> (edge: DockEdge, point: CGPoint) {
+        func clamped(_ q: CGPoint) -> CGPoint {
+            CGPoint(x: min(max(q.x, screen.minX), screen.maxX), y: min(max(q.y, screen.minY), screen.maxY))
+        }
+        let p = clamped(point), coasted = clamped(CGPoint(x: p.x + v.dx * 0.1, y: p.y + v.dy * 0.1))
+        guard hypot(v.dx, v.dy) >= flickSpeed else { return (nearest(to: p, in: screen), coasted) }
+        let along = current.isVertical ? abs(v.dy) > abs(v.dx) : abs(v.dx) > abs(v.dy)
+        if along, current.distance(from: p, in: screen) <= slideBand { return (current, coasted) }
         let times: [(DockEdge, CGFloat)] = [
             (.right, v.dx > 0 ? (screen.maxX - p.x) / v.dx : .infinity), (.left, v.dx < 0 ? (screen.minX - p.x) / v.dx : .infinity),
             (.top, v.dy > 0 ? (screen.maxY - p.y) / v.dy : .infinity), (.bottom, v.dy < 0 ? (screen.minY - p.y) / v.dy : .infinity),

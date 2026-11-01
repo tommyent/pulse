@@ -226,7 +226,7 @@ final class OverlayController {
         throwing.add(mouse, at: ProcessInfo.processInfo.systemUptime)
         if let screen = dockScreen {
             let landing = DockEdge.landing(from: mouse, velocity: throwing.velocity(at: ProcessInfo.processInfo.systemUptime),
-                                           in: screen.visibleFrame)
+                                           current: state.dock, in: screen.visibleFrame)
             pinned = landing.point
             state.persisted.dock = landing.edge
         }
