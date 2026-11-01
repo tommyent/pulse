@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 
 /// The Codex pet sheet (8 columns × 11 rows of 192×208 cells, as the Codex app and CLI draw it).
 /// Rows are named animations; each state lists its frame durations along its row.
@@ -56,18 +57,42 @@ enum CodexPetSprite {
         return 0
     }
 
-    /// Frames for every state, cropped once from the sheet. Empty when the sheet is not the expected grid.
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var cache: [URL: [State: [CGImage]]] = [:]
+
+    /// Frames for every state, cropped once from one decoded bitmap of the sheet and shared across callers.
+    /// Cropping a lazy ImageIO WebP `CGImage` directly makes CoreAnimation decode and retain a full 13.4 MiB copy per frame.
     static func frames(from url: URL) -> [State: [CGImage]] {
-        guard let image = NSImage(contentsOf: url)?.cgImage(forProposedRect: nil, context: nil, hints: nil),
-              image.width % columns == 0, image.height % rows == 0 else { return [:] }
-        let w = image.width / columns, h = image.height / rows
-        var out: [State: [CGImage]] = [:]
-        for state in State.allCases {
-            let (row, durations) = track(state)
-            out[state] = durations.indices.compactMap { column in
-                image.cropping(to: CGRect(x: column * w, y: row * h, width: w, height: h))
+        let key = url.standardizedFileURL
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = cache[key] { return cached }
+        let out: [State: [CGImage]] = autoreleasepool {
+            let noCache = [kCGImageSourceShouldCache: false] as CFDictionary
+            let srgb = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+            let bitmap = CGImageAlphaInfo.premultipliedLast.rawValue
+            guard let src = CGImageSourceCreateWithURL(key as CFURL, noCache),
+                  let raw = CGImageSourceCreateImageAtIndex(src, 0, noCache),
+                  raw.width % columns == 0, raw.height % rows == 0,
+                  let ctx = (raw.colorSpace?.model == .rgb
+                      ? CGContext(data: nil, width: raw.width, height: raw.height, bitsPerComponent: 8,
+                                  bytesPerRow: raw.width * 4, space: raw.colorSpace!, bitmapInfo: bitmap)
+                      : nil)
+                      ?? CGContext(data: nil, width: raw.width, height: raw.height, bitsPerComponent: 8,
+                                   bytesPerRow: raw.width * 4, space: srgb, bitmapInfo: bitmap) else { return [:] }
+            ctx.draw(raw, in: CGRect(x: 0, y: 0, width: raw.width, height: raw.height))
+            guard let image = ctx.makeImage() else { return [:] }
+            let w = image.width / columns, h = image.height / rows
+            var out: [State: [CGImage]] = [:]
+            for state in State.allCases {
+                let (row, durations) = track(state)
+                out[state] = durations.indices.compactMap { column in
+                    image.cropping(to: CGRect(x: column * w, y: row * h, width: w, height: h))
+                }
             }
+            return out
         }
+        if !out.isEmpty { cache[key] = out }
         return out
     }
 }
