@@ -47,9 +47,6 @@ enum DockEdge: String, Codable, CaseIterable {
         }
     }
 
-    /// The edge whose zone holds the point. The screen's diagonals split it into four triangles, one per edge: distances
-    /// are measured as a share of the screen's width or height, so a wide screen's sides keep half of it at mid-height
-    /// instead of losing their middle to the nearer top and bottom.
     /// How fast `v` moves toward this edge (negative: away from it).
     func into(_ v: CGVector) -> CGFloat {
         switch self {
@@ -60,6 +57,9 @@ enum DockEdge: String, Codable, CaseIterable {
         }
     }
 
+    /// The edge whose zone holds the point. The screen's diagonals split it into four triangles, one per edge: distances
+    /// are measured as a share of the screen's width or height, so a wide screen's sides keep half of it at mid-height
+    /// instead of losing their middle to the nearer top and bottom.
     static func nearest(to point: CGPoint, in screen: CGRect) -> DockEdge {
         func share(_ edge: DockEdge) -> CGFloat {
             edge.distance(from: point, in: screen) / (edge.isVertical ? screen.width : screen.height)
@@ -110,8 +110,9 @@ enum DockEdge: String, Codable, CaseIterable {
         }
     }
 
-    /// A throw into this edge (the rail's own), released within `slideBand` of it, tucks the rail in. A slower release
-    /// is a drop and a throw mostly along the edge is a slide; neither tucks.
+    /// The flick rule: a throw into this edge (the rail's own), released within `slideBand` of it, tucks the rail in. A
+    /// slower release is a drop and a throw mostly along the edge is a slide; neither tucks by this rule, though `landing`
+    /// tucks any of them that ends pushed against the edge.
     func tucks(from point: CGPoint, velocity v: CGVector, in screen: CGRect) -> Bool {
         hypot(v.dx, v.dy) >= Self.flickSpeed && into(v) > (isVertical ? abs(v.dy) : abs(v.dx))
             && distance(from: point, in: screen) <= Self.slideBand
@@ -127,6 +128,20 @@ enum DockEdge: String, Codable, CaseIterable {
         case .left: frame.offsetBy(dx: screen.minX - overhang - frame.minX, dy: 0)
         case .top: frame.offsetBy(dx: 0, dy: screen.maxY + overhang - frame.maxY)
         case .bottom: frame.offsetBy(dx: 0, dy: screen.minY - overhang - frame.minY)
+        }
+    }
+
+    /// A point in the middle of the rail's 7 pt inner band, which is on its docking display whether the rail is docked or
+    /// tucked (a tucked panel mostly hangs past the edge, onto a neighbouring display if there is one). It sits 12 pt of
+    /// padding plus 44 pt of collapsed rail, less half the band, in from the frame's outer side.
+    func railPoint(of frame: CGRect) -> CGPoint {
+        let inset: CGFloat = 12 + 44 - 3.5
+        let a = anchor(of: frame)
+        return switch self {
+        case .right: CGPoint(x: a.x - inset, y: a.y)
+        case .left: CGPoint(x: a.x + inset, y: a.y)
+        case .top: CGPoint(x: a.x, y: a.y - inset)
+        case .bottom: CGPoint(x: a.x, y: a.y + inset)
         }
     }
 
@@ -180,6 +195,7 @@ struct RailGlide {
     let spring: Spring
     var elapsed: TimeInterval = 0
     var startDepth: CGFloat? = nil   // how far toward the edge it began: a rail released past the wall starts the wall there
+    var slack: CGFloat = 16   // how far past its spot it may press: 0 for a tuck, whose 7 pt sliver must stay on screen
 
     /// Advances by `dt` seconds; true once it has settled on the target (or given up after two seconds).
     mutating func step(_ dt: TimeInterval) -> Bool {
@@ -196,7 +212,7 @@ struct RailGlide {
         spring.update(value: &center, velocity: &velocity, target: goal, deltaTime: dt)
         // The screen edge is a wall: the rail may press up to it (16 pt past its spot: the panel's margin and padding),
         // then bounces back by the spring's own bounce. One released further out eases back in rather than snapping.
-        let past = depth(center) - max(depth(goal) + 16, startDepth ?? 0)
+        let past = depth(center) - max(depth(goal) + slack, startDepth ?? 0)
         if past > 0 {
             center.first -= past * normal.x
             center.second -= past * normal.y
@@ -209,4 +225,23 @@ struct RailGlide {
         let still = hypot(center.first - goal.first, center.second - goal.second) < 0.5 && hypot(velocity.first, velocity.second) < 10
         return still || elapsed >= 2
     }
+}
+
+/// The parts of `frame` to draw: nil when it lies wholly in one of `areas` (no mask), else its pieces in them, which may
+/// be none. A rail at rest, tucked or gliding is clipped to its docking display's usable area; one being dragged, to
+/// every display's, so it shows on both sides of a shared edge.
+func visibleParts(of frame: CGRect, in areas: [CGRect]) -> [CGRect]? {
+    let parts = areas.map { frame.intersection($0) }.filter { !$0.isNull && $0.width > 0 && $0.height > 0 }
+    return parts == [frame] ? nil : parts
+}
+
+enum LandingHover { case collapse, hover, leave }
+
+/// Hover events are ignored while the rail glides (the box sliding under a still pointer would move its target), so a
+/// landing settles hover from where the pointer is now. Left during a peek, the peek ends; on the rail, it is hovered; a
+/// tucked sliver never expands, and an open pet card keeps the rail out.
+func hoverAfterLanding(pointerInside: Bool, peeking: Bool, tuckedAway: Bool, petVisible: Bool) -> LandingHover {
+    if tuckedAway { return .leave }
+    if pointerInside { return .hover }
+    return petVisible ? .leave : .collapse
 }

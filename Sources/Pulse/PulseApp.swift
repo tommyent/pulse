@@ -124,6 +124,7 @@ final class OverlayController {
     /// the content centred in it.
     private var flight: (glide: RailGlide, box: CGSize, time: CFTimeInterval?)?
     private var flightLink: CADisplayLink?
+    private var peekWatch: Timer?
     private let ticker = FrameTicker()
     private var railFrame = CGRect.zero
     private var cardFrame = CGRect.zero
@@ -216,6 +217,7 @@ final class OverlayController {
         guard let frame = restingFrame() else { return }
         if var f = flight {   // the glide lands on it; the box keeps room for the old layout too
             f.glide.target = frame
+            f.glide.slack = state.tuckedAway ? 0 : 16   // a tuck stops at its spot: further in, the sliver would vanish
             f.box = CGSize(width: max(f.box.width, frame.width + 32), height: max(f.box.height, frame.height + 32))
             flight = f
             return
@@ -246,16 +248,37 @@ final class OverlayController {
         if panel.frame != target { panel.setFrame(target, display: display) }
         let frame = panel.frame   // what the window really got
         guard let view = panel.contentView, let screen = dockScreen ?? panel.screen else { return }
-        let visible = frame.intersection(screen.visibleFrame)
-        guard visible != frame, !visible.isNull else { view.layer?.mask = nil; return }
-        let mask = view.layer?.mask ?? CALayer()
+        // dragged freely it may cross onto another display; at rest, tucked or gliding it belongs to its docking one
+        let areas = state.dragging ? NSScreen.screens.map(\.visibleFrame) : [screen.visibleFrame]
+        guard let parts = visibleParts(of: frame, in: areas) else { view.layer?.mask = nil; return }
+        let mask = view.layer?.mask as? CAShapeLayer ?? CAShapeLayer()
+        let path = CGMutablePath()
+        // window coordinates to the view's (flipped, as its backing layer is: measured offscreen)
+        for part in parts { path.addRect(view.convert(part.offsetBy(dx: -frame.minX, dy: -frame.minY), from: nil)) }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        mask.backgroundColor = NSColor.black.cgColor
-        // window coordinates to the view's (flipped, as its backing layer is: measured offscreen)
-        mask.frame = view.convert(visible.offsetBy(dx: -frame.minX, dy: -frame.minY), from: nil)
+        mask.frame = view.bounds
+        mask.path = path   // empty when the panel is off its display altogether: hidden, not unmasked
         CATransaction.commit()
         view.layer?.mask = mask
+    }
+
+    /// Where the pointer keeps a peek going (or, otherwise, counts as on the rail): the panel, plus for a peek the 4 pt
+    /// between it and the screen's edge, where the sliver was.
+    private var peekArea: CGRect { state.peeking ? visiblePanel.insetBy(dx: -6, dy: -6) : visiblePanel.insetBy(dx: 1, dy: 1) }
+
+    /// While peeking, the pointer is watched rather than hover events trusted: exits are ignored mid-glide, and a pointer
+    /// resting where the sliver was may never enter the peeked panel at all.
+    private func watchPeek(_ peeking: Bool) {
+        peekWatch?.invalidate()
+        peekWatch = nil
+        guard peeking else { return }
+        peekWatch = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.state.gliding, !self.state.dragging, !self.state.petVisible else { return }
+                if !self.peekArea.contains(NSEvent.mouseLocation) { self.state.collapseOverlay() }   // ends the peek
+            }
+        }
     }
 
     /// The part of the panel on screen, where the pointer can be on it.
@@ -270,7 +293,7 @@ final class OverlayController {
         let mouse = NSEvent.mouseLocation
         if dragStart == nil {
             if let flight { land(CGRect(x: flight.glide.center.first - contentSize.width / 2, y: flight.glide.center.second - contentSize.height / 2,
-                                        width: contentSize.width, height: contentSize.height)) }   // caught mid-glide
+                                        width: contentSize.width, height: contentSize.height), caught: true) }   // caught mid-glide
             dragStart = (mouse, panel.frame.origin)
             state.dragging = true
         }
@@ -338,7 +361,7 @@ final class OverlayController {
             // the fastest flicks (9000 pt/s in the owner's logs) only overshoot further: 3200 pt/s already feels immediate
             let cap = min(1, 3200 / max(1, hypot(velocity.dx, velocity.dy)))
             flight = (RailGlide(center: AnimatablePair(start.midX, start.midY), velocity: AnimatablePair(velocity.dx * cap, velocity.dy * cap),
-                                target: start, edge: state.dock, spring: spring),
+                                target: start, edge: state.dock, spring: spring, slack: state.tuckedAway ? 0 : 16),
                       CGSize(width: start.width + 32, height: start.height + 32), nil)
             // only the glide sizes the panel meanwhile: no window resize from Auto Layout before the box catches up
             (panel.contentView as? OverlayHostingView)?.sizingOptions = []
@@ -359,7 +382,7 @@ final class OverlayController {
                      width: f.box.width, height: f.box.height))
     }
 
-    private func land(_ frame: CGRect) {
+    private func land(_ frame: CGRect, caught: Bool = false) {
         railLog.notice("land \(describe(frame), privacy: .public) after \(String(format: "%.2f", self.flight?.glide.elapsed ?? 0), privacy: .public) s from \(describe(self.panel.frame), privacy: .public)")
         state.gliding = false
         flight = nil
@@ -368,6 +391,13 @@ final class OverlayController {
         place(frame)
         (panel.contentView as? OverlayHostingView)?.sizingOptions = .standardBounds
         panel.saveFrame(usingName: "PulseOverlay")
+        guard !caught else { return }   // the drag that caught it decides the rest
+        switch hoverAfterLanding(pointerInside: peekArea.contains(NSEvent.mouseLocation),
+                                 peeking: state.peeking, tuckedAway: state.tuckedAway, petVisible: state.petVisible) {
+        case .collapse: state.collapseOverlay()   // ends a peek the pointer left mid-glide
+        case .hover: state.hoveringOverlay = true
+        case .leave: break
+        }
     }
 
     init(state: AppState) {
@@ -395,7 +425,9 @@ final class OverlayController {
         ticker.onFrame = { [weak self] link in MainActor.assumeIsolated { self?.glide(link) } }
         if panel.setFrameUsingName("PulseOverlay"), panel.frame.width > 50 {
             pinned = state.dock.anchor(of: panel.frame)
-            dockScreen = panel.screen
+            // the display the rail's own band is on: a tucked panel mostly hangs past its edge, maybe onto another display
+            let band = state.dock.railPoint(of: panel.frame)
+            dockScreen = NSScreen.screens.first { $0.frame.contains(band) } ?? panel.screen
         }
         panel.setFrameAutosaveName("PulseOverlay")
         // A frame saved while a card or the hover hint widened the panel would otherwise keep the rail off its edge
@@ -434,6 +466,10 @@ final class OverlayController {
             .dropFirst()   // both start with their current values; act on changes
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.settle(fade: true) }
+            .store(in: &cancellables)
+        state.$peeking.removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] in self?.watchPeek($0) }
             .store(in: &cancellables)
         // a card on a tucked rail (the voice shortcut opens the pet's) needs the rail out: it peeks until the card closes
         state.$petVisible.combineLatest(state.$cardVisible)

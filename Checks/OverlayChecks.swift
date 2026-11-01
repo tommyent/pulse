@@ -182,6 +182,24 @@ enum OverlayChecks {
             furthest = max(furthest, tucking.center.first)
         }
         assert(tucking.elapsed < 1)
+        // A fast tuck (a sliver pulled out and flicked straight back, up to the 3200 pt/s cap) stops at its tucked spot and
+        // never goes further in: the 7 pt sliver must not vanish. Sol measured a 16 pt overshoot before. Every edge.
+        let tuckScreen = CGRect(x: 0, y: 0, width: 1710, height: 1070)
+        for edge in DockEdge.allCases {
+            let size = edge.isVertical ? CGSize(width: 84, height: 262) : CGSize(width: 262, height: 84)
+            let docked = edge.frame(size: size, anchor: edge.anchor(of: tuckScreen.insetBy(dx: 0, dy: 300)), in: tuckScreen)
+            let spot = edge.tucked(docked, in: tuckScreen)
+            let push = CGVector(dx: edge == .right ? 3200 : edge == .left ? -3200 : 0, dy: edge == .top ? 3200 : edge == .bottom ? -3200 : 0)
+            var flick = RailGlide(center: AnimatablePair(docked.midX, docked.midY), velocity: AnimatablePair(push.dx, push.dy),
+                                  target: spot, edge: edge, spring: tuckSpring, slack: 0)
+            func depth() -> CGFloat { edge.into(CGVector(dx: flick.center.first - spot.midX, dy: flick.center.second - spot.midY)) }
+            var done = false
+            while !done {
+                done = flick.step(1.0 / 120)
+                assert(depth() <= 0.001, "\(edge): a fast tuck went \(depth()) pt past its spot")
+            }
+            assert(abs(depth()) < 0.5 && flick.elapsed < 1, "\(edge): settles on its spot")
+        }
         // Released hanging past the edge (the pointer at the screen's bottom, a tall rail below it), the rail eases back in:
         // the wall starts where the rail is instead of snapping it 64 pt in one frame, as the owner's logs showed.
         let bottomSpot = CGRect(x: 442, y: 4, width: 262, height: 84)
@@ -194,6 +212,32 @@ enum OverlayChecks {
             last = hanging.center
         }
         assert(abs(hanging.center.second - bottomSpot.midY) < 0.5 && hanging.elapsed < 1.5)
+        // The docking display is found from the rail's own band, never from where most of the panel lies: tucked at the
+        // edge display A shares with B, 49 pt of the 84 pt panel sit on B, yet it belongs to A. Docked, the same.
+        let displayA = CGRect(x: 0, y: 0, width: 1710, height: 1107), displayB = CGRect(x: 1710, y: 0, width: 1920, height: 1080)
+        let dockedOnA = DockEdge.right.frame(size: CGSize(width: 84, height: 262), anchor: CGPoint(x: 1710, y: 500), in: displayA)
+        for frame in [dockedOnA, DockEdge.right.tucked(dockedOnA, in: displayA)] {
+            let point = DockEdge.right.railPoint(of: frame)
+            assert(displayA.contains(point) && !displayB.contains(point), "the rail's band is on A: \(point) for \(frame)")
+        }
+        let tuckedLeftOfB = DockEdge.left.tucked(DockEdge.left.frame(size: CGSize(width: 330, height: 262), anchor: CGPoint(x: 1710, y: 500),
+                                                                     in: displayB), in: displayB)
+        assert(displayB.contains(DockEdge.left.railPoint(of: tuckedLeftOfB)), "a thicker frame (a countdown inside) doesn't change it")
+        // What stays visible: a rail at rest or tucked shows only on its docking display's usable area; dragged freely it
+        // shows wherever a display's usable area is (across a shared edge, on both); entirely off them, nothing.
+        let crossing = CGRect(x: 1680, y: 400, width: 84, height: 262)
+        assert(visibleParts(of: crossing, in: [displayA]) == [CGRect(x: 1680, y: 400, width: 30, height: 262)])
+        assert(visibleParts(of: crossing, in: [displayA, displayB])?.count == 2, "dragged across the shared edge: drawn on both")
+        assert(visibleParts(of: dockedOnA, in: [displayA]) == nil, "fully on its display: no mask")
+        assert(visibleParts(of: CGRect(x: 2000, y: 400, width: 84, height: 262), in: [displayA]) == [], "off its display: hidden, not unmasked")
+        // After a glide lands, the pointer decides what hover missed while it moved (exits during a glide are dropped).
+        // Left during a peek: the peek ends. Still on the peeked rail: it counts as hovered. A tucked sliver never expands,
+        // and an open pet card keeps the rail out.
+        assert(hoverAfterLanding(pointerInside: false, peeking: true, tuckedAway: false, petVisible: false) == .collapse)
+        assert(hoverAfterLanding(pointerInside: true, peeking: true, tuckedAway: false, petVisible: false) == .hover)
+        assert(hoverAfterLanding(pointerInside: true, peeking: false, tuckedAway: true, petVisible: false) == .leave)
+        assert(hoverAfterLanding(pointerInside: false, peeking: true, tuckedAway: false, petVisible: true) == .leave)
+        assert(hoverAfterLanding(pointerInside: false, peeking: false, tuckedAway: false, petVisible: false) == .collapse)
         // The short card leaves transparent window space above and below it.
         // Rotate the layout to exercise the same dismissal rules on all four edges.
         for turns in 0..<4 {
