@@ -5,7 +5,7 @@
     data-media   video = the season's film in the break section | still = the break-screen screenshot
     data-logos   on = vendor icons as the app shows them | off = the app's plain glyphs, and stills without icons
 -->
-<html lang="en" data-season="halloween" data-media="video" data-logos="on">
+<html lang="en" data-season="none" data-media="video" data-logos="on">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -20,10 +20,10 @@
 <meta name="theme-color" content="#0f0d16">
 <link rel="icon" type="image/png" href="assets/favicon.png">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
-<link rel="preload" href="assets/fonts/BricolageGrotesque-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/Geist.woff2" as="font" type="font/woff2" crossorigin>
 <style>
-@font-face { font-family: "Bricolage Grotesque"; src: url(assets/fonts/BricolageGrotesque-latin.woff2) format("woff2"); font-weight: 600 800; font-display: swap; }
-@font-face { font-family: "Figtree"; src: url(assets/fonts/Figtree-latin.woff2) format("woff2"); font-weight: 400 600; font-display: swap; }
+/* Geist 1.9.0 by Vercel, the variable font, SIL OFL 1.1 (assets/fonts/OFL-Geist.txt) */
+@font-face { font-family: "Geist"; src: url(assets/fonts/Geist.woff2) format("woff2"); font-weight: 100 900; font-display: swap; }
 
 /* the season changes only these; Pulse's own default break colour is violet */
 :root {
@@ -42,7 +42,7 @@
 * { box-sizing: border-box; margin: 0; }
 html { background: var(--night); color: var(--text); scroll-behavior: smooth; color-scheme: dark; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
-body { font: 400 1.125rem/1.55 Figtree, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+body { font: 400 1.125rem/1.55 Geist, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
 ::selection { background: var(--bar); color: var(--on-bar); }
 a { color: inherit; text-decoration-thickness: 1.5px; text-underline-offset: .28em; }
 a:hover { text-decoration-color: var(--bar); }
@@ -53,7 +53,7 @@ img, video { max-width: 100%; display: block; }
 
 /* ---------- the page is the desktop ---------- */
 .menubar { position: sticky; top: 0; z-index: 10; height: 2.4rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem;
-  padding: 0 calc(110px + 1rem) 0 1.1rem; font: 500 .95rem Figtree; color: var(--muted);
+  padding: 0 calc(110px + 1rem) 0 1.1rem; font: 500 .95rem Geist; color: var(--muted);
   background: color-mix(in oklab, var(--night) 72%, transparent); backdrop-filter: blur(18px) saturate(1.3); -webkit-backdrop-filter: blur(18px) saturate(1.3);
   border-bottom: 1px solid rgba(255,255,255,.06); }
 .menubar nav, .menubar .end { display: flex; gap: 1.4rem; align-items: center; }
@@ -65,12 +65,12 @@ img, video { max-width: 100%; display: block; }
 
 .desktop { position: relative; min-height: calc(100svh - 2.4rem); display: grid; align-content: center; padding: 6vh calc(130px + 4vw) 10vh 7vw; overflow: hidden;
   background: linear-gradient(180deg, var(--night-2), var(--night) 78%); }
-h1 { font: 800 clamp(2.9rem, 7.2vw, 6rem)/0.95 "Bricolage Grotesque", Figtree, sans-serif; letter-spacing: -0.035em; text-wrap: balance; max-width: 13ch; }
+h1 { font: 800 clamp(2.9rem, 7.2vw, 6rem)/0.95 Geist, sans-serif; letter-spacing: -0.035em; text-wrap: balance; max-width: 13ch; }
 h1 em { font-style: normal; color: var(--bar); }
 .lede { font-size: clamp(1.15rem, 1.6vw, 1.35rem); color: var(--muted); max-width: 40ch; margin-top: 1.4rem; }
 .actions { display: flex; gap: 1.2rem 1.6rem; align-items: center; margin-top: 2.2rem; flex-wrap: wrap; }
 .download { display: inline-flex; align-items: center; gap: .7rem; padding: 1rem 1.55rem; border-radius: 999px; text-decoration: none;
-  background: var(--bar); color: var(--on-bar); font: 700 1.1rem Figtree;
+  background: var(--bar); color: var(--on-bar); font: 700 1.1rem Geist;
   box-shadow: 0 8px 20px rgba(0,0,0,.4); transition: transform .25s cubic-bezier(.16,1,.3,1), box-shadow .25s; }
 .download:hover { transform: translateY(-2px); box-shadow: 0 12px 26px rgba(0,0,0,.45); text-decoration: none; }
 .download svg { width: 1.25rem; height: 1.25rem; }
@@ -81,10 +81,31 @@ h1 em { font-style: normal; color: var(--bar); }
 
 /* ---------- Pulse's rail, drawn from the app's own values ---------- */
 .p { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; color: var(--p-label); }
-.rail { position: fixed; z-index: 12; right: 12px; top: 50%; transform: translateY(-50%);
-  display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 16px 12px; border-radius: 26px;
-  background: var(--p-surface); box-shadow: inset 0 0 0 1px var(--p-track), 0 10px 30px rgba(0,0,0,.45); }
-.item { display: flex; flex-direction: column; align-items: center; gap: 6px; text-decoration: none; color: inherit; border-radius: 30px; }
+/* At rest the rail is small: 28 pt rings without numbers. While the pointer is over it (.open) they grow to 52 pt with
+   their percentages. Pushed into its edge (.tucked) only a 7 pt sliver stays on screen, with a tick per account. */
+.rail { position: fixed; z-index: 12; right: 12px; top: 50%; transform: translateY(-50%); touch-action: none; cursor: grab;
+  display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 10px 8px; border-radius: 18px;
+  background: var(--p-surface); box-shadow: inset 0 0 0 1px var(--p-track), 0 10px 30px rgba(0,0,0,.45);
+  transition: gap .28s, padding .28s, border-radius .28s, translate .35s cubic-bezier(.25,.1,.25,1); }
+.rail.open { gap: 18px; padding: 16px 12px; border-radius: 26px; }
+.rail .ring, .rail .pet { zoom: .5385; transition: zoom .28s; }   /* 28 / 52 */
+.rail.open .ring, .rail.open .pet { zoom: 1; }
+.rail:not(.open) .pct, .rail:not(.open) .wave { display: none; }
+.rail:not(.open) .pet:not(.waving) .sprite { animation: none; }   /* as in the app, the small pet holds still */
+.rail.tucked { translate: 49px 0; }   /* 12 pt margin + 44 pt rail - the 7 pt sliver */
+.rail.dragging { transition: none; cursor: grabbing; }
+.rail .tick { position: absolute; left: -6px; top: 50%; translate: 0 -50%; width: 3px; height: calc(4px + 16px * var(--used, 0) / 100);
+  border-radius: 2px; background: var(--c); opacity: 0; transition: opacity .1s; pointer-events: none; }
+.rail.tucked .tick { opacity: 1; transition: opacity .16s .18s; }   /* in as the rail reaches its slot */
+.sliver { display: none; position: absolute; top: 0; bottom: 0; left: -12px; width: 19px; padding: 0; border: 0; background: none; cursor: pointer; border-radius: 0; }
+.rail.tucked .sliver { display: block; }
+/* below the resting rail (6 items x 28 + 5 gaps x 10 + 20 padding = 238 pt), clear of the section's screenshots */
+.hint { position: fixed; z-index: 11; right: 12px; top: calc(50% + 131px); max-width: 11rem; padding: .7rem .9rem;
+  border-radius: 14px; background: var(--p-surface); box-shadow: inset 0 0 0 1px var(--p-track), 0 10px 30px rgba(0,0,0,.45);
+  font-size: .92rem; line-height: 1.4; color: var(--text); opacity: 0; transition: opacity .3s; pointer-events: none; }
+.hint.on { opacity: 1; }
+.rail.open ~ .hint { opacity: 0; }
+.item { display: flex; flex-direction: column; align-items: center; gap: 6px; text-decoration: none; color: inherit; border-radius: 30px; position: relative; }
 .ring { width: 52px; height: 52px; position: relative; }
 .ring svg.arcs { position: absolute; inset: 0; width: 52px; height: 52px; overflow: visible; transform: rotate(-90deg); }
 .ring .track { fill: none; stroke: var(--p-track); stroke-width: 6.24; }
@@ -108,9 +129,11 @@ h1 em { font-style: normal; color: var(--bar); }
 @keyframes wave { 0% { background-position-x: 0 } 20% { background-position-x: calc(100% / 3) } 40% { background-position-x: calc(200% / 3) } 60% { background-position-x: 100% } }
 
 /* the countdown beside the rail (BreakPill) */
-.chip { position: fixed; z-index: 12; right: calc(12px + 76px + 10px); top: 50%; height: 52px; padding: 0 19px 0 7px; display: flex; align-items: center; gap: 6px;
-  transform: translateY(-50%) scale(.5); transform-origin: right center; opacity: 0; pointer-events: none; transition: transform .45s cubic-bezier(.34,1.56,.64,1), opacity .2s; }
+.chip { position: fixed; z-index: 12; right: calc(12px + 44px + 10px); top: 50%; height: 52px; padding: 0 19px 0 7px; display: flex; align-items: center; gap: 6px;
+  transform: translateY(-50%) scale(.5); transform-origin: right center; opacity: 0; pointer-events: none; transition: transform .45s cubic-bezier(.34,1.56,.64,1), opacity .2s, right .28s; }
 .chip.on { transform: translateY(-50%) scale(1); opacity: 1; pointer-events: auto; }
+.rail.open ~ .chip { right: calc(12px + 76px + 10px); }
+.rail.tucked ~ .chip { opacity: 0; pointer-events: none; }
 .chip .shape { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .chip .start { position: relative; display: flex; align-items: center; gap: 9px; background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; border-radius: 19px; }
 .chip .cd { width: 38px; height: 38px; position: relative; }
@@ -124,13 +147,13 @@ h1 em { font-style: normal; color: var(--bar); }
 section.band { padding: 18vh calc(130px + 4vw) 0 7vw; }
 .feature { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 6vw; align-items: center; }
 .feature.flip > :first-child { order: 2; }
-h2 { font: 800 clamp(2.2rem, 4.4vw, 3.6rem)/1 "Bricolage Grotesque", Figtree, sans-serif; letter-spacing: -0.032em; text-wrap: balance; max-width: 16ch; }
+h2 { font: 800 clamp(2.2rem, 4.4vw, 3.6rem)/1 Geist, sans-serif; letter-spacing: -0.032em; text-wrap: balance; max-width: 16ch; }
 .feature p, .break-copy p { color: var(--muted); max-width: 46ch; margin-top: 1.2rem; }
 .feature ul { list-style: none; padding: 0; margin-top: 1.4rem; display: grid; gap: .75rem; max-width: 46ch; }
 .feature li { padding-left: 1.4rem; position: relative; color: var(--muted); }
 .feature li::before { content: ""; position: absolute; left: 0; top: .62em; width: .55rem; height: .55rem; border-radius: 50%; border: 2px solid var(--bar); }
 .feature li strong { color: var(--text); font-weight: 600; }
-kbd { font: 600 .92em Figtree; padding: .05em .4em; border-radius: 6px; background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.14); }
+kbd { font: 600 .92em Geist; padding: .05em .4em; border-radius: 6px; background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.14); }
 .feature .shot { max-height: 84vh; width: auto; height: auto; max-width: 100%; margin-inline: auto; }
 .shot { border-radius: 18px; box-shadow: 0 0 0 1px rgba(255,255,255,.07), 0 28px 60px rgba(0,0,0,.5); background: #0b0a10; }
 .shot-nologo { display: none; }
@@ -147,7 +170,7 @@ kbd { font: 600 .92em Figtree; padding: .05em .4em; border-radius: 6px; backgrou
 [data-film="on"] .screen .film { display: block; }
 [data-film="on"] .screen .still { display: none; }
 .under { max-width: 1060px; display: flex; justify-content: space-between; align-items: start; gap: 1.5rem 3rem; margin-top: 1.4rem; flex-wrap: wrap; }
-.sound { display: none; align-items: center; gap: .5rem; padding: .55rem .95rem; border-radius: 999px; border: 1px solid rgba(255,255,255,.26); background: rgba(255,255,255,.06); color: var(--text); font: 600 .95rem Figtree; cursor: pointer; }
+.sound { display: none; align-items: center; gap: .5rem; padding: .55rem .95rem; border-radius: 999px; border: 1px solid rgba(255,255,255,.26); background: rgba(255,255,255,.06); color: var(--text); font: 600 .95rem Geist; cursor: pointer; }
 [data-film="on"] .sound { display: inline-flex; }
 .sound:hover { background: rgba(255,255,255,.12); }
 .sound svg { width: 1.05rem; height: 1.05rem; }
@@ -158,7 +181,7 @@ kbd { font: 600 .92em Figtree; padding: .05em .4em; border-radius: 6px; backgrou
 .facts { padding: 18vh calc(130px + 4vw) 0 7vw; }
 .facts dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 0 4vw; border-top: 1px solid rgba(255,255,255,.12); }
 .facts div { padding: 1.8rem 0; border-bottom: 1px solid rgba(255,255,255,.12); }
-.facts dt { font: 800 1.45rem/1.15 "Bricolage Grotesque", Figtree, sans-serif; letter-spacing: -0.02em; }
+.facts dt { font: 800 1.45rem/1.15 Geist, sans-serif; letter-spacing: -0.02em; }
 .facts dd { margin-top: .6rem; color: var(--muted); }
 
 .closing { padding: 20vh calc(130px + 4vw) 16vh 7vw; }
@@ -177,17 +200,12 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
   .feature { grid-template-columns: 1fr; gap: 2.4rem; }
   .feature.flip > :first-child { order: 0; }
   body { padding-bottom: 76px; }
-  .rail { top: auto; bottom: 12px; right: 50%; transform: translateX(50%); flex-direction: row; gap: 10px; padding: 8px 10px; border-radius: 18px; }
+  .rail { top: auto; bottom: 12px; right: 50%; transform: translateX(50%); flex-direction: row; padding: 8px 10px; }
+  .rail.tucked { translate: 0 49px; }
   .rail .item { gap: 0; }
-  .rail .pct, .rail .wave { display: none; }
-  .rail .ring, .rail .pet { width: 28px; height: 28px; }
-  .rail .ring svg.arcs { width: 28px; height: 28px; }
-  .rail .ring .track, .rail .ring .arc { stroke-width: 3.36; }
-  .rail .ring .arc.inner { stroke-width: 1.96; }
-  .rail .ring .cap { left: 5.46px; top: 5.46px; width: 17.08px; height: 17.08px; }
-  .rail .ring .icon, .rail .ring .glyph { left: 8.4px; top: 8.4px; width: 11.2px; height: 11.2px; }
-  .rail .ring .bolt { left: 9.26px; top: 8.6px; width: 9.48px; height: 10.8px; }
-  .rail .pet .sprite { left: 3.92px; top: 3.08px; width: 20.16px; height: 21.84px; }
+  .rail .tick { left: 50%; top: -6px; translate: -50% 0; width: calc(4px + 16px * var(--used, 0) / 100); height: 3px; }
+  .sliver { left: 0; right: 0; top: -12px; bottom: auto; width: auto; height: 19px; }
+  .hint { right: 50%; top: auto; bottom: calc(12px + 44px + 14px); transform: translateX(50%); width: max-content; max-width: calc(100vw - 2.5rem); }
   .chip { right: 50%; top: auto; bottom: calc(12px + 44px + 10px); transform: translateX(50%) scale(.5); transform-origin: center bottom; }
   .chip.on { transform: translateX(50%) scale(1); }
 }
@@ -195,6 +213,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
   .pet .sprite { animation: none; }
   .ring .arc, .ring .cap i { transition: none; }
   .chip { transition: opacity .2s; }
+  .rail, .rail .ring, .rail .pet, .rail .tick, .hint { transition: none; }
 }
 </style>
 </head>
@@ -210,14 +229,14 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
 
 <main id="main">
 <section class="desktop" id="top">
-  <h1>Watch every limit. <em>No scary surprises.</em></h1>
+  <h1>Watch every limit. <em>No surprises.</em></h1>
   <p class="lede">Pulse puts floating usage rings for Claude, Codex, Grok and Antigravity at the edge of your screen, with a Codex pet you can talk to.</p>
   <div class="actions">
     <a class="download" href="https://github.com/tommyent/pulse/releases/download/v0.2.0/Pulse-0.2.0.dmg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg>Download for Mac <small>v0.2.0</small></a>
     <a class="textlink" href="https://github.com/tommyent/pulse">Source on GitHub</a>
   </div>
   <p class="specs">macOS 26 or later · Apple silicon · signed and notarized · free and open source</p>
-  <p class="live-note">That rail at the edge of this page is Pulse, drawn the way the app draws it, with sample numbers.</p>
+  <p class="live-note">That rail at the edge of this page is Pulse, drawn the way the app draws it, with sample numbers. Point at it to see them, or push it into the edge to tuck it away.</p>
 </section>
 
 <section class="band" id="rings">
@@ -229,11 +248,12 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
         <li><strong>98%, 99%, 100%.</strong> The ring gets a red badge and an alert stays in the middle of the screen until you dismiss it.</li>
         <li><strong>Per-model caps</strong> fill the disc behind the logo as they're used.</li>
         <li><strong>Show what's left</strong> turns the rings around, so they empty as you use them.</li>
-        <li><strong>Any screen edge.</strong> Drag the rail anywhere; top and bottom lay out horizontally.</li>
+        <li><strong>Small until you need it.</strong> The rings sit at a screen edge, small and without numbers until the pointer is over them; then they grow and show their percentages.</li>
+        <li><strong>Flick it, tuck it.</strong> Drag the rail to any edge or flick it toward one, and it glides there. Push it into its own edge and it tucks away to a thin sliver, with a tick for each account. Click the sliver to bring it back.</li>
       </ul>
     </div>
     <div>
-      <img class="shot shot-logo" src="assets/usage-card.png" width="899" height="1215" loading="lazy" alt="Pulse 0.2.0: the rail of usage rings and the battery, with the Claude card open: current session, all models and a per-model window, each with its reset time">
+      <img class="shot shot-logo" src="assets/usage-card.png" width="899" height="1215" loading="lazy" alt="Pulse: the rail of usage rings and the battery, with the Claude card open: current session, all models and a per-model window, each with its reset time">
       <img class="shot shot-nologo" src="assets/usage-card-nologo.png" width="899" height="1215" loading="lazy" alt="The rail of usage rings with a usage card open: current session, all models and a per-model window, each with its reset time">
     </div>
   </div>
@@ -271,7 +291,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
     <button class="sound" type="button" aria-pressed="false"><svg class="muted-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9zM17 9l4 6m0-6-4 6"/></svg><span>Sound off</span></button>
   </div>
   <div class="break-copy">
-    <p>Breaks keep to their times: by default a 20-second micro break every 20 minutes and a 5-minute break every hour. Thirty seconds before, a countdown grows out of the rail. The break covers every display, waits during calls, and time away counts as a break. On Halloween and Thanksgiving a short film plays behind the countdown.</p>
+    <p>Breaks keep to their times: by default a 20-second micro break every 20 minutes and a 5-minute break every hour. Thirty seconds before, a countdown grows out of the rail. The break covers every display, waits during calls, and time away counts as a break. On holidays a short film plays behind the countdown. Coming soon: make your own from a prompt.</p>
     <a class="download" href="https://github.com/tommyent/pulse/releases/download/v0.2.0/Pulse-0.2.0.dmg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg>Download for Mac <small>v0.2.0</small></a>
   </div>
 </section>
@@ -302,6 +322,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
 
 <!-- Pulse's rail: sample numbers -->
 <aside class="rail p" aria-label="Pulse's rail, with sample usage">
+  <button class="sliver" type="button" aria-label="Usage rings, minimized: show them" title="Click to bring the rings back, or drag them out"></button>
   <div class="item">
     <a class="pet" href="#pet" aria-label="Codex pet"><svg class="arcs" viewBox="0 0 52 52" style="position:absolute;inset:0;overflow:visible" aria-hidden="true"><circle class="pet-ring" cx="26" cy="26" r="26" fill="none" stroke="var(--p-track)" stroke-width="6.24"/></svg><span class="sprite"></span></a>
     <button class="wave" type="button" aria-label="Start live voice (a preview of the pet's states)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="wave-disc" cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path class="wave-bars" d="M7 11v2M9.5 8.5v7M12 10v4M14.5 9v6M17 11v2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
@@ -312,6 +333,8 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
   <a class="item" href="#rings" data-ring="antigravity" data-used="12" data-week="30"></a>
   <a class="item" href="#battery" data-battery="100"></a>
 </aside>
+
+<p class="hint" aria-hidden="true">Push the rail into the edge to tuck it away.</p>
 
 <div class="chip p" role="status" aria-live="off">
   <svg class="shape" aria-hidden="true"></svg>
@@ -369,7 +392,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
       <circle class="track" cx="26" cy="26" r="26"/>
       <circle class="arc" cx="26" cy="26" r="26" style="stroke:${color[id]};stroke-dasharray:0 ${C(26)}"/>
       <circle class="arc inner" cx="26" cy="26" r="17.68" style="stroke:${color[id]};stroke-dasharray:0 ${C(17.68)}"/></svg>
-      <img class="icon" src="${icons[id]}" alt=""><svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">${glyphs[id]}</svg></span><span class="pct" aria-hidden="true">0%</span>`;
+      <img class="icon" src="${icons[id]}" alt=""><svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">${glyphs[id]}</svg></span><span class="pct" aria-hidden="true">0%</span><i class="tick" style="--c:${color[id]}"></i>`;
     rings.push({ el, used, week, cap: cap ? +cap : null });
   });
   const bat = document.querySelector("[data-battery]");
@@ -387,6 +410,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
       outer.style.visibility = r.used === null ? "hidden" : ""; inner.style.visibility = r.week === null ? "hidden" : "";
       r.el.querySelector(".pct").textContent = r.used === null ? "\u2014" : `${Math.round(r.used)}%`;
       if (r.cap !== null) r.el.querySelector(".cap i").style.height = `${r.cap}%`;
+      const t = r.el.querySelector(".tick"); t.style.setProperty("--used", r.used ?? 0); t.hidden = r.used === null;
     });
     if (bat) bat.querySelector(".bat").style.strokeDasharray = `${C(26) * +bat.dataset.battery / 100} ${C(26)}`;
   };
@@ -435,6 +459,54 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
   phone.addEventListener("change", () => chip.classList.contains("on") && drawShape());
   new IntersectionObserver(([e]) => { heroVisible = e.isIntersecting; heroVisible ? (chip.classList.contains("on") || setTimeout(show, 600)) : hide(); }, { threshold: .35 }).observe(document.querySelector(".desktop"));
   setTimeout(show, reduce ? 0 : 2500);
+
+  // The rail rests small and grows under the pointer. Pushed into its edge it tucks to a sliver; a click on the sliver,
+  // or a drag out of it, brings it back. As in the app, but only along this page's edge.
+  const rail = document.querySelector(".rail"), sliver = rail.querySelector(".sliver"), hint = document.querySelector(".hint");
+  let tucked = false, drag = null, dragged = false, demo = [];
+  const setOpen = v => rail.classList.toggle("open", v && !tucked && !phone.matches);
+  const setTucked = v => { tucked = v; rail.classList.toggle("tucked", v); setOpen(false); rail.querySelectorAll(".item").forEach(i => i.inert = v); };
+  rail.querySelectorAll("a, img").forEach(el => el.draggable = false);
+  rail.addEventListener("pointerenter", e => e.pointerType === "mouse" && !drag && setOpen(true));
+  rail.addEventListener("pointerleave", () => drag || setOpen(false));
+  rail.addEventListener("focusin", () => setOpen(true));
+  rail.addEventListener("focusout", e => rail.contains(e.relatedTarget) || setOpen(false));
+  phone.addEventListener("change", () => setOpen(false));
+  setOpen(true); setTimeout(() => rail.matches(":hover") || setOpen(false), 3200);   // open at first with its numbers, then out of the way
+  const toEdge = e => phone.matches ? e.clientY - drag.y : e.clientX - drag.x;
+  rail.addEventListener("pointerdown", e => {
+    if (e.button !== 0) return;
+    demo.forEach(clearTimeout); hint.classList.remove("on");
+    drag = { x: e.clientX, y: e.clientY, id: e.pointerId }; dragged = false;
+  });
+  rail.addEventListener("pointermove", e => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const d = toEdge(e);
+    if (!dragged) { if (Math.abs(d) < 4) return; dragged = true; rail.setPointerCapture(e.pointerId); rail.classList.add("dragging"); setOpen(false); }
+    const at = Math.max(-16, Math.min(49, (tucked ? 49 : 0) + d));
+    rail.style.translate = phone.matches ? `0 ${at}px` : `${at}px 0`;
+  });
+  const drop = e => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const d = toEdge(e); drag = null;
+    if (!dragged) return;
+    rail.classList.remove("dragging"); rail.style.translate = "";
+    const pinned = phone.matches ? e.clientY >= innerHeight - 8 : e.clientX >= innerWidth - 8;   // pointer pushed into the page's edge
+    setTucked(e.type !== "pointerup" ? tucked : tucked ? d > -12 : d > 24 || pinned);
+  };
+  rail.addEventListener("pointerup", drop);
+  rail.addEventListener("pointercancel", drop);
+  rail.addEventListener("click", e => { if (dragged) { e.preventDefault(); e.stopPropagation(); dragged = false; } }, true);   // a drag isn't a click
+  sliver.addEventListener("click", e => { setTucked(false); if (!e.detail) rail.querySelector(".pet").focus(); });
+  // the first time the rings section shows: the hint, and one short tuck and return
+  const seen = new IntersectionObserver(([e]) => {
+    if (!e.isIntersecting) return;
+    seen.disconnect();
+    if (tucked) return;
+    hint.classList.add("on"); demo.push(setTimeout(() => hint.classList.remove("on"), 6500));
+    if (!reduce) demo.push(setTimeout(() => setTucked(true), 1400), setTimeout(() => setTucked(false), 3800));
+  }, { threshold: .35 });
+  seen.observe(document.getElementById("rings"));
 })();
 </script>
 </body>
