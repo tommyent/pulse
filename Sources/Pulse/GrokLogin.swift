@@ -171,8 +171,8 @@ final class ClaudeWeb: NSObject, WKNavigationDelegate {
     private var web: WKWebView?
     private var loadContinuation: CheckedContinuation<Void, Never>?
 
-    /// Returns (rate-limit tier, usage payload) or nil when not signed in / unreachable.
-    func fetchUsage() async -> (tier: String?, usage: [String: Any])? {
+    /// Returns the usage payload, or nil when not signed in / unreachable.
+    func fetchUsage() async -> [String: Any]? {
         let web = await ensureLoaded()
         let js = """
         const orgs = await fetch('/api/organizations',{headers:{accept:'application/json'}}).then(r=>r.ok?r.json():null);
@@ -180,14 +180,14 @@ final class ClaudeWeb: NSObject, WKNavigationDelegate {
         const org = orgs.find(o=>(o.capabilities||[]).includes('chat')) || orgs[0];
         const u = await fetch('/api/organizations/'+org.uuid+'/usage',{headers:{accept:'application/json'}}).then(r=>r.ok?r.json():null);
         if (!u) { return null; }
-        return JSON.stringify({tier: org.rate_limit_tier || null, usage: u});
+        return JSON.stringify({usage: u});
         """
         guard let result = try? await web.callAsyncJavaScript(js, contentWorld: .defaultClient),
               let str = result as? String,
               let obj = try? JSONSerialization.jsonObject(with: Data(str.utf8)) as? [String: Any],
               let usage = obj["usage"] as? [String: Any]
         else { return nil }
-        return (obj["tier"] as? String, usage)
+        return usage
     }
 
     /// Disconnect: drop the claude.ai web session (cookies, storage) and the hidden webview.

@@ -27,6 +27,8 @@ swiftc Sources/Pulse/HotKey.swift Checks/VoiceShortcutChecks.swift -o "$OUT/voic
 "$OUT/voice-shortcut"
 swiftc Sources/Pulse/Models.swift Sources/Pulse/Adapters.swift Sources/Pulse/GrokLogin.swift Sources/Pulse/HotKey.swift Checks/SecurityChecks.swift -o "$OUT/security"
 "$OUT/security"
+swiftc Sources/Pulse/Models.swift Sources/Pulse/Adapters.swift Sources/Pulse/GrokLogin.swift Sources/Pulse/HotKey.swift Checks/PlanLabelChecks.swift -o "$OUT/plan-labels"
+"$OUT/plan-labels"
 ./scripts/grok-check.sh --offline
 swiftc Sources/Pulse/CodexChat.swift Sources/Pulse/VoiceBridge.swift Sources/Pulse/PetApprovals.swift Checks/CodexSessionChecks.swift -o "$OUT/codex-session"
 "$OUT/codex-session"

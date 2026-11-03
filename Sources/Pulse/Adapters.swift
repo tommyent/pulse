@@ -53,7 +53,7 @@ private func parseISO(_ s: String) -> Date? {
 final class ClaudeKeychain {
     static let shared = ClaudeKeychain()
     static let service = "Claude Code-credentials"
-    struct Creds { var accessToken: String; var tier: String? }
+    struct Creds { var accessToken: String }
     private let lock = NSLock()
     private var cached: (modified: Date, creds: Creds?)?   // creds nil = refused or unparsable at that version
 
@@ -105,18 +105,17 @@ final class ClaudeKeychain {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let oauth = json["claudeAiOauth"] as? [String: Any],
               let token = oauth["accessToken"] as? String, !token.isEmpty else { return nil }
-        return Creds(accessToken: token, tier: (oauth["rateLimitTier"] as? String) ?? (oauth["subscriptionType"] as? String))
+        return Creds(accessToken: token)
     }
 }
 
 enum ClaudeAdapter {
     static func fetch() async -> AccountSnapshot {
-        var snap = AccountSnapshot(id: .claude, displayName: "Claude", planLabel: "Claude",
+        var snap = AccountSnapshot(id: .claude, displayName: "Claude", planLabel: "Anthropic",
                                    health: .needsAuth, windows: [], fetchedAt: .now, source: .officialProtocol)
 
         // Preferred: Claude Code's own token against the endpoint its /usage reads. No WebKit, no cookies.
         if let creds = ClaudeKeychain.shared.credentials() {
-            snap.planLabel = planLabel(creds.tier)
             func get(_ path: String) async -> (Int, [String: Any]?) {
                 var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/\(path)")!, timeoutInterval: 15)
                 req.setValue("Bearer \(creds.accessToken)", forHTTPHeaderField: "Authorization")
@@ -127,9 +126,8 @@ enum ClaudeAdapter {
             let (status, json) = await get("usage")
             if status == 200, let json {
                 snap.windows = windows(from: json)
-                // the credential's rateLimitTier lags plan changes; the organization's current tier does not
-                if let org = await get("profile").1?["organization"] as? [String: Any], let tier = org["rate_limit_tier"] as? String {
-                    snap.planLabel = planLabel(tier)
+                if let org = await get("profile").1?["organization"] as? [String: Any] {
+                    snap.planLabel = planLabel(org["plan_display_name"] as? String)
                 }
                 if !snap.windows.isEmpty { snap.health = .ok; return snap }
             }
@@ -142,9 +140,8 @@ enum ClaudeAdapter {
         }
 
         // Fallback: Pulse's own claude.ai web session (Connect… in Settings).
-        if let (tier, usage) = await ClaudeWeb.shared.fetchUsage() {
+        if let usage = await ClaudeWeb.shared.fetchUsage() {
             snap.source = .officialUsagePage
-            snap.planLabel = planLabel(tier)
             snap.windows = windows(from: usage)
             snap.health = snap.windows.isEmpty ? .providerError : .ok
             return snap
@@ -152,13 +149,11 @@ enum ClaudeAdapter {
         return snap
     }
 
-    static func planLabel(_ tier: String?) -> String {
-        guard let tier else { return "Claude" }
-        if tier.contains("max_20") { return "Max 20x" }
-        if tier.contains("max_5") { return "Max 5x" }
-        if tier.contains("pro") { return "Pro" }
-        if tier == "max" { return "Max" }
-        return "Claude"
+    /// The profile's own plan name ("Ultra" on 2026-11-03), else the company. Tier IDs are not translated into plan
+    /// names: such a table is how "Max 20x" went stale (the ID still read default_claude_max_20x after the rename).
+    static func planLabel(_ displayName: String?) -> String {
+        guard let name = displayName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return "Anthropic" }
+        return name
     }
 
     /// Tolerant parse: any top-level object carrying `utilization` becomes a window.
@@ -196,7 +191,7 @@ enum CodexAdapter {
     // Codex's own sign-in (~/.codex/auth.json) against the usage endpoint the Codex app reads.
     // Replaces spawning `codex app-server` every poll: one HTTPS call, real reset timestamps.
     static func fetch() async -> AccountSnapshot {
-        var snap = AccountSnapshot(id: .codex, displayName: "Codex", planLabel: "Codex",
+        var snap = AccountSnapshot(id: .codex, displayName: "Codex", planLabel: "OpenAI",
                                    health: .needsAuth, windows: [], fetchedAt: .now, source: .officialProtocol)
         guard let auth = try? JSONSerialization.jsonObject(with: Data(contentsOf: home.appending(path: ".codex/auth.json"))) as? [String: Any],
               let tokens = auth["tokens"] as? [String: Any],
@@ -220,10 +215,11 @@ enum CodexAdapter {
         return snap
     }
 
+    /// wham/usage gives only `plan_type`, an ID ("prolite" on 2026-11-03), never a display name; an ID not listed
+    /// here shows the company rather than a guessed plan.
     static func planLabel(_ plan: String) -> String {
         ["plus": "ChatGPT Plus", "pro": "ChatGPT Pro", "prolite": "ChatGPT Pro Lite",
-         "business": "ChatGPT Business", "team": "ChatGPT Team", "enterprise": "ChatGPT Enterprise"][plan]
-            ?? "ChatGPT \(plan.capitalized)"
+         "business": "ChatGPT Business", "team": "ChatGPT Team", "enterprise": "ChatGPT Enterprise"][plan] ?? "OpenAI"
     }
 
     /// `rate_limit.primary_window` / `secondary_window`: which one is the 5-hour window depends on
@@ -430,7 +426,8 @@ enum GrokAdapter {
     ]
 
     static func fetch() async -> AccountSnapshot {
-        var snap = AccountSnapshot(id: .grok, displayName: "Grok", planLabel: "SuperGrok",
+        // the billing reply names no plan (checked 2026-11-03), so the card names the company, not a guessed plan
+        var snap = AccountSnapshot(id: .grok, displayName: "Grok", planLabel: "xAI",
                                    health: .needsAuth, windows: [], fetchedAt: .now, source: .cliStatus)
         var errors: [GrokError] = []
 
@@ -592,7 +589,7 @@ enum AntigravityAdapter {
     static func pausesPolling(_ snap: AccountSnapshot) -> Bool { snap.health == .needsAuth || snap.detail == stalled }
 
     static func fetch() async -> AccountSnapshot {
-        var snap = AccountSnapshot(id: .antigravity, displayName: "Antigravity", planLabel: "Google account",
+        var snap = AccountSnapshot(id: .antigravity, displayName: "Antigravity", planLabel: "Google",
                                    health: .missingClient, windows: [], fetchedAt: .now, source: .cliStatus)
         guard let agy = locateBinary("agy") else { return snap }
         snap.health = .providerError
