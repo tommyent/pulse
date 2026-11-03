@@ -78,19 +78,6 @@ h1 em { font-style: normal; color: var(--bar); }
 .textlink { font-weight: 600; }
 .badge { margin-top: 1.4rem; }
 .badge img { display: block; }
-/* the MacPip launch card, drawn like the app's usage card */
-.lc { margin-top: 1.8rem; width: min(100%, 21rem); padding: 14px 16px 15px; border-radius: 16px; background: var(--p-surface);
-  box-shadow: inset 0 0 0 1px var(--p-track); font-size: 12px; line-height: 16px; }
-.lc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
-.lc-head svg { width: 16px; height: 16px; color: var(--bar); }
-.lc-head b { font-size: 15px; }
-.lc-chip { margin-left: auto; }
-.lc.on .lc-chip { color: var(--p-green); }
-.lc-label { font-size: 13px; }
-.lc-bar { height: 8px; margin: 6px 0; border-radius: 4px; background: var(--p-track); }
-.lc-bar i { display: block; width: 0; min-width: 8px; height: 100%; border-radius: 4px; background: var(--bar); }
-.lc-foot { display: flex; justify-content: space-between; gap: 1rem; font-variant-numeric: tabular-nums; }
-.lc + .badge { margin-top: .9rem; }
 .specs { margin-top: 1rem; font-size: .95rem; color: var(--faint); }
 .live-note { margin-top: 2.6rem; font-size: .9rem; color: var(--faint); max-width: 44ch; }
 
@@ -211,10 +198,6 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
   .menubar nav a:not(.brand) { display: none; }
   .desktop, section.band, .break, .facts, .closing, footer { padding-left: 1.25rem; padding-right: 1.25rem; }
   .desktop { min-height: auto; padding-top: 12vh; padding-bottom: 12vh; }
-  /* the badge goes above the launch card, clear of the break countdown that docks above the rail */
-  .desktop .lc { order: 1; margin-top: .9rem; }
-  .desktop .lc + .badge { margin-top: 1.4rem; }
-  .desktop .specs, .desktop .live-note { order: 2; }
   section.band { padding-top: 12vh; }
   .feature { grid-template-columns: 1fr; gap: 2.4rem; }
   .feature.flip > :first-child { order: 0; }
@@ -253,12 +236,6 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
   <div class="actions">
     <a class="download" href="https://github.com/tommyent/pulse/releases/download/v0.3.1/Pulse-0.3.1.dmg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg>Download for Mac <small>v0.3.1</small></a>
     <a class="textlink" href="https://github.com/tommyent/pulse">Source on GitHub</a>
-  </div>
-  <div class="lc p">
-    <div class="lc-head"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 14.5V2M3.5 2.8h8.5l-2.2 3.1 2.2 3.1H3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><b>MacPip launch</b><span class="lc-chip">Soon</span></div>
-    <div class="lc-label">Countdown to launch day</div>
-    <div class="lc-bar"><i></i></div>
-    <div class="lc-foot"><span class="lc-l">Launches Sat Nov 7</span><span class="lc-r">on MacPip</span></div>
   </div>
   <p class="badge"><a href="https://macpip.com/apps/pulse?ref=badge"><img src="https://macpip.com/badge/pulse.svg?theme=dark" width="222" height="58" alt="Listed on MacPip"></a></p>
   <p class="specs">macOS 26 or later · Apple silicon · signed and notarized · free and open source</p>
@@ -533,24 +510,6 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
     if (!reduce) demo.push(setTimeout(() => setTucked(true), 1400), setTimeout(() => setTucked(false), 3800));
   }, { threshold: .35 });
   seen.observe(document.getElementById("rings"));
-
-  // the MacPip launch card: MacPip's launch day is a UTC day; the bar fills over the week before it, then it asks for votes
-  const lc = document.querySelector(".lc");
-  if (lc) {
-    const start = Date.UTC(2026, 10, 7), end = start + 864e5, week = 7 * 864e5;
-    const span = ms => { const m = Math.floor(ms / 6e4), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60); return d ? `${d}d ${h}h` : h ? `${h}h ${m % 60}m` : `${m % 60}m`; };
-    const set = (sel, text) => { lc.querySelector(sel).textContent = text; };
-    const tick = () => {
-      const now = Date.now(), live = now >= start && now < end, after = now >= end;
-      lc.classList.toggle("on", now >= start);
-      set(".lc-chip", after ? "Launched" : live ? "Live" : "Soon");
-      set(".lc-label", now >= start ? "Launch day" : "Countdown to launch day");
-      lc.querySelector(".lc-bar i").style.width = `${Math.min(100, Math.max(0, 100 - (start - now) / week * 100))}%`;
-      set(".lc-l", after ? "Launched Sat Nov 7" : live ? "Live now · vote for Pulse" : "Launches Sat Nov 7");
-      set(".lc-r", after ? "Vote for Pulse on MacPip" : live ? `Votes lock in ${span(end - now)}` : `in ${span(start - now)}`);
-    };
-    tick(); setInterval(tick, 6e4);
-  }
 })();
 </script>
 </body>
