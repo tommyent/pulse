@@ -46,6 +46,55 @@ enum LimitAlertChecks {
 
         assert(UsageWindow(id: "w", label: "", percentUsed: 98, resetsAt: nil).isNearLimit)
         assert(!UsageWindow(id: "w", label: "", percentUsed: 97.9, resetsAt: nil).isNearLimit)
+        alerted = [:]
+        var claude = snap(100)
+        claude.id = .claude
+        assert(fires(claude) == 1)
+        claude.windows[0].resetsAt = reset.addingTimeInterval(0.47)
+        assert(fires(claude) == 0, "Claude subsecond reset noise stays suppressed")
+        claude.windows[0].percentUsed = 0
+        assert(fires(claude) == 0)
+        claude.windows[0].percentUsed = 100
+        assert(fires(claude) == 1, "Claude's existing low-usage rearm is unchanged")
+        grokChecks(reset: reset)
         print("limit alert checks passed")
+    }
+
+    static func grokChecks(reset: Date) {
+        var alerted: [String: Date] = [:]
+        var now = reset.addingTimeInterval(-3600)
+        func fires(_ percent: Double, end: Date? = nil, source: Source = .cliStatus,
+                   health: Health = .ok, unknownReset: Bool = false) -> Int {
+            let snap = AccountSnapshot(id: .grok, displayName: "Grok", planLabel: "", health: health,
+                windows: [UsageWindow(id: "period_all", label: "Credits", percentUsed: percent,
+                                      resetsAt: unknownReset ? nil : end ?? reset)],
+                fetchedAt: now, source: source)
+            return snap.newlyNearLimit(alerted: &alerted, now: now).count
+        }
+        assert(fires(100) == 1)
+        assert(fires(0) == 0 && fires(100) == 0, "a dip must not undo dismissal")
+        now = now.addingTimeInterval(1800)
+        assert(fires(0) == 0 && fires(100) == 0, "even a sustained dip keeps dismissal")
+        assert(fires(100, source: .officialUsagePage) == 0, "source switches keep dismissal")
+        assert(fires(100, end: reset.addingTimeInterval(1800)) == 0, "future reset drift is not a reset")
+        assert(fires(100, end: reset.addingTimeInterval(-1800)) == 0, "backward reset drift is not a reset")
+        assert(fires(100, unknownReset: true) == 0, "missing reset cannot rearm")
+        alerted = try! JSONDecoder().decode([String: Date].self, from: JSONEncoder().encode(alerted))
+        assert(fires(100) == 0, "dismissal survives persisted-state round trip")
+        now = reset.addingTimeInterval(1)
+        assert(fires(100) == 0, "expired old payload cannot rearm")
+        assert(fires(100, end: reset.addingTimeInterval(0.47)) == 0, "subsecond noise cannot rearm")
+        let next = reset.addingTimeInterval(7 * 86400)
+        assert(fires(100, end: next, health: .stale) == 0)
+        assert(fires(98, end: next) == 1, "real reset rearms 98")
+        assert(fires(99, end: next) == 1 && fires(99, end: next) == 0)
+        assert(fires(100, end: next) == 1 && fires(100, end: next) == 0)
+        alerted = [:]
+        assert(fires(100, unknownReset: true) == 1)
+        assert(fires(0, unknownReset: true) == 0 && fires(100, unknownReset: true) == 0)
+        assert(fires(100, end: next) == 0, "learning an unknown reset does not repeat an alert")
+        now = next.addingTimeInterval(1)
+        assert(fires(100, end: next.addingTimeInterval(7 * 86400)) == 1)
+        print("Grok dismissal and reset checks passed")
     }
 }

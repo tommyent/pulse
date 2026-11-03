@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import WebKit
+import OSLog
 
 // MARK: - Shared helpers
 
@@ -422,6 +423,20 @@ actor GrokCLIAuth {
 }
 
 enum GrokAdapter {
+    private static let log = Logger(subsystem: "io.github.tommyent.pulse", category: "grok-usage")
+
+    // Only meter metadata: never log credentials, account identifiers, response bodies or error text.
+    private static func logReading(_ snap: AccountSnapshot) {
+        if snap.windows.isEmpty {
+            log.notice("source=\(snap.source.rawValue, privacy: .public) window=none percent=unknown resetsAt=unknown health=\(snap.health.rawValue, privacy: .public)")
+        }
+        for window in snap.windows {
+            let percent = window.percentUsed.map { String($0) } ?? "unknown"
+            let reset = window.resetsAt?.ISO8601Format() ?? "unknown"
+            log.notice("source=\(snap.source.rawValue, privacy: .public) window=\(window.id, privacy: .public) percent=\(percent, privacy: .public) resetsAt=\(reset, privacy: .public) health=\(snap.health.rawValue, privacy: .public)")
+        }
+    }
+
     // grok.com per-model rolling buckets (no reset timestamp; no weekly pool exposed) — cookie fallback only.
     static let models: [(model: String, label: String)] = [
         ("grok-4", "Grok 4 (2h window)"),
@@ -438,8 +453,11 @@ enum GrokAdapter {
         do {
             snap.windows = try await fetchCLI()
             snap.health = .ok
+            logReading(snap)
             return snap
         } catch let e as GrokError { errors.append(e) } catch { errors.append(.network("\(error)")) }
+        snap.health = errors.last?.health ?? .providerError
+        logReading(snap)
 
         // Fallback: grok.com web session captured by GrokLogin.
         if let cookies = await cookieHeader() {
@@ -447,8 +465,11 @@ enum GrokAdapter {
             do {
                 snap.windows = try await webWindows(cookieHeader: cookies)
                 snap.health = .ok
+                logReading(snap)
                 return snap
             } catch let e as GrokError { errors.append(e) } catch { errors.append(.network("\(error)")) }
+            snap.health = errors.last?.health ?? .providerError
+            logReading(snap)
         }
 
         // a transport failure on any path means "unknown", not "signed out": keep stale windows

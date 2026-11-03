@@ -64,18 +64,29 @@ struct AccountSnapshot: Codable, Identifiable {
 
     /// Windows that just reached 98, 99 or 100%, each step announced once per reset period. `alerted` maps
     /// "account.window" (98, as before there were steps) and "account.window@99" / "@100" to the reset already
-    /// announced; dropping under 95% rearms them all. A jump past several steps is one announcement.
-    func newlyNearLimit(alerted: inout [String: Date]) -> [UsageWindow] {
+    /// announced; dropping under 95% rearms them except for Grok, whose dips do not prove a reset.
+    /// A jump past several steps is one announcement.
+    func newlyNearLimit(alerted: inout [String: Date], now: Date = .now) -> [UsageWindow] {
         guard health == .ok else { return [] }   // cached and stale numbers never alert
         var crossed: [UsageWindow] = []
         for w in windows {
             guard let p = w.percentUsed else { continue }
             let keys = [98: alertKey(w), 99: alertKey(w) + "@99", 100: alertKey(w) + "@100"]
-            if p < 95 { for k in keys.values { alerted[k] = nil }; continue }
+            if p < 95, id != .grok { for k in keys.values { alerted[k] = nil }; continue }
             let reset = w.resetsAt ?? .distantPast
             // within 15 min is the same period: Claude's resets carry sub-second noise, Codex may rebuild it from seconds left
             let due = [98, 99, 100].compactMap { step -> String? in
                 guard p >= Double(step), let key = keys[step] else { return nil }   // whole percents: 98.9 is still 98
+                if id == .grok, let previous = alerted[key] {
+                    // A changed future deadline or a missing deadline is not evidence of a reset.
+                    if previous == .distantPast {
+                        if reset > now { alerted[key] = reset }
+                        return nil
+                    }
+                    guard previous <= now, reset > now,
+                          reset.timeIntervalSince(previous) >= 15 * 60 else { return nil }
+                    return key
+                }
                 return alerted[key].map({ abs($0.timeIntervalSince(reset)) < 15 * 60 }) == true ? nil : key
             }
             guard !due.isEmpty else { continue }
