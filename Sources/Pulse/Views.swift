@@ -803,9 +803,9 @@ struct OverlayView: View {
             }
         }
         .focusEffectDisabled()   // the panel can be key now (pet composer); no focus ring on the rail
-        .padding(state.dock.isVertical ? .vertical : .horizontal, expanded ? 16 : 10)
+        .padding(state.dock.isVertical ? .vertical : .horizontal, expanded ? 22 : 14)
         .padding(state.dock.isVertical ? .horizontal : .vertical, expanded ? 12 : 8)
-        .pulseSurface(in: RoundedRectangle(cornerRadius: expanded ? 26 : 18))
+        .pulseSurface(in: Capsule())
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { railFrame = $0; onRailFrame?($0) }
         .overlay {
             // Tucked, the sliver and 12 pt beside it are one handle: a click brings the rail back; the drag below pulls it out.
