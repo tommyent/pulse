@@ -42,6 +42,19 @@ let protoZero: [String: Any] = ["used": [:], "monthlyLimit": ["val": "200"], "bi
 let pz = GrokAdapter.billingWindows(from: protoZero)
 check(pz.count == 1 && pz[0].percentUsed == 0, "legacy: empty wrapper is protobuf zero, string int64 limit parses")
 
+func products(_ names: [String]) -> [UsageWindow] {
+    GrokAdapter.billingWindows(from: ["currentPeriod": ["type": "USAGE_PERIOD_TYPE_WEEKLY", "end": "2026-11-10T16:35:28+00:00"],
+                                      "creditUsagePercent": 55.0,
+                                      "productUsage": names.map { ["product": $0, "usagePercent": 10.0] }])
+}
+let usual = products(["GrokBuild", "GrokBot", "GrokChat"])
+check(usual.disc?.label == "GrokBot" && usual.innerArc?.label == "Grok Build", "GrokBot fills the disc, Grok Build stays the inner arc")
+check(products(["GrokBot", "GrokBuild"]).innerArc?.label == "Grok Build", "GrokBot listed first doesn't also take the inner arc")
+check(products(["GrokBot"]).disc != nil && products(["GrokBot"]).innerArc == nil, "only GrokBot so far: the disc, no inner arc")
+check(products(["GrokBuild"]).disc == nil, "no GrokBot usage: no disc")
+let capped = ["session_5h", "weekly_all", "weekly_model_Opus"].map { UsageWindow(id: $0, label: $0, percentUsed: 10, resetsAt: nil) }
+check(capped.innerArc?.id == "weekly_all" && capped.disc?.id == "weekly_model_Opus", "other accounts keep their arc and per-model disc")
+
 if CommandLine.arguments.contains("--offline") { exit(0) }
 
 // live

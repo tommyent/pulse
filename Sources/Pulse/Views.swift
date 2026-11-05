@@ -116,7 +116,7 @@ struct RingView: View {
     let account: AccountID
     let percent: Double?
     var secondary: Double? = nil
-    var tertiary: Double? = nil    // third window, a per-model cap (Claude's, Antigravity's): the disc behind the icon
+    var tertiary: Double? = nil    // a per-model cap (Claude's, Antigravity's) or GrokBot's usage: the disc behind the icon
     var size: CGFloat = 52
     var showPercent = true
     var nearLimit = false   // any of the account's windows at 98%+, drawn or not
@@ -767,9 +767,9 @@ struct OverlayView: View {
                 } label: {
                     RingView(account: id,
                              percent: windows.first?.percentUsed,
-                             secondary: windows.dropFirst().first?.percentUsed,
-                             // only a per-model cap (Claude's, Antigravity's): Grok's products and Antigravity's other pool stay on the card
-                             tertiary: windows.first { $0.id.hasPrefix("weekly_model") }?.percentUsed,
+                             secondary: windows.innerArc?.percentUsed,
+                             // Grok's other products and Antigravity's other pool stay on the card
+                             tertiary: windows.disc?.percentUsed,
                              size: expanded ? 52 : 28,
                              showPercent: expanded,
                              nearLimit: windows.contains(where: \.isNearLimit))
@@ -803,9 +803,9 @@ struct OverlayView: View {
             }
         }
         .focusEffectDisabled()   // the panel can be key now (pet composer); no focus ring on the rail
-        .padding(state.dock.isVertical ? .vertical : .horizontal, expanded ? 16 : 10)
+        .padding(state.dock.isVertical ? .vertical : .horizontal, expanded ? 22 : 14)
         .padding(state.dock.isVertical ? .horizontal : .vertical, expanded ? 12 : 8)
-        .pulseSurface(in: RoundedRectangle(cornerRadius: expanded ? 26 : 18))
+        .pulseSurface(in: Capsule())
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { railFrame = $0; onRailFrame?($0) }
         .overlay {
             // Tucked, the sliver and 12 pt beside it are one handle: a click brings the rail back; the drag below pulls it out.
