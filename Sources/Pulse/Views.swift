@@ -116,7 +116,7 @@ struct RingView: View {
     let account: AccountID
     let percent: Double?
     var secondary: Double? = nil
-    var tertiary: Double? = nil    // third window, a per-model cap (Claude's, Antigravity's): the disc behind the icon
+    var tertiary: Double? = nil    // a per-model cap (Claude's, Antigravity's) or GrokBot's usage: the disc behind the icon
     var size: CGFloat = 52
     var showPercent = true
     var nearLimit = false   // any of the account's windows at 98%+, drawn or not
@@ -767,9 +767,9 @@ struct OverlayView: View {
                 } label: {
                     RingView(account: id,
                              percent: windows.first?.percentUsed,
-                             secondary: windows.dropFirst().first?.percentUsed,
-                             // only a per-model cap (Claude's, Antigravity's): Grok's products and Antigravity's other pool stay on the card
-                             tertiary: windows.first { $0.id.hasPrefix("weekly_model") }?.percentUsed,
+                             secondary: windows.innerArc?.percentUsed,
+                             // Grok's other products and Antigravity's other pool stay on the card
+                             tertiary: windows.disc?.percentUsed,
                              size: expanded ? 52 : 28,
                              showPercent: expanded,
                              nearLimit: windows.contains(where: \.isNearLimit))

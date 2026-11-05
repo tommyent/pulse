@@ -44,6 +44,13 @@ struct UsageWindow: Codable, Identifiable {
     var isNearLimit: Bool { (percentUsed ?? 0) >= Self.nearLimitPercent }
 }
 
+extension [UsageWindow] {
+    /// The disc behind the logo: a per-model cap (Claude's, Antigravity's) or GrokBot's usage.
+    var disc: UsageWindow? { first { $0.id.hasPrefix("weekly_model") || $0.id == "period_GrokBot" } }
+    /// The inner arc: the next window. GrokBot is skipped so it can't show twice when xAI lists it first.
+    var innerArc: UsageWindow? { dropFirst().first { $0.id != "period_GrokBot" } }
+}
+
 struct AccountSnapshot: Codable, Identifiable {
     var id: AccountID
     var displayName: String
