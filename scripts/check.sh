@@ -8,6 +8,8 @@ export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"   # shared across runs
 ./Checks/SDKStampChecks.sh
 swiftc Sources/Pulse/DockGeometry.swift Sources/Pulse/Models.swift Checks/OverlayChecks.swift -o "$OUT/overlay"
 "$OUT/overlay"
+swiftc Sources/Pulse/Models.swift Checks/RefreshChecks.swift -o "$OUT/refresh"
+"$OUT/refresh"
 swiftc Sources/Pulse/Models.swift Checks/LimitAlertChecks.swift -o "$OUT/limit"
 "$OUT/limit"
 swiftc Sources/Pulse/Battery.swift Checks/BatteryChecks.swift -o "$OUT/battery"

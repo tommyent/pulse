@@ -3,6 +3,34 @@ import Foundation
 
 @main
 enum LimitAlertChecks {
+    /// What the rail draws from a failed fetch's numbers.
+    static func staleChecks(reset: Date) {
+        func shown(_ health: Health, _ resetsAt: Date?, at now: Date) -> UsageWindow {
+            AccountSnapshot(id: .codex, displayName: "Codex", planLabel: "", health: health,
+                            windows: [UsageWindow(id: "weekly_all", label: "Weekly", percentUsed: 99, resetsAt: resetsAt)],
+                            fetchedAt: .now, source: .mock).shownWindows(now: now)[0]
+        }
+        let before = reset.addingTimeInterval(-60), after = reset.addingTimeInterval(60)
+        assert(shown(.stale, reset, at: before).percentUsed == 99 && shown(.stale, reset, at: before).isNearLimit,
+               "until its reset a stale number stands, badge included")
+        assert(shown(.stale, reset, at: after).percentUsed == nil && !shown(.stale, reset, at: after).isNearLimit,
+               "past its reset a stale number is unknown, and no longer near a limit")
+        assert(shown(.stale, reset, at: reset).percentUsed == nil, "the reset moment itself counts as past")
+        assert(shown(.stale, nil, at: after).percentUsed == 99, "with no reset time there's nothing to prove it wrong")
+        assert(shown(.ok, reset, at: after).percentUsed == 99, "a live number is the provider's own, even just past its reset")
+
+        // a fetch that ran out of time goes down the failed-fetch path: stale numbers stay, with its reason
+        let none = AccountSnapshot.noAnswer(.claude)
+        assert(none.health == .providerError && none.windows.isEmpty && none.healthMessage == "Claude didn't answer")
+        let old = AccountSnapshot(id: .claude, displayName: "Claude", planLabel: "Ultra", health: .ok,
+                                  windows: [UsageWindow(id: "weekly_all", label: "All", percentUsed: 55, resetsAt: reset)],
+                                  fetchedAt: reset, source: .officialProtocol)
+        let kept = none.staleKeeping(old)
+        assert(kept.health == .stale && kept.windows.first?.percentUsed == 55 && kept.planLabel == "Ultra" && kept.fetchedAt == reset)
+        assert(kept.healthMessage?.hasSuffix("Claude didn't answer") == true)
+        print("Stale window checks passed: dimmed until its reset, unknown after it")
+    }
+
     static func main() {
         let reset = Date(timeIntervalSinceReferenceDate: 814_567_884)
         func snap(_ pct: Double?, resets: Date? = reset, health: Health = .ok, id: String = "weekly_all") -> AccountSnapshot {
@@ -56,6 +84,7 @@ enum LimitAlertChecks {
         assert(fires(claude) == 0)
         claude.windows[0].percentUsed = 100
         assert(fires(claude) == 1, "Claude's existing low-usage rearm is unchanged")
+        staleChecks(reset: reset)
         grokChecks(reset: reset)
         print("limit alert checks passed")
     }

@@ -1,4 +1,8 @@
+import CryptoKit
 import SwiftUI
+import os
+
+private let log = Logger(subsystem: "io.github.tommyent.pulse", category: "state")
 
 @MainActor
 final class AppState: ObservableObject {
@@ -32,24 +36,53 @@ final class AppState: ObservableObject {
         init() {}
 
         private enum LegacyKeys: String, CodingKey { case glassTint }
+        /// One value this version can't read, such as a newer Pulse's account or edge, costs only that value.
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            enabled = try c.decode(Set<AccountID>.self, forKey: .enabled)
-            order = try c.decode([AccountID].self, forKey: .order)
-            alwaysOnTop = try c.decode(Bool.self, forKey: .alwaysOnTop)
-            showOverlay = try c.decode(Bool.self, forKey: .showOverlay)
+            let fresh = Persisted()
+            func accounts(_ key: CodingKeys) -> [AccountID]? {
+                guard let names = c.lenient([String].self, forKey: key, in: decoder) else { return nil }
+                let known = names.compactMap(AccountID.init(rawValue:))
+                if known.count != names.count { (decoder.userInfo[.decodeLosses] as? DecodeLosses)?.any = true }
+                return known
+            }
+            enabled = accounts(.enabled).map { Set($0) } ?? fresh.enabled
+            order = accounts(.order) ?? fresh.order
+            alwaysOnTop = c.lenient(Bool.self, forKey: .alwaysOnTop, in: decoder) ?? fresh.alwaysOnTop
+            showOverlay = c.lenient(Bool.self, forKey: .showOverlay, in: decoder) ?? fresh.showOverlay
             let legacy = try decoder.container(keyedBy: LegacyKeys.self)
-            appearance = (try? c.decode(PulseAppearance.self, forKey: .appearance))
+            appearance = c.lenient(PulseAppearance.self, forKey: .appearance, in: decoder)
                 ?? ((try? legacy.decode(Bool.self, forKey: .glassTint)) == false ? .glass : .solid)
-            dock = try c.decodeIfPresent(DockEdge.self, forKey: .dock)
-            tucked = try c.decodeIfPresent(Bool.self, forKey: .tucked)
-            tuckPeek = try c.decodeIfPresent(Bool.self, forKey: .tuckPeek)
-            voiceHotKey = try c.decodeIfPresent(HotKeyCombo.self, forKey: .voiceHotKey)
-            showPet = try c.decodeIfPresent(Bool.self, forKey: .showPet)
-            showRemaining = try c.decodeIfPresent(Bool.self, forKey: .showRemaining)
-            limitAlerts = try c.decodeIfPresent([String: Date].self, forKey: .limitAlerts)
-            batterySettings = try c.decodeIfPresent(BatterySettings.self, forKey: .batterySettings)
-            breakSettings = try c.decodeIfPresent(BreakSettings.self, forKey: .breakSettings)
+            dock = c.lenient(DockEdge.self, forKey: .dock, in: decoder)
+            tucked = c.lenient(Bool.self, forKey: .tucked, in: decoder)
+            tuckPeek = c.lenient(Bool.self, forKey: .tuckPeek, in: decoder)
+            voiceHotKey = c.lenient(HotKeyCombo.self, forKey: .voiceHotKey, in: decoder)
+            showPet = c.lenient(Bool.self, forKey: .showPet, in: decoder)
+            showRemaining = c.lenient(Bool.self, forKey: .showRemaining, in: decoder)
+            limitAlerts = c.lenient([String: Date].self, forKey: .limitAlerts, in: decoder)
+            batterySettings = c.lenient(BatterySettings.self, forKey: .batterySettings, in: decoder)
+            breakSettings = c.lenient(BreakSettings.self, forKey: .breakSettings, in: decoder)
+        }
+
+        /// The settings at `url`, and whether a save may replace that file. Anything Pulse couldn't read first gets a copy
+        /// beside it, named for its contents so each version is kept once, because the next save would otherwise erase it.
+        /// With no copy, or a file that's there but can't be opened right now, saves wait: nothing is lost that way.
+        static func load(from url: URL) -> (settings: Persisted, canReplace: Bool) {
+            let fm = FileManager.default
+            guard fm.fileExists(atPath: url.path) else { return (Persisted(), true) }
+            guard let data = try? Data(contentsOf: url) else {
+                log.error("settings can't be opened: using defaults for now, and not saving over them")
+                return (Persisted(), false)
+            }
+            let losses = DecodeLosses(), decoder = JSONDecoder()
+            decoder.userInfo[.decodeLosses] = losses
+            let saved = try? decoder.decode(Persisted.self, from: data)
+            guard saved == nil || losses.any else { return (saved ?? Persisted(), true) }
+            let name = SHA256.hash(data: data).prefix(4).map { String(format: "%02x", $0) }.joined()
+            let aside = url.deletingLastPathComponent().appending(path: "state-unreadable-\(name).json")
+            let kept = fm.fileExists(atPath: aside.path) || (try? data.write(to: aside, options: .atomic)) != nil
+            log.error("settings had values Pulse can't read: \(kept ? "kept a copy as \(aside.lastPathComponent)" : "no copy could be kept, not saving over them", privacy: .public)")
+            return (saved ?? Persisted(), kept)
         }
     }
 
@@ -96,6 +129,8 @@ final class AppState: ObservableObject {
     var gliding = false   // the rail is moving to its edge: hover changes would move its target mid-flight
     private var refreshRequested = false
     private var agy = AgyPause()   // agy signed out or stalled: only a manual refresh runs it again
+    private let fetches = ProviderFetches { await fetchSnapshot($0) }
+    private var canSave = true   // false: saving now could erase settings Pulse couldn't read or keep a copy of
 
     private static let dir = FileManager.default
         .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -104,7 +139,9 @@ final class AppState: ObservableObject {
     private static let snapshotsURL = dir.appending(path: "snapshots.json")
 
     init() {
-        var saved = (try? JSONDecoder().decode(Persisted.self, from: Data(contentsOf: Self.stateURL))) ?? Persisted()
+        let loaded = Persisted.load(from: Self.stateURL)
+        var saved = loaded.settings
+        canSave = loaded.canReplace
         // accounts added since state.json was written start enabled, as on a fresh install
         for id in AccountID.allCases where !saved.order.contains(id) {
             saved.order.append(id)
@@ -147,11 +184,11 @@ final class AppState: ObservableObject {
         repeat {
             refreshRequested = false
             agy.passStarted()
-            await withTaskGroup(of: AccountSnapshot.self) { group in
+            await withTaskGroup(of: AccountSnapshot?.self) { group in
                 for id in enabledAccounts where !(id == .antigravity && agy.paused) {
-                    group.addTask { await fetchSnapshot(id) }
+                    group.addTask { [fetches] in await fetches.answer(id) }
                 }
-                for await snap in group {
+                for await case let snap? in group {
                     if snap.id == .antigravity { agy.update(with: snap) }
                     // keep last good windows for stale display instead of blanking the card
                     if snap.windows.isEmpty, let old = snapshots[snap.id], !old.windows.isEmpty,
@@ -190,6 +227,7 @@ final class AppState: ObservableObject {
     }
 
     private func save() {
+        guard canSave else { return }
         try? FileManager.default.createDirectory(at: Self.dir, withIntermediateDirectories: true)
         try? JSONEncoder().encode(persisted).write(to: Self.stateURL, options: .atomic)
     }
