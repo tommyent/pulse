@@ -33,6 +33,7 @@ struct RingTrack: View {
 struct PulseSurface<S: Shape>: View {
     @Environment(\.pulseAppearance) private var appearance
     let shape: S
+    var polished = false   // the floating pieces; a whole screen or window stays flat
 
     var body: some View {
         switch appearance {
@@ -42,9 +43,31 @@ struct PulseSurface<S: Shape>: View {
                 // A fixed legibility veil keeps untinted glass dark over bright windows too.
                 .overlay { shape.fill(.black.opacity(0.65)) }
                 .environment(\.appearsActive, true)
+        case .solid where polished:
+            // A clear coat on deeper black: one soft light from the top left.
+            ZStack {
+                shape.fill(Color(white: 0.035))
+                shape.fill(EllipticalGradient(stops: [.init(color: .white.opacity(0.19), location: 0),
+                                                      .init(color: .white.opacity(0.06), location: 0.45),
+                                                      .init(color: .clear, location: 1)],
+                                              center: UnitPoint(x: 0.16, y: -0.08), startRadiusFraction: 0, endRadiusFraction: 0.85))
+            }
         case .solid:
             shape.fill(PulsePalette.surface)
         }
+    }
+}
+
+/// A 1 pt rim. On Solid it follows the surface's light, brightest at the top left.
+private struct PulseRim<S: Shape>: View {
+    @Environment(\.pulseAppearance) private var appearance
+    let shape: S
+
+    var body: some View {
+        let lit = LinearGradient(colors: [.white.opacity(0.42), PulsePalette.track, Color(white: 0.11)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        // Clip the centered stroke to keep a 1 pt rim inside shapes with tails too.
+        shape.stroke(appearance == .solid ? AnyShapeStyle(lit) : AnyShapeStyle(PulsePalette.border), style: StrokeStyle(lineWidth: 2, lineJoin: .round))
+            .clipShape(shape)
     }
 }
 
@@ -76,12 +99,10 @@ private struct PulseWindowBacking: NSViewRepresentable {
 
 extension View {
     func pulseSurface<S: Shape>(in shape: S, bordered: Bool = true) -> some View {
-        background { PulseSurface(shape: shape) }
+        background { PulseSurface(shape: shape, polished: true) }
             .overlay {
                 if bordered {
-                    // Clip the centered stroke to keep a 1 pt rim inside shapes with tails too.
-                    shape.stroke(PulsePalette.border, style: StrokeStyle(lineWidth: 2, lineJoin: .round))
-                        .clipShape(shape)
+                    PulseRim(shape: shape)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
