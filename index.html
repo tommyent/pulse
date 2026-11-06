@@ -31,11 +31,11 @@
   --glow: #6e52cf; --bar: #a993ff; --on-bar: #150d33;
   /* from the app's source (Models.swift, Appearance.swift, Battery.swift, Breaks.swift) */
   --p-surface: #121214; --p-track: #252527; --p-label: rgba(255, 255, 255, 0.85);   /* SwiftUI .primary in dark mode is labelColor, white at 85% */
-  --p-claude: #ff5700; --p-codex: #216dff; --p-grok: #ffb400; --p-agy: #00c53f;
+  --p-claude: #ff5700; --p-codex: #216dff; --p-grok: #ffb400; --p-agy: #a358ff; --p-agy2: #22baff;
   --p-green: #30d158; --p-yellow: #ffd60a; --p-break-bar: #a993ff;
 }
 @supports (color: color(display-p3 1 1 1)) {
-  :root { --p-claude: color(display-p3 1 0.40 0.16); --p-codex: color(display-p3 0.22 0.42 1); --p-grok: color(display-p3 1 0.72 0.10); --p-agy: color(display-p3 0 0.76 0.32); }
+  :root { --p-claude: color(display-p3 1 0.40 0.16); --p-codex: color(display-p3 0.22 0.42 1); --p-grok: color(display-p3 1 0.72 0.10); --p-agy: color(display-p3 0.60 0.36 1); --p-agy2: color(display-p3 0.35 0.72 1); }
 }
 [data-theme="halloween"] { --night: #0d0a14; --night-2: #1d1330; --glow: #e8822a; --bar: #ffb050; --on-bar: #2a1203; }
 
@@ -84,7 +84,7 @@ h1 em { font-style: normal; color: var(--bar); }
 /* ---------- Pulse's rail, drawn from the app's own values ---------- */
 .p { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; color: var(--p-label); }
 /* At rest the rail is small: 28 pt rings without numbers. While the pointer is over it (.open) they grow to 52 pt with
-   their percentages. Pushed into its edge (.tucked) only a 7 pt sliver stays on screen, with a tick per account. */
+   their percentages. Pushed into its edge (.tucked) only a 7 pt sliver stays on screen, with a tick per ring. */
 .rail { position: fixed; z-index: 12; right: 12px; top: 50%; transform: translateY(-50%); touch-action: none; cursor: grab;
   display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 10px 8px; border-radius: 18px;
   background: var(--p-surface); box-shadow: inset 0 0 0 1px var(--p-track), 0 10px 30px rgba(0,0,0,.45);
@@ -92,6 +92,7 @@ h1 em { font-style: normal; color: var(--bar); }
 .rail.open { gap: 18px; padding: 16px 12px; border-radius: 26px; }
 .rail .ring, .rail .pet { zoom: .5385; transition: zoom .28s; }   /* 28 / 52 */
 .rail.open .ring, .rail.open .pet { zoom: 1; }
+@media (max-height: 800px) and (min-width: 761px) { .rail.open { gap: 6px; padding: 10px 12px; } .rail.open .ring, .rail.open .pet { zoom: .86; } }
 .rail:not(.open) .pct, .rail:not(.open) .wave { display: none; }
 .rail:not(.open) .pet:not(.waving) .sprite { animation: none; }   /* as in the app, the small pet holds still */
 .rail.tucked { translate: 49px 0; }   /* 12 pt margin + 44 pt rail - the 7 pt sliver */
@@ -113,8 +114,10 @@ h1 em { font-style: normal; color: var(--bar); }
 .ring .track { fill: none; stroke: var(--p-track); stroke-width: 6.24; }
 .ring .arc { fill: none; stroke-width: 6.24; stroke-linecap: round; transition: stroke-dasharray 1.4s cubic-bezier(.16,1,.3,1); }
 .ring .arc.inner { stroke-width: 3.64; }
-.ring .cap { position: absolute; left: 10.14px; top: 10.14px; width: 31.72px; height: 31.72px; border-radius: 50%; overflow: hidden; }
-.ring .cap i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--p-track); transition: height 1.4s cubic-bezier(.16,1,.3,1); }
+.ring .cap { position: absolute; left: 10.14px; top: 10.14px; width: 31.72px; height: 31.72px; border-radius: 50%; overflow: hidden; background: rgba(255,255,255,.14); }
+.ring .cap::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle 6.66px at 31% 25%, rgba(255,255,255,.22), transparent); box-shadow: inset 0 0 0 .95px rgba(255,255,255,.16); }
+.ring .cap i { position: absolute; left: 0; right: 0; bottom: 0; background: linear-gradient(rgba(255,255,255,.42), rgba(255,255,255,.20)); transition: height 1.4s cubic-bezier(.16,1,.3,1); }
+.ring:has(.cap) .icon { filter: drop-shadow(0 0 1.3px rgba(0,0,0,.7)); }
 .ring .icon { position: absolute; left: 15.6px; top: 15.6px; width: 20.8px; height: 20.8px; object-fit: contain; }
 .ring .bolt { position: absolute; left: 17.2px; top: 16px; width: 17.6px; height: 20px; color: var(--p-label); }
 .ring .glyph { display: none; position: absolute; left: 15.6px; top: 15.6px; width: 20.8px; height: 20.8px; color: var(--p-label); }
@@ -168,6 +171,7 @@ kbd { font: 600 .92em Geist; padding: .05em .4em; border-radius: 6px; background
 .break h2 { margin-bottom: 2.4rem; }
 .screen { position: relative; max-width: 1060px; border-radius: 22px; overflow: hidden; box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 30px 80px rgba(0,0,0,.6); }
 .screen video, .screen img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
+.screen .still { height: auto; aspect-ratio: 1200 / 716; }   /* the whole break screen, its glow included */
 .screen .film { display: none; }
 [data-film="on"] .screen .film { display: block; }
 [data-film="on"] .screen .still { display: none; }
@@ -246,18 +250,19 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
   <div class="feature">
     <div>
       <h2>Every limit, at the edge of your screen.</h2>
-      <p>Each ring's outer arc is the account's leading window, usually the 5-hour session, and the inner arc the next, usually the weekly limit. Click a ring for that account's windows and reset times. Usage refreshes every 2 minutes.</p>
+      <p>Each ring's outer arc is the account's shortest limit, usually the 5-hour session, and the inner arc the next, usually the weekly limit. Click a ring for its limits and reset times. Usage refreshes every 2 minutes.</p>
       <ul>
         <li><strong>98%, 99%, 100%.</strong> The ring gets a red badge and an alert stays in the middle of the screen until you dismiss it.</li>
-        <li><strong>Per-model caps</strong> fill the disc behind the logo as they're used.</li>
+        <li><strong>Per-model caps</strong> fill the gray disc behind the logo as they're used.</li>
+        <li><strong>A ring per pool.</strong> Antigravity's Gemini models and its Claude and GPT models have separate limits, so each gets a ring. A switch in Settings hides the second.</li>
         <li><strong>Show what's left</strong> turns the rings around, so they empty as you use them.</li>
         <li><strong>Small until you need it.</strong> The rings sit at a screen edge, small and without numbers until the pointer is over them; then they grow and show their percentages.</li>
-        <li><strong>Flick it, tuck it.</strong> Drag the rail to any edge or flick it toward one, and it glides there. Push it into its own edge and it tucks away to a thin sliver, with a tick for each account. Click the sliver to bring it back.</li>
+        <li><strong>Flick it, tuck it.</strong> Drag the rail to any edge or flick it toward one, and it glides there. Push it into its own edge and it tucks away to a thin sliver, with a tick for each ring. Click the sliver to bring it back.</li>
       </ul>
     </div>
     <div>
-      <img class="shot shot-logo" src="assets/usage-card.png" width="899" height="1215" loading="lazy" alt="Pulse: the rail of usage rings and the battery, with the Claude card open: current session, all models and a per-model window, each with its reset time">
-      <img class="shot shot-nologo" src="assets/usage-card-nologo.png" width="899" height="1215" loading="lazy" alt="The rail of usage rings with a usage card open: current session, all models and a per-model window, each with its reset time">
+      <img class="shot shot-logo" src="assets/usage-card.png" width="891" height="1421" loading="lazy" alt="Pulse with sample numbers: the rail with the Codex pet, Claude, Codex, Grok, Antigravity's violet and sky blue rings and the battery, and the Claude card open with current session, all models and Fable">
+      <img class="shot shot-nologo" src="assets/usage-card-nologo.png" width="891" height="1421" loading="lazy" alt="The rail of usage rings with sample numbers and a usage card open: current session, all models and one model's limit">
     </div>
   </div>
 </section>
@@ -286,8 +291,8 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
     <video class="film" muted loop playsinline preload="none" poster="assets/promo-halloween-poster.jpg" aria-label="Pulse's Halloween promo: the rings, a usage card, the pet and a break with the Halloween film">
       <source data-src="assets/promo-halloween.mp4" type="video/mp4">
     </video>
-    <img class="still shot-logo" src="assets/break-screen.png" width="1200" height="750" loading="lazy" alt="The break screen: Time to take a break, 0:18 left, an idea with Reroll and Surprise me, Back to Work, Pause and Snooze 5 min, with the Codex pet and agents around the edges">
-    <img class="still shot-nologo" src="assets/break-screen-nologo.png" width="1200" height="750" loading="lazy" alt="The break screen: Time to take a break, 0:18 left, an idea with Reroll and Surprise me, Back to Work, Pause and Snooze 5 min">
+    <img class="still shot-logo" src="assets/break-screen.png" width="1200" height="716" loading="lazy" alt="The break screen in violet: Time to take a break, 0:15 left, an idea with Reroll and Surprise me, Back to Work, Pause and Snooze 5 min, with the Codex pet and agents around the edges">
+    <img class="still shot-nologo" src="assets/break-screen-nologo.png" width="1200" height="716" loading="lazy" alt="The break screen in violet: Time to take a break, 0:20 left, an idea with Reroll and Surprise me, Back to Work, Pause and Snooze 5 min">
   </div>
   <div class="under">
     <span class="caption film-caption" hidden>Halloween: the promo plays here this week.</span>
@@ -330,10 +335,11 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
     <a class="pet" href="#pet" aria-label="Codex pet"><svg class="arcs" viewBox="0 0 52 52" style="position:absolute;inset:0;overflow:visible" aria-hidden="true"><circle class="pet-ring" cx="26" cy="26" r="26" fill="none" stroke="var(--p-track)" stroke-width="6.24"/></svg><span class="sprite"></span></a>
     <button class="wave" type="button" aria-label="Start live voice (a preview of the pet's states)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="wave-disc" cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path class="wave-bars" d="M7 11v2M9.5 8.5v7M12 10v4M14.5 9v6M17 11v2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
   </div>
-  <a class="item" href="#rings" data-ring="claude" data-used="42" data-week="61" data-cap="3"></a>
+  <a class="item" href="#rings" data-ring="claude" data-used="42" data-week="61" data-cap="22"></a>
   <a class="item" href="#rings" data-ring="codex" data-used="26" data-week="40"></a>
-  <a class="item" href="#rings" data-ring="grok" data-used="38" data-week="52"></a>
-  <a class="item" href="#rings" data-ring="antigravity" data-used="12" data-week="30"></a>
+  <a class="item" href="#rings" data-ring="grok" data-used="38" data-what="weekly credits"></a>
+  <a class="item" href="#rings" data-ring="antigravity" data-label="Antigravity, Gemini" data-used="12" data-week="30" data-cap="45"></a>
+  <a class="item" href="#rings" data-ring="antigravity" data-label="Antigravity, Claude and GPT" data-pool="1" data-used="20" data-week="9"></a>
   <a class="item" href="#battery" data-battery="100"></a>
 </aside>
 
@@ -390,11 +396,12 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
   const rings = [];
   document.querySelectorAll("[data-ring]").forEach(el => {
     const id = el.dataset.ring, used = el.dataset.used === "" ? null : +el.dataset.used, week = el.dataset.week === undefined || el.dataset.week === "" ? null : +el.dataset.week, cap = el.dataset.cap;
-    el.setAttribute("aria-label", used === null ? `${names[id]}: not signed in` : `${names[id]} usage, sample: ${used}% of the session` + (week === null ? "" : `, ${week}% of the week`));
+    const name = el.dataset.label || names[id], stroke = el.dataset.pool ? "var(--p-agy2)" : color[id];
+    el.setAttribute("aria-label", used === null ? `${name}: not signed in` : `${name} usage, sample: ${used}% of the ${el.dataset.what || "session"}` + (week === null ? "" : `, ${week}% of the week`));
     el.innerHTML = `<span class="ring">${cap ? `<span class="cap"><i style="height:0"></i></span>` : ""}<svg class="arcs" viewBox="0 0 52 52" aria-hidden="true">
       <circle class="track" cx="26" cy="26" r="26"/>
-      <circle class="arc" cx="26" cy="26" r="26" style="stroke:${color[id]};stroke-dasharray:0 ${C(26)}"/>
-      <circle class="arc inner" cx="26" cy="26" r="17.68" style="stroke:${color[id]};stroke-dasharray:0 ${C(17.68)}"/></svg>
+      <circle class="arc" cx="26" cy="26" r="26" style="stroke:${stroke};stroke-dasharray:0 ${C(26)}"/>
+      <circle class="arc inner" cx="26" cy="26" r="17.68" style="stroke:${stroke};stroke-dasharray:0 ${C(17.68)}"/></svg>
       <img class="icon" src="${icons[id]}" alt=""><svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">${glyphs[id]}</svg></span><span class="pct" aria-hidden="true">0%</span><i class="tick" style="--c:${color[id]}"></i>`;
     rings.push({ el, used, week, cap: cap ? +cap : null });
   });
