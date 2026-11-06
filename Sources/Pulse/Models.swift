@@ -36,7 +36,7 @@ enum AccountID: String, Codable, CaseIterable, Identifiable {
 enum Health: String, Codable { case ok, needsAuth, missingClient, stale, providerError }
 enum Source: String, Codable { case officialProtocol, officialUsagePage, cliStatus, mock }
 
-/// When a limit's used percent reached a new whole number. Nothing changes between two of these, so they hold a day's rise in about 100 entries at most.
+/// When a limit's used percent rose. A flat stretch adds nothing, so a day's history is at most one of these per poll, about 720.
 struct UsageSample: Codable {
     var at: Date
     var used: Double
@@ -167,7 +167,7 @@ struct AccountSnapshot: Codable, Identifiable {
         for (i, window) in windows.enumerated() {
             guard !window.isShare, let used = window.percentUsed, let reset = window.resetsAt else { continue }
             var samples = continuedSamples(of: window, used: used, reset: reset, from: old)
-            if samples.last.map({ Int(used) > Int($0.used) }) ?? true {
+            if samples.last.map({ used > $0.used }) ?? true {
                 samples.append(UsageSample(at: fetchedAt, used: used))
             }
             // Nothing rose after the newest sample past the horizon, so it says where use stood a day ago, however old it is.

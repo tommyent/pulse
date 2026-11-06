@@ -37,10 +37,10 @@ enum ForecastChecks {
         let idle = stride(from: 0.0, through: 114, by: 6).map { ($0, 40.0) }
         assert(hits(run(idle + [(118, 55), (120, 70)]), in: 24), "30 points in the last 24 hours leaves 24 hours")
 
-        // The endpoint is this fetch's real number, even when whole-percent compression added no sample.
-        let compressed = run([(0, 20.2), (5, 20.7)], reset: at(10_000))
-        assert(samples(compressed).count == 1 && compressed.windows[0].percentUsed == 20.7)
-        assert(hits(compressed, in: 793), "0.5 points in 5 hours, got \(String(describing: compressed.windows[0].forecast))")
+        // A rise inside one whole percent counts as use, and is recorded like any other.
+        let fractional = run([(0, 20.2), (5, 20.7)], reset: at(10_000))
+        assert(samples(fractional).map(\.used) == [20.2, 20.7] && fractional.windows[0].percentUsed == 20.7)
+        assert(hits(fractional, in: 793), "0.5 points in 5 hours, got \(String(describing: fractional.windows[0].forecast))")
         assert(hits(run([(0, 20), (10, 30.6)]), in: 69.4 * 10 / 10.6))
 
         // Guards.
@@ -59,10 +59,32 @@ enum ForecastChecks {
         assert(none(run([(0, 20), (5, 25)], reset: at(80))), "reaching it exactly at the reset is not before it")
         assert(!none(run([(0, 20), (5, 25)], reset: at(80.1))))
 
-        // Compressed: a decimal reading on every poll for six days stays a small history.
+        // Bounded: a rise on every 2-minute poll for six days keeps a day of samples and the baseline, and a flat stretch adds none.
         let polls = stride(from: 0.0, to: 144, by: 1.0 / 30).map { ($0, $0 / 144 * 99) }
-        assert(samples(run(polls)).count <= 20, "\(samples(run(polls)).count) samples")
+        let busy = samples(run(polls)).count
+        assert(busy >= 720 && busy <= 722, "\(busy) samples")
+        assert(samples(run(stride(from: 0.0, to: 144, by: 1.0 / 30).map { ($0, 50.5) })).count == 1, "a flat week is one sample")
         print("Forecast pace checks passed")
+    }
+
+    /// A rise that never crosses a whole percent must age out like any other, or a limit keeps warning through days of no use.
+    static func fractionalRiseChecks() {
+        let rise = stride(from: 0.0, through: 3, by: 0.5).map { ($0, 97.2 + $0 / 5) }   // 97.2 to 97.8 in the first three hours
+        let flat = stride(from: 3.5, through: 30, by: 0.5).map { ($0, 97.8) }
+        assert(hits(run(rise + flat.filter { $0.0 <= 20 }), in: 2.2 * 20 / 0.6), "still inside the day, the rise counts: 0.6 points in 20 hours")
+        let idle = run(rise + flat)
+        assert(none(idle), "27 hours with no use, got \(String(describing: idle.windows[0].forecast))")
+        let spoken = idle.shownWindows(now: idle.fetchedAt).spokenValue(remaining: false, now: idle.fetchedAt)
+        assert(!spoken.contains("at this rate"), spoken)
+        print("Forecast fractional rise checks passed")
+    }
+
+    /// A sample exactly at the horizon in the middle of the history becomes the baseline.
+    static func horizonChecks() {
+        let middle = run([(0, 10), (24, 20), (48, 30)], reset: at(500))
+        assert(samples(middle).map(\.used) == [20, 30], "\(samples(middle).map(\.used))")
+        assert(hits(middle, in: 168), "10 points in 24 hours leaves 168 hours")
+        print("Forecast horizon checks passed")
     }
 
     static func limitsChecks() {
@@ -264,6 +286,8 @@ enum ForecastChecks {
 
     static func main() {
         paceChecks()
+        fractionalRiseChecks()
+        horizonChecks()
         limitsChecks()
         historyChecks()
         fiveHourChecks()
