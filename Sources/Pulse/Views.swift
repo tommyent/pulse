@@ -323,6 +323,9 @@ struct WindowRow: View {
                     Text(resetLabel(window.resetsAt)).font(.caption)
                 }
                 .foregroundStyle(PulsePalette.secondary)
+                if let forecast = forecastLabel(window.forecast) {
+                    Text(forecast).font(.caption).foregroundStyle(PulsePalette.secondary)
+                }
             } else if let reset = window.resetsAt, reset <= .now {
                 Text("Reset since the last update").font(.caption).foregroundStyle(PulsePalette.secondary)
             }

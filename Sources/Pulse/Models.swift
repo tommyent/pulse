@@ -36,12 +36,20 @@ enum AccountID: String, Codable, CaseIterable, Identifiable {
 enum Health: String, Codable { case ok, needsAuth, missingClient, stale, providerError }
 enum Source: String, Codable { case officialProtocol, officialUsagePage, cliStatus, mock }
 
+/// When a limit's used percent reached a new whole number. Nothing changes between two of these, so they hold a day's rise in about 100 entries at most.
+struct UsageSample: Codable {
+    var at: Date
+    var used: Double
+}
+
 struct UsageWindow: Codable, Identifiable {
     var id: String        // session_5h, weekly_all, weekly_model_<model>, period_<product>, or a provider's own
     var label: String
     var percentUsed: Double?   // 0–100
     var resetsAt: Date?
     var pool: String? = nil   // the group of models sharing this limit, where an account has several
+    var samples: [UsageSample]? = nil   // the history behind `forecast`, from `AccountSnapshot.keepingHistory`
+    var forecast: Date? = nil   // when this pace reaches the limit, set only if that's before the reset
 
     static let nearLimitPercent: Double = 98
     var isNearLimit: Bool { (percentUsed ?? 0) >= Self.nearLimitPercent }
@@ -97,6 +105,9 @@ extension [UsageWindow] {
                 let reset = resetLabel(window.resetsAt, now: now)
                 text += ", " + reset.prefix(1).lowercased() + reset.dropFirst()
             }
+            if let forecast = forecastLabel(window.forecast, now: now) {
+                text += ", " + forecast.prefix(1).lowercased() + forecast.dropFirst()
+            }
             return text
         }.joined(separator: "; ")
     }
@@ -135,14 +146,54 @@ struct AccountSnapshot: Codable, Identifiable {
     /// The windows to draw. Until its reset, a stale number can only have grown, so it stays, dimmed by the views, its
     /// near-limit badge included. Past its reset it's known to be wrong, so it becomes unknown instead of still reading 99%.
     /// The rail rereads this on every refresh pass (`refreshing` is published), so that shows within one poll of the reset.
+    /// A forecast shows only from a fresh reading: a Mac waking from sleep still has its old `.ok` snapshot until a fetch ends.
     func shownWindows(now: Date = .now) -> [UsageWindow] {
-        guard health == .stale else { return windows }
+        let fresh = health != .stale && now.timeIntervalSince(fetchedAt) <= 10 * 60
         return windows.map { w in
-            guard let reset = w.resetsAt, reset <= now else { return w }
-            var unknown = w
-            unknown.percentUsed = nil
-            return unknown
+            var shown = w
+            if !fresh { shown.forecast = nil }
+            if health == .stale, let reset = w.resetsAt, reset <= now { shown.percentUsed = nil }
+            return shown
         }
+    }
+
+    private static let paceHorizon: TimeInterval = 24 * 3600
+
+    /// A live fetch's windows, with the history each continues and, where the pace over the last day reaches the limit before
+    /// the reset, a forecast. A share, or a window with no reset or no percent, gets neither. `percentUsed` stays the provider's.
+    func keepingHistory(of old: AccountSnapshot?) -> AccountSnapshot {
+        guard health == .ok else { return self }
+        var kept = self
+        for (i, window) in windows.enumerated() {
+            guard !window.isShare, let used = window.percentUsed, let reset = window.resetsAt else { continue }
+            var samples = continuedSamples(of: window, used: used, reset: reset, from: old)
+            if samples.last.map({ Int(used) > Int($0.used) }) ?? true {
+                samples.append(UsageSample(at: fetchedAt, used: used))
+            }
+            // Nothing rose after the newest sample past the horizon, so it says where use stood a day ago, however old it is.
+            if let baseline = samples.lastIndex(where: { fetchedAt.timeIntervalSince($0.at) >= Self.paceHorizon }) {
+                samples.removeFirst(baseline)
+            }
+            kept.windows[i].samples = samples
+            let span = min(Self.paceHorizon, fetchedAt.timeIntervalSince(samples[0].at))
+            let rise = used - samples[0].used
+            guard used >= 10, used < 100, span >= 20 * 60, rise > 0 else { continue }
+            let hit = fetchedAt.addingTimeInterval((100 - used) * span / rise)
+            if hit < reset { kept.windows[i].forecast = hit }
+        }
+        return kept
+    }
+
+    /// The history this reading goes on from: none when it can't be the same stretch of use.
+    private func continuedSamples(of window: UsageWindow, used: Double, reset: Date, from old: AccountSnapshot?) -> [UsageSample] {
+        guard let old, let before = old.windows.first(where: { $0.id == window.id }),
+              let oldReset = before.resetsAt, abs(oldReset.timeIntervalSince(reset)) < 15 * 60,   // a new limit period; Grok's moving deadlines land here too
+              fetchedAt.timeIntervalSince(old.fetchedAt) <= Self.paceHorizon,   // a rise across days away can't be taken for one day's use
+              let samples = before.samples, let last = samples.last,
+              last.at <= fetchedAt,   // the clock went backward
+              last.used - used <= 5   // a provider can cut its number with the same reset, as Codex has; smaller dips are noise
+        else { return [] }
+        return samples
     }
 
     /// Windows that just reached 98, 99 or 100%, each step announced once per reset period. `alerted` maps
@@ -291,7 +342,31 @@ func resetLabel(_ date: Date?, now: Date = .now) -> String {
     let minutes = max(1, Int((s / 60).rounded()))
     if minutes < 60 { return "Resets in \(minutes) min" }
     if minutes < 24 * 60 { return "Resets in \(minutes / 60)h \(minutes % 60)m" }
-    let day: Date.FormatStyle = s < 6 * 86400 ? .dateTime.weekday() : .dateTime.weekday().month().day()
     let rounded = Date(timeIntervalSinceReferenceDate: (date.timeIntervalSinceReferenceDate / 60).rounded() * 60)
-    return "Resets " + rounded.formatted(day.hour().minute())
+    return "Resets " + rounded.formatted(dayStyle(secondsAway: s).hour().minute())
+}
+
+private func dayStyle(secondsAway s: TimeInterval) -> Date.FormatStyle {
+    s < 6 * 86400 ? .dateTime.weekday() : .dateTime.weekday().month().day()
+}
+
+/// "At this rate you hit the limit" and "in under 5 min" / "in about 40 min" / "in about 4 hours" / "Sat 3 PM" / "Sat, Nov 14 at 3 PM".
+/// nil when there's none or it has passed. Rounded down, so it errs early and can't read later than the reset beside it.
+func forecastLabel(_ date: Date?, now: Date = .now) -> String? {
+    guard let date, date > now else { return nil }
+    let s = date.timeIntervalSince(now), minutes = Int(s / 60)
+    let when: String
+    if minutes < 5 {
+        when = "in under 5 min"
+    } else if minutes < 60 {
+        when = "in about \(minutes / 5 * 5) min"
+    } else if minutes < 24 * 60 {
+        when = "in about \(minutes / 60) hour\(minutes < 120 ? "" : "s")"
+    } else {
+        let day = dayStyle(secondsAway: s), clock = Locale.current.hourCycle
+        let hour = Calendar.current.dateInterval(of: .hour, for: date)?.start ?? date   // the local hour: some zones are off UTC's by 30 min
+        // The hour alone on a 24-hour clock prints "Sat, 15", which reads like a date.
+        when = hour.formatted(clock == .zeroToTwentyThree || clock == .oneToTwentyFour ? day.hour().minute() : day.hour())
+    }
+    return "At this rate you hit the limit " + when
 }

@@ -199,7 +199,7 @@ final class AppState: ObservableObject {
                        snap.health == .providerError {
                         snapshots[snap.id] = snap.staleKeeping(old)
                     } else {
-                        snapshots[snap.id] = snap
+                        snapshots[snap.id] = snap.keepingHistory(of: snapshots[snap.id])
                     }
                     announceNearLimit(snap)
                 }

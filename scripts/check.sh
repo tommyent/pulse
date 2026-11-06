@@ -12,6 +12,9 @@ swiftc Sources/Pulse/Models.swift Checks/RefreshChecks.swift -o "$OUT/refresh"
 "$OUT/refresh"
 swiftc Sources/Pulse/Models.swift Checks/LimitAlertChecks.swift -o "$OUT/limit"
 "$OUT/limit"
+swiftc Sources/Pulse/Models.swift Checks/ForecastChecks.swift -o "$OUT/forecast"
+"$OUT/forecast" -AppleLocale en_US
+TZ=Asia/Kolkata "$OUT/forecast" -AppleLocale en_GB   # a 24-hour clock, in a zone whose hours fall on UTC's half hours
 swiftc Sources/Pulse/Battery.swift Checks/BatteryChecks.swift -o "$OUT/battery"
 "$OUT/battery"
 swiftc Sources/Pulse/CodexPetSprite.swift Checks/CodexPetChecks.swift -o "$OUT/pet"
