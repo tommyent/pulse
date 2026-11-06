@@ -702,7 +702,8 @@ struct PetCard: View {
             }
             .font(.caption2).foregroundStyle(PulsePalette.secondary)
         }
-        .menuStyle(.button).buttonStyle(.borderless)   // a plain label lines up with the lines around it
+        .menuStyle(.button).buttonStyle(.plain)   // a plain label lines up with the lines around it
+        .menuIndicator(.hidden)   // the label draws its own arrow
         .fixedSize()
         .disabled(session.choosingWork)
         .help("Work model: \(detail)\(planned). Choose the model and effort Codex works with; the voice doesn't change. With helpers and an effort above medium, the pet talks at medium and helpers work at the effort you pick; a new helper effort, or a model that can't run the helpers' current effort, applies from the next conversation or Pulse restart.")
