@@ -31,6 +31,10 @@ swiftc Sources/Pulse/Models.swift Sources/Pulse/Adapters.swift Sources/Pulse/Gro
 "$OUT/security"
 swiftc Sources/Pulse/Models.swift Sources/Pulse/Adapters.swift Sources/Pulse/GrokLogin.swift Sources/Pulse/HotKey.swift Checks/PlanLabelChecks.swift -o "$OUT/plan-labels"
 "$OUT/plan-labels"
+swiftc Sources/Pulse/Models.swift Sources/Pulse/Adapters.swift Sources/Pulse/GrokLogin.swift Sources/Pulse/HotKey.swift Checks/SignInChecks.swift -o "$OUT/sign-in"
+"$OUT/sign-in"
+swiftc Sources/Pulse/Models.swift Sources/Pulse/Adapters.swift Sources/Pulse/GrokLogin.swift Sources/Pulse/HotKey.swift Checks/UsageParserChecks.swift -o "$OUT/usage-parsers"
+"$OUT/usage-parsers"
 ./scripts/grok-check.sh --offline
 swiftc Sources/Pulse/CodexChat.swift Sources/Pulse/VoiceBridge.swift Sources/Pulse/PetApprovals.swift Checks/CodexSessionChecks.swift -o "$OUT/codex-session"
 "$OUT/codex-session"

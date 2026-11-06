@@ -5,7 +5,74 @@ import SwiftUI
 
 @main
 enum OverlayChecks {
+    /// Which window each part of a ring draws, and what VoiceOver reads for it.
+    static func ringChecks() {
+        func w(_ id: String, _ p: Double?, _ label: String? = nil, resets: Date? = nil) -> UsageWindow {
+            UsageWindow(id: id, label: label ?? id, percentUsed: p, resetsAt: resets)
+        }
+        let h5 = "session_5h_five_hour", week = "weekly_all_seven_day", fable = "weekly_model_Fable"
+        let opus = "weekly_model_seven_day_opus", sonnet = "weekly_model_seven_day_sonnet"
+        let argon = "weekly_model_gemini-argon-wtu-weekly"
+        let cases: [(String, [UsageWindow], outer: String?, inner: String?, disc: String?)] = [
+            ("Ultra today", [w(week, 57), w(fable, 0)], week, fable, nil),
+            ("Ultra", [w(week, 40), w(fable, 80)], week, fable, nil),
+            ("Max", [w(h5, 10), w(week, 40), w(fable, 80)], h5, week, fable),
+            ("Max, Fable at 0 keeps its disc", [w(h5, 10), w(week, 40), w(fable, 0)], h5, week, fable),
+            ("Max, idle: a blank 5-hour keeps its slot", [w(h5, nil), w(week, 40), w(fable, 80)], h5, week, fable),
+            ("Max, Fable unknown: a blank disc", [w(h5, 10), w(week, 40), w(fable, nil)], h5, week, fable),
+            ("weekly, two caps: the fullest first, not the first listed", [w(week, 40), w(opus, 0), w(sonnet, 90)], week, sonnet, opus),
+            ("Max, two caps", [w(h5, 10), w(week, 40), w(opus, 0), w(sonnet, 90)], h5, week, sonnet),
+            ("unknown isn't zero", [w(week, 40), w(opus, nil), w(sonnet, 0)], week, sonnet, opus),
+            ("three caps: the emptiest waits", [w(h5, 10), w(week, 40), w(opus, 0), w(sonnet, 90), w(fable, 5)], h5, week, sonnet),
+            ("only an unknown cap holds the slot", [w(week, 40), w(fable, nil)], week, fable, nil),
+            ("an unknown weekly keeps its slot", [w(h5, 10), w(week, nil), w(fable, 80)], h5, week, fable),
+            ("Antigravity's Gemini pool", [w("gemini-5h", 0), w("gemini-weekly", 1), w(argon, 99)], "gemini-5h", "gemini-weekly", argon),
+            ("Antigravity's other pool", [w("3p-5h", 0), w("3p-weekly", 0)], "3p-5h", "3p-weekly", nil),
+            ("Grok's products aren't limits", [w("period_all", 61), w("period_GrokBuild", 38), w("period_GrokBot", 23), w("period_GrokChat", 1)], "period_all", nil, nil),
+            ("one window", [w("weekly_all", 89)], "weekly_all", nil, nil),
+            ("a provider's only limit is monthly", [w("monthly_all", 12)], "monthly_all", nil, nil),
+            ("three general limits: the third is the disc", [w("session_5h", 10), w("weekly_all", 30), w("monthly_all", 50)], "session_5h", "weekly_all", "monthly_all"),
+            ("no windows", [], nil, nil, nil),
+            ("a cap listed first still comes after the general limit", [w(fable, 80), w(week, 40)], week, fable, nil),
+        ]
+        for (name, windows, outer, inner, disc) in cases {
+            assert(windows.outerArc?.id == outer, "\(name): outer \(windows.outerArc?.id ?? "none")")
+            assert(windows.innerArc?.id == inner, "\(name): inner \(windows.innerArc?.id ?? "none")")
+            assert(windows.disc?.id == disc, "\(name): disc \(windows.disc?.id ?? "none")")
+            let drawn = [windows.outerArc?.id, windows.innerArc?.id, windows.disc?.id].compactMap { $0 }
+            assert(Set(drawn).count == drawn.count, "\(name) draws a window twice: \(drawn)")
+        }
+
+        // One ring per pool, in the order reported. A later pool can be switched off; an account with nothing still has its ring.
+        func tagged(_ id: String, _ p: Double?, _ pool: String) -> UsageWindow { UsageWindow(id: id, label: id, percentUsed: p, resetsAt: nil, pool: pool) }
+        let gemini = [tagged("gemini-5h", 0, "Gemini"), tagged("gemini-weekly", 1, "Gemini"), tagged(argon, 99, "Gemini")]
+        let idle = gemini + [tagged("3p-5h", 0, "Claude and GPT"), tagged("3p-weekly", 0, "Claude and GPT")]
+        assert(idle.pools.map(\.count) == [3, 2])
+        assert(idle.ringPools().map(\.index) == [0, 1], "an unused pool keeps its ring: with what's left on, it reads full")
+        assert(idle.ringPools()[0].windows.disc?.id == argon && idle.ringPools()[1].windows.outerArc?.id == "3p-5h")
+        let hidden = idle.ringPools { $0 == "Claude and GPT" }
+        assert(hidden.map(\.index) == [0], "switched off: no ring")
+        assert(idle.ringPools { $0 == "Gemini" }.map(\.index) == [0, 1], "the first pool goes with its account's switch")
+        let fullSecond = [tagged("gemini-5h", 0, "Gemini"), tagged("3p-weekly", 99, "Claude and GPT")]
+        assert(fullSecond.ringPools { $0 == "Claude and GPT" }.map(\.index) == [0], "a switched-off pool stays off even near its limit")
+        assert([UsageWindow]().pools.count == 1 && [UsageWindow]().ringPools().map(\.index) == [0], "no numbers yet: still one ring")
+        assert([w("weekly_all", 89)].ringPools { _ in true }.map(\.index) == [0], "no pool named: one ring, nothing to switch off")
+
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000), soon = now.addingTimeInterval(36 * 60)
+        let max = [w(h5, 10, "Current session", resets: soon), w(week, 40, "All models"), w(fable, 80, "Fable")]
+        assert(max.spokenValue(remaining: false, now: now) == "Current session 10% used, resets in 36 min; All models 40% used; Fable 80% used")
+        assert(max.spokenValue(remaining: true, now: now) == "Current session has 90% left, resets in 36 min; All models has 60% left; Fable has 20% left")
+        let grok = [w("period_all", 61, "Credits", resets: soon), w("period_GrokBuild", 38, "Grok Build"), w("period_GrokBot", 23, "GrokBot")]
+        assert(grok.spokenValue(remaining: true, now: now) == "Credits has 39% left, resets in 36 min", "products stay on the card")
+        let twoFullCaps = [w(h5, 10, "Current session"), w(week, 40, "All models"), w(sonnet, 99, "Sonnet"), w(opus, 98, "Opus")]
+        assert(twoFullCaps.spokenValue(remaining: false, now: now) == "Current session 10% used; All models 40% used; Sonnet 99% used, near its limit; Opus 98% used, near its limit",
+               "a window the ring doesn't draw is still named when the badge stands for it")
+        assert([w(week, nil, "All models", resets: now.addingTimeInterval(-60))].spokenValue(remaining: false, now: now) == "All models reset since the last update")
+        assert([w(week, nil, "All models")].spokenValue(remaining: false, now: now).isEmpty)
+    }
+
     static func main() {
+        ringChecks()
         // Include a display left of the main screen and one above it.
         for screen in [CGRect(x: 0, y: 25, width: 1440, height: 875),
                        CGRect(x: -1920, y: 0, width: 1920, height: 1080),
@@ -31,7 +98,7 @@ enum OverlayChecks {
             func lands(_ p: CGPoint, _ dx: CGFloat, _ dy: CGFloat, on current: DockEdge) -> (edge: DockEdge, point: CGPoint, tuck: Bool) {
                 DockEdge.landing(from: p, velocity: CGVector(dx: dx, dy: dy), current: current, in: air)
             }
-            // the owner's case: a rail from the top, dragged to mid-screen and thrown sideways, reaches the far side
+            // a rail from the top, dragged to mid-screen and thrown sideways, reaches the far side, not the top or bottom
             assert(lands(mid, 1500, 200, on: .top).edge == .right, "sideways throw from mid-screen reaches the far side")
             assert(lands(mid, -1500, -200, on: .bottom).edge == .left)
             assert(lands(CGPoint(x: air.maxX - 30, y: mid.y), -900, 120, on: .right).edge == .left, "a rail thrown off the right edge crosses over")
@@ -90,7 +157,7 @@ enum OverlayChecks {
             let thickTucked = edge.tucked(thick, in: air)
             assert(edge.anchor(of: thickTucked) == edge.anchor(of: tucked), "\(edge): the tucked outer edge doesn't depend on what's beside the rail")
         }
-        // The owner's own drags on a 1710 x 1107 pt screen (menu bar 34 pt, Dock hidden), recorded 2026-11-01: the last
+        // Real drags recorded on a 1710 x 1107 pt screen (menu bar 34 pt, Dock hidden): the last
         // 100 ms of each (time, x, y with y up) and the edge it started on. Before the pinned rule, every tuck here failed,
         // and the 19.37 s drag, slid sideways along the bottom, went to the left edge instead.
         let display = CGRect(x: 0, y: 0, width: 1710, height: 1107), usable = CGRect(x: 0, y: 0, width: 1710, height: 1073)
@@ -112,7 +179,7 @@ enum OverlayChecks {
             let (t, x, y) = samples.last!
             let got = DockEdge.landing(from: CGPoint(x: x, y: y), velocity: hand.velocity(at: t), current: current, in: usable, display: display)
             assert(want == "tuck" ? got.tuck && got.edge == current : !got.tuck && got.edge.rawValue == want,
-                   "the owner's drag at \(samples[0].0) s from \(current): wanted \(want), got \(got)")
+                   "the recorded drag at \(samples[0].0) s from \(current): wanted \(want), got \(got)")
         }
         // Pinned against another edge, the rail docks there; pinned against its own, it tucks; anywhere short of the
         // display's edge, slow, it docks as before.
@@ -125,7 +192,7 @@ enum OverlayChecks {
             let short = edge.anchor(of: usable.insetBy(dx: 30, dy: 30))
             assert(!DockEdge.landing(from: short, velocity: .zero, current: edge, in: usable, display: display).tuck)
         }
-        // Pushed into the menu bar short of the display's top (the owner's 05:22:50 push stopped at 1104 of 1107): 8 pt past
+        // Pushed into the menu bar short of the display's top (a recorded push stopped at 1104 of 1107): 8 pt past
         // the usable screen is a push too. From another edge it docks there instead.
         assert(DockEdge.landing(from: CGPoint(x: 1118, y: 1104), velocity: .zero, current: .top, in: usable, display: display).tuck)
         let intoMenuBar = DockEdge.landing(from: CGPoint(x: 900, y: 1084), velocity: .zero, current: .left, in: usable, display: display)
@@ -135,7 +202,7 @@ enum OverlayChecks {
         // Already pulling away from the edge at release, it isn't a push.
         assert(!DockEdge.landing(from: CGPoint(x: 1710, y: 500), velocity: CGVector(dx: -900, dy: 0), current: .right, in: usable,
                                  display: display).tuck)
-        // Sliding along the edge with the pointer pinned against it is still a push: three of the owner's tucks above slid at
+        // Sliding along the edge with the pointer pinned against it is still a push: three of the recorded tucks above slid at
         // about 330-430 pt/s, so a rule that checks for a slide first would lose them.
         // Speed comes from the drag's last moments: a pause before letting go is a drop, not a throw.
         var throwing = ThrowTracker()
@@ -183,7 +250,7 @@ enum OverlayChecks {
         }
         assert(tucking.elapsed < 1)
         // A fast tuck (a sliver pulled out and flicked straight back, up to the 3200 pt/s cap) stops at its tucked spot and
-        // never goes further in: the 7 pt sliver must not vanish. Sol measured a 16 pt overshoot before. Every edge.
+        // never goes further in: the 7 pt sliver must not vanish. A 3200 pt/s tuck overshot by 16 pt before this. Every edge.
         let tuckScreen = CGRect(x: 0, y: 0, width: 1710, height: 1070)
         for edge in DockEdge.allCases {
             let size = edge.isVertical ? CGSize(width: 84, height: 262) : CGSize(width: 262, height: 84)
@@ -201,7 +268,7 @@ enum OverlayChecks {
             assert(abs(depth()) < 0.5 && flick.elapsed < 1, "\(edge): settles on its spot")
         }
         // Released hanging past the edge (the pointer at the screen's bottom, a tall rail below it), the rail eases back in:
-        // the wall starts where the rail is instead of snapping it 64 pt in one frame, as the owner's logs showed.
+        // the wall starts where the rail is instead of snapping it 64 pt in one frame, as it did before this.
         let bottomSpot = CGRect(x: 442, y: 4, width: 262, height: 84)
         var hanging = RailGlide(center: AnimatablePair(652, -34), velocity: AnimatablePair(217, 0), target: bottomSpot, edge: .bottom,
                                 spring: railSpring("bouncy"))
@@ -260,8 +327,16 @@ enum OverlayChecks {
         // Reset labels: relative under a day, weekday under six days, weekday plus date beyond.
         let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
         assert(resetLabel(now.addingTimeInterval(-1), now: now) == "Resetting…")
-        assert(resetLabel(now.addingTimeInterval(5 * 60 + 30), now: now) == "Resets in 5 min")
+        assert(resetLabel(now.addingTimeInterval(5 * 60 + 10), now: now) == "Resets in 5 min")
+        assert(resetLabel(now.addingTimeInterval(5 * 60 + 40), now: now) == "Resets in 6 min", "rounded, not cut off")
+        assert(resetLabel(now.addingTimeInterval(10), now: now) == "Resets in 1 min", "never 0 min")
+        assert(resetLabel(now.addingTimeInterval(59 * 60 + 50), now: now) == "Resets in 1h 0m", "never 60 min")
         assert(resetLabel(now.addingTimeInterval(2 * 3600 + 38 * 60 + 10), now: now) == "Resets in 2h 38m")
+        // One reset, with the server's wobble either side of the minute, reads as one time (seen as 5:59 and 6:00 on one card).
+        let onTheMinute = Date(timeIntervalSinceReferenceDate: 800_259_240)
+        let wobbles = [-0.361, 0.484].map { resetLabel(onTheMinute.addingTimeInterval($0), now: now) }
+        assert(wobbles[0] == wobbles[1], "\(wobbles)")
+        assert(wobbles[0] == resetLabel(onTheMinute, now: now) && wobbles[0].contains(onTheMinute.formatted(.dateTime.hour().minute())))
         let soon = now.addingTimeInterval(3 * 86400), nextWeek = now.addingTimeInterval(7 * 86400 - 60)
         assert(!resetLabel(soon, now: now).contains(soon.formatted(.dateTime.month())), "under six days: weekday only")
         assert(resetLabel(nextWeek, now: now).contains(nextWeek.formatted(.dateTime.day())), "a week out names the date")

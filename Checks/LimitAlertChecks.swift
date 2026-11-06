@@ -3,6 +3,30 @@ import Foundation
 
 @main
 enum LimitAlertChecks {
+    /// Grok's products are shares of its credits: "what's left" turns the credits around and leaves the shares as used.
+    static func shareChecks() {
+        func window(_ id: String) -> UsageWindow { UsageWindow(id: id, label: id, percentUsed: 38, resetsAt: nil) }
+        for id in ["period_GrokBuild", "period_GrokBot", "period_GrokChat", "period_SomeNewProduct"] {
+            assert(window(id).isShare && !window(id).showsLeft(true) && !window(id).showsLeft(false), id)
+        }
+        for id in ["period_all", "weekly_all", "session_5h", "weekly_model_Fable", "gemini-weekly", "session_grok-4"] {
+            assert(!window(id).isShare && window(id).showsLeft(true) && !window(id).showsLeft(false), id)
+        }
+        print("Share checks passed: what's left turns limits around, never a product's share of them")
+    }
+
+    /// The stale line says when, with the date from any day but today.
+    static func lastUpdatedChecks() {
+        let noon = Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: Date(timeIntervalSinceReferenceDate: 815_000_000))!
+        func snap(_ fetched: Date) -> AccountSnapshot {
+            AccountSnapshot(id: .codex, displayName: "Codex", planLabel: "", health: .stale, windows: [], fetchedAt: fetched, source: .mock)
+        }
+        let time = noon.formatted(date: .omitted, time: .shortened)
+        assert(snap(noon).lastUpdated(now: noon.addingTimeInterval(3600)) == time, "today: the time alone")
+        let older = snap(noon.addingTimeInterval(-2 * 86400)).lastUpdated(now: noon)
+        assert(older != time && older.contains(time), "another day: the date too, got \(older)")
+    }
+
     /// What the rail draws from a failed fetch's numbers.
     static func staleChecks(reset: Date) {
         func shown(_ health: Health, _ resetsAt: Date?, at now: Date) -> UsageWindow {
@@ -85,6 +109,8 @@ enum LimitAlertChecks {
         claude.windows[0].percentUsed = 100
         assert(fires(claude) == 1, "Claude's existing low-usage rearm is unchanged")
         staleChecks(reset: reset)
+        shareChecks()
+        lastUpdatedChecks()
         grokChecks(reset: reset)
         print("limit alert checks passed")
     }

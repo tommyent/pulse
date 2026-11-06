@@ -97,7 +97,7 @@ final class LimitAlert {
         snap.windows.map { w in
             let p = w.percentUsed ?? 0
             let reset = resetLabel(w.resetsAt)
-            return (remaining ? "\(w.label) has \(100 - Int(p))% left." : "\(w.label) is at \(Int(p))%.") + (reset.isEmpty ? "" : " \(reset).")
+            return (w.showsLeft(remaining) ? "\(w.label) has \(100 - Int(p))% left." : "\(w.label) is at \(Int(p))%.") + (reset.isEmpty ? "" : " \(reset).")
         }.joined(separator: "\n")
     }
 }
@@ -117,8 +117,8 @@ struct LimitAlertView: View {
                     .font(.title2.weight(.semibold))
                     .multilineTextAlignment(.center)
                     .foregroundStyle(Color.primary)
-                if let top = snap.windows.compactMap(\.percentUsed).max() {
-                    Text(remaining ? "\(100 - Int(top))% left" : "\(Int(top))%")
+                if let top = snap.windows.max(by: { ($0.percentUsed ?? -1) < ($1.percentUsed ?? -1) }), let p = top.percentUsed {
+                    Text(top.showsLeft(remaining) ? "\(100 - Int(p))% left" : "\(Int(p))%")
                         .font(.system(size: 44, weight: .bold).monospacedDigit())
                         .foregroundStyle(Color.red)
                 }

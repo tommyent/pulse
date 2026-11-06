@@ -113,12 +113,33 @@ private struct CodexPet: View {
 
 private let staleOpacity = 0.5
 
+/// A cap behind a ring's logo, in gray so the arcs stay the account's colour: a lighter level rises as it's used, or falls showing what's left.
+private struct CapDisc: View {
+    let level: Double   // 0 to 1
+    let diameter: CGFloat
+
+    var body: some View {
+        ZStack {
+            Circle().fill(Color.white.opacity(0.14))
+            LinearGradient(colors: [.white.opacity(0.42), .white.opacity(0.20)], startPoint: .top, endPoint: .bottom)
+                .frame(width: diameter, height: diameter * level)
+                .frame(width: diameter, height: diameter, alignment: .bottom)
+            RadialGradient(colors: [.white.opacity(0.22), .clear], center: UnitPoint(x: 0.31, y: 0.25), startRadius: 0, endRadius: diameter * 0.21)
+            Circle().strokeBorder(Color.white.opacity(0.16), lineWidth: max(0.5, diameter * 0.03))
+        }
+        .frame(width: diameter, height: diameter)
+        .clipShape(Circle())
+    }
+}
+
 struct RingView: View {
     @Environment(\.showsRemaining) private var remaining
     let account: AccountID
+    var pool = 0   // which of the account's rings: sets the colour
     let percent: Double?
     var secondary: Double? = nil
-    var tertiary: Double? = nil    // a per-model cap (Claude's, Antigravity's) or GrokBot's usage: the disc behind the icon
+    var hasDisc = false            // `[UsageWindow].disc`: the disc behind the icon
+    var tertiary: Double? = nil    // how full it is; with no number it stays empty
     var size: CGFloat = 52
     var showPercent = true
     var nearLimit = false   // any of the account's windows at 98%+, drawn or not
@@ -127,23 +148,19 @@ struct RingView: View {
     var body: some View {
         VStack(spacing: 6) {
             ZStack {
-                // the outer track's gray, never red: the level rises as the cap is used, or falls showing what's left
-                if let tertiary {
-                    let d = size * 0.61   // inside the inner track
-                    Rectangle().fill(PulsePalette.track)
-                        .frame(width: d, height: d * max(0, min(shown(tertiary), 100)) / 100)
-                        .frame(width: d, height: d, alignment: .bottom)
-                        .clipShape(Circle())
+                if hasDisc {
+                    CapDisc(level: discLevel, diameter: size * 0.61)   // inside the inner track
                 }
                 RingTrack(lineWidth: size * 0.12)
                 if let percent {
-                    arc(percent, lineWidth: size * 0.12)
+                    arc(shown(percent), lineWidth: size * 0.12)
                 }
                 if let secondary {
-                    arc(secondary, lineWidth: size * 0.07)
+                    arc(shown(secondary), lineWidth: size * 0.07)
                         .padding(size * 0.16)
                 }
                 BrandIcon(account: account, size: size * 0.4)
+                    .shadow(color: hasDisc ? .black.opacity(0.7) : .clear, radius: size * 0.025)   // keeps the logo clear of a full disc
             }
             .frame(width: size, height: size)
             .compositingGroup()   // dims the ring as one piece, so the track doesn't show through its arcs
@@ -170,11 +187,16 @@ struct RingView: View {
 
     private func shown(_ used: Double) -> Double { remaining ? 100 - used : used }
 
+    /// How full the disc is, 0 to 1. With no number it's empty, whichever way the rings read.
+    private var discLevel: Double {
+        tertiary.map { max(0, min(shown($0), 100)) / 100 } ?? 0
+    }
+
     /// Always the account's colour: near a limit the badge and Pulse's alert say so, not the arc.
-    private func arc(_ used: Double, lineWidth: CGFloat) -> some View {
+    private func arc(_ fill: Double, lineWidth: CGFloat) -> some View {
         Circle()
-            .trim(from: 0, to: max(0, min(shown(used), 100)) / 100)
-            .stroke(account.accent, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+            .trim(from: 0, to: max(0, min(fill, 100)) / 100)
+            .stroke(account.accent(pool: pool), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
             .rotationEffect(.degrees(-90))
     }
 }
@@ -229,11 +251,12 @@ struct WindowRow: View {
                 .font(.subheadline)
                 .foregroundStyle(Color.primary)
             if let p = window.percentUsed {
-                ProgressView(value: max(0, min(remaining ? 100 - p : p, 100)), total: 100)
+                let left = window.showsLeft(remaining)
+                ProgressView(value: max(0, min(left ? 100 - p : p, 100)), total: 100)
                 .tint(window.isNearLimit ? .red : tint)
                 .frame(height: 6)
                 HStack {
-                    Text(remaining ? "\(100 - Int(p))% Left" : "\(Int(p))% Used").font(.caption)
+                    Text(left ? "\(100 - Int(p))% Left" : "\(Int(p))% Used").font(.caption)
                         .foregroundStyle(window.isNearLimit ? Color.red : PulsePalette.secondary)
                     Spacer()
                     Text(resetLabel(window.resetsAt)).font(.caption)
@@ -287,9 +310,24 @@ private struct BubbleShape: Shape {
     }
 }
 
+/// The usage card's and the menu bar popover's way to sign in, for the accounts Pulse can sign in itself.
+struct ConnectButton: View {
+    let snapshot: AccountSnapshot
+
+    var body: some View {
+        if let title = snapshot.connectTitle {
+            Button(title) {
+                let present = snapshot.id == .claude ? WebLogin.presentClaude : WebLogin.presentGrok
+                present { Task { await AppState.shared?.refreshAll() } }
+            }
+        }
+    }
+}
+
 struct UsageCard: View {
     let snapshot: AccountSnapshot
     let windows: [UsageWindow]   // read by the rail's view, which redraws every refresh: an open card follows a reset passing
+    var pool = 0
     var tailEdge: Edge = .trailing
     var tailAt: CGFloat? = nil
 
@@ -303,16 +341,13 @@ struct UsageCard: View {
             }
             .foregroundStyle(Color.primary)
             ForEach(Array(windows.enumerated()), id: \.element.id) { i, w in
-                WindowRow(window: w, tint: i == 0 ? snapshot.id.accent : snapshot.id.accent.opacity(0.5))
+                WindowRow(window: w, tint: snapshot.id.accent(pool: pool).opacity(i == 0 ? 1 : 0.5))
             }
             if let msg = snapshot.healthMessage {
                 Text(msg).font(.caption).foregroundStyle(PulsePalette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)   // wraps: a failure's reason is the part you need
             }
-            if snapshot.id == .grok, snapshot.health == .needsAuth {
-                Button("Connect Grok…") {
-                    WebLogin.presentGrok { Task { await AppState.shared?.refreshAll() } }
-                }
-            }
+            ConnectButton(snapshot: snapshot)
         }
         .padding(16)
         .padding(Edge.Set(tailEdge), BubbleShape.tailWidth)
@@ -658,6 +693,8 @@ struct OverlayView: View {
     @State private var cardFrame = CGRect.zero
     @State private var railFrame = CGRect.zero
 
+    private func ringKey(_ id: AccountID, pool: Int) -> String { pool == 0 ? id.rawValue : "\(id.rawValue).\(pool)" }
+
     /// The tail's position along the card's edge: at the rail item that opened the card.
     private func tailAt(_ item: String) -> CGFloat? {
         guard let target = itemFrames[item], cardFrame != .zero else { return nil }
@@ -742,7 +779,7 @@ struct OverlayView: View {
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onHintFrame?($0) }
                     .onDisappear { onHintFrame?(.zero) }
             }
-            let shift = cardShift(state.petVisible ? "pet" : state.selected.rawValue)
+            let shift = cardShift(state.petVisible ? "pet" : ringKey(state.selected, pool: state.selectedPool))
             usageOrPetCard(tail: tail)
                 .offset(x: state.dock.isVertical ? 0 : shift, y: state.dock.isVertical ? shift : 0)
         }
@@ -755,9 +792,11 @@ struct OverlayView: View {
             PetCard(tailEdge: tail, tailAt: tailAt("pet"), showUsage: state.persisted.enabled.contains(.codex) ? { toggleCard(.codex) } : nil)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
         } else if state.cardVisible, state.persisted.enabled.contains(state.selected) {
-            let snapshot = state.snapshots[state.selected] ?? placeholder(state.selected)
-            UsageCard(snapshot: snapshot, windows: snapshot.shownWindows(),
-                      tailEdge: tail, tailAt: tailAt(state.selected.rawValue))
+            let snapshot = state.snapshots[state.selected] ?? .checking(state.selected)
+            let pools = snapshot.shownWindows().pools
+            let pool = pools.indices.contains(state.selectedPool) ? state.selectedPool : 0
+            UsageCard(snapshot: snapshot, windows: pools[pool], pool: pool,
+                      tailEdge: tail, tailAt: tailAt(ringKey(state.selected, pool: state.selectedPool)))
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
         }
     }
@@ -771,42 +810,42 @@ struct OverlayView: View {
                 PetRailItem(expanded: expanded, onFrame: { itemFrames["pet"] = $0 }, toggle: togglePet)
             }
             ForEach(state.enabledAccounts) { id in
-                let windows = state.snapshots[id]?.shownWindows() ?? []
                 let stale = state.snapshots[id]?.health == .stale
-                Button {
-                    toggleCard(id)
-                } label: {
-                    RingView(account: id,
-                             percent: windows.first?.percentUsed,
-                             secondary: windows.innerArc?.percentUsed,
-                             // Grok's other products and Antigravity's other pool stay on the card
-                             tertiary: windows.disc?.percentUsed,
-                             size: expanded ? 52 : 28,
-                             showPercent: expanded,
-                             nearLimit: windows.contains(where: \.isNearLimit),
-                             stale: stale)
-                        .contentShape(Rectangle())
+                ForEach((state.snapshots[id]?.shownWindows() ?? []).ringPools { !state.showsPool(id, $0).wrappedValue }, id: \.index) { pool in
+                    let windows = pool.windows
+                    Button {
+                        toggleCard(id, pool: pool.index)
+                    } label: {
+                        RingView(account: id,
+                                 pool: pool.index,
+                                 percent: windows.outerArc?.percentUsed,
+                                 secondary: windows.innerArc?.percentUsed,
+                                 hasDisc: windows.disc != nil,
+                                 tertiary: windows.disc?.percentUsed,
+                                 size: expanded ? 52 : 28,
+                                 showPercent: expanded,
+                                 nearLimit: windows.contains(where: \.isNearLimit),
+                                 stale: stale)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { itemFrames[ringKey(id, pool: pool.index)] = $0 }
+                    .overlay(alignment: tuckBand.alignment) {
+                        let used = windows.outerArc?.percentUsed ?? 0
+                        let shown = max(0, min(state.showsRemaining ? 100 - used : used, 100))
+                        Capsule().fill(windows.contains(where: \.isNearLimit) ? Color.red : id.accent(pool: pool.index))
+                            .frame(width: state.dock.isVertical ? 3 : 4 + 16 * shown / 100, height: state.dock.isVertical ? 4 + 16 * shown / 100 : 3)
+                            .offset(tuckBand.offset)
+                            .opacity(state.tuckedAway && windows.outerArc?.percentUsed != nil ? (stale ? staleOpacity : 1) : 0)
+                            // in only as the rail reaches its slot, so the ticks never sit on top of the rings
+                            .animation(state.tuckedAway ? .easeOut(duration: 0.16).delay(0.18) : .easeOut(duration: 0.1), value: state.tuckedAway)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                    .accessibilityLabel([id.displayName, windows.first?.pool].compactMap { $0 }.joined(separator: ", ") + " usage")
+                    .accessibilityValue([windows.spokenValue(remaining: state.showsRemaining), state.snapshots[id]?.healthMessage ?? ""]
+                        .filter { !$0.isEmpty }.joined(separator: "; "))
                 }
-                .buttonStyle(.plain)
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { itemFrames[id.rawValue] = $0 }
-                .overlay(alignment: tuckBand.alignment) {
-                    let used = windows.first?.percentUsed ?? 0
-                    let shown = max(0, min(state.showsRemaining ? 100 - used : used, 100))
-                    Capsule().fill(windows.contains(where: \.isNearLimit) ? Color.red : id.accent)
-                        .frame(width: state.dock.isVertical ? 3 : 4 + 16 * shown / 100, height: state.dock.isVertical ? 4 + 16 * shown / 100 : 3)
-                        .offset(tuckBand.offset)
-                        .opacity(state.tuckedAway && windows.first?.percentUsed != nil ? (stale ? staleOpacity : 1) : 0)
-                        // in only as the rail reaches its slot, so the ticks never sit on top of the rings
-                        .animation(state.tuckedAway ? .easeOut(duration: 0.16).delay(0.18) : .easeOut(duration: 0.1), value: state.tuckedAway)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                }
-                .accessibilityLabel("\(id.displayName) usage")
-                .accessibilityValue((windows.filter(\.isNearLimit).map { w in
-                    let p = w.percentUsed ?? 0
-                    return state.showsRemaining ? "\(w.label) has \(100 - Int(p))% left, near its limit"
-                        : "\(w.label) at \(Int(p))%, near its limit"
-                } + (stale ? [state.snapshots[id]?.healthMessage ?? ""] : [])).joined(separator: "; "))
             }
             // last: the bottom of a vertical rail, the right end of a horizontal one
             if state.persisted.battery.showInRail, let reading = battery.reading {
@@ -836,7 +875,7 @@ struct OverlayView: View {
         .simultaneousGesture(DragGesture(minimumDistance: 4, coordinateSpace: .global)
             .onChanged { _ in onDrag?() }
             .onEnded { _ in onDrop?() })
-        .help("Drag to any screen edge, or throw into this one to minimize")
+        .help(state.cardVisible || state.petVisible ? "" : "Drag to any screen edge, or throw into this one to minimize")   // it would cover the open card
     }
 
     /// The side of the rail a tuck leaves on screen (away from the edge), and where a ring's tick sits in that 7 pt band:
@@ -896,26 +935,23 @@ struct OverlayView: View {
         }
     }
 
-    private func toggleCard(_ id: AccountID) {
+    private func toggleCard(_ id: AccountID, pool: Int = 0) {
         guard !state.dragging else { return }
         state.petVisible = false
-        if state.cardVisible, state.selected == id {
+        if state.cardVisible, state.selected == id, state.selectedPool == pool {
             state.cardVisible = false
         } else {
             state.selected = id
+            state.selectedPool = pool
             state.cardVisible = true
         }
-    }
-
-    private func placeholder(_ id: AccountID) -> AccountSnapshot {
-        AccountSnapshot(id: id, displayName: id.displayName, planLabel: "",
-                        health: .needsAuth, windows: [], fetchedAt: .now, source: .cliStatus)
     }
 }
 
 struct MenuBarPopover: View {
     @ObservedObject var state: AppState
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -927,17 +963,16 @@ struct MenuBarPopover: View {
                             Text("\(snap.displayName) Usage").font(.headline)
                         }
                         .foregroundStyle(.primary)
-                        ForEach(Array(snap.shownWindows().enumerated()), id: \.element.id) { i, w in
-                            WindowRow(window: w, tint: i == 0 ? id.accent : id.accent.opacity(0.5))
+                        ForEach(Array(snap.shownWindows().pools.enumerated()), id: \.offset) { pool, windows in
+                            ForEach(Array(windows.enumerated()), id: \.element.id) { i, w in
+                                WindowRow(window: w, tint: id.accent(pool: pool).opacity(i == 0 ? 1 : 0.5))
+                            }
                         }
                         if let msg = snap.healthMessage {
                             Text(msg).font(.caption).foregroundStyle(PulsePalette.secondary)
+                                .fixedSize(horizontal: false, vertical: true)   // wraps: a failure's reason is the part you need
                         }
-                        if id == .grok, snap.health == .needsAuth {
-                            Button("Connect Grok…") {
-                                WebLogin.presentGrok { Task { await AppState.shared?.refreshAll() } }
-                            }
-                        }
+                        ConnectButton(snapshot: snap)
                     }
                 }
             }
@@ -969,6 +1004,7 @@ struct MenuBarPopover: View {
                     // accessory app: without activation the settings window opens behind everything
                     NSApp.activate(ignoringOtherApps: true)
                     openSettings()
+                    dismiss()   // the popover would stay open behind Settings
                     DispatchQueue.main.async {
                         NSApp.windows.first { $0.title.contains("Settings") || $0.title.contains("Pulse") }?
                             .orderFrontRegardless()
@@ -1035,12 +1071,12 @@ struct SettingsView: View {
                                     Button("Connect…") {
                                         WebLogin.presentClaude { Task { await state.refreshAll() } }
                                     }
-                                    .help("Sign in to claude.ai once so Pulse stops needing the Claude Code Keychain item")
+                                    .help("Sign in to claude.ai in a Pulse window; Pulse uses it when Claude Code isn't signed in")
                                 }
                             }
                             if id == .grok {
                                 if state.snapshots[id]?.health == .needsAuth || state.snapshots[id] == nil {
-                                    Button("Reconnect…") {
+                                    Button("Connect…") {
                                         WebLogin.presentGrok { Task { await state.refreshAll() } }
                                     }
                                 } else if state.snapshots[id]?.health != .ok {
@@ -1067,6 +1103,13 @@ struct SettingsView: View {
                             Text(id.displayName)
                             if let snap = state.snapshots[id] {
                                 Text(snap.healthMessage ?? "\(snap.planLabel) · updated \(snap.fetchedAt.formatted(date: .omitted, time: .shortened))")
+                            }
+                        }
+                        if state.persisted.enabled.contains(id) {
+                            ForEach((state.snapshots[id]?.windows.pools ?? []).dropFirst().compactMap { $0.first?.pool }, id: \.self) { pool in
+                                Toggle("\(pool) ring", isOn: state.showsPool(id, pool)).toggleStyle(.switch)
+                                    .accessibilityLabel("Show \(id.displayName)'s \(pool) ring")
+                                    .help("A second \(id.displayName) ring for the models that share these limits. Its limits stay in the menu bar list and near-limit alerts either way.")
                             }
                         }
                     }

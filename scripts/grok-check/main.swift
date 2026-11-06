@@ -48,10 +48,9 @@ func products(_ names: [String]) -> [UsageWindow] {
                                       "productUsage": names.map { ["product": $0, "usagePercent": 10.0] }])
 }
 let usual = products(["GrokBuild", "GrokBot", "GrokChat"])
-check(usual.disc?.label == "GrokBot" && usual.innerArc?.label == "Grok Build", "GrokBot fills the disc, Grok Build stays the inner arc")
-check(products(["GrokBot", "GrokBuild"]).innerArc?.label == "Grok Build", "GrokBot listed first doesn't also take the inner arc")
-check(products(["GrokBot"]).disc != nil && products(["GrokBot"]).innerArc == nil, "only GrokBot so far: the disc, no inner arc")
-check(products(["GrokBuild"]).disc == nil, "no GrokBot usage: no disc")
+check(usual.outerArc?.id == "period_all" && usual.innerArc == nil && usual.disc == nil, "the products are shares of Grok's one limit: one arc")
+check(products(["GrokBot"]).innerArc == nil && products(["GrokBot"]).disc == nil, "only GrokBot so far: still one arc")
+check(usual.map(\.label) == ["Credits (weekly)", "Grok Build", "GrokBot", "Grok Chat"], "the card still lists each product")
 let capped = ["session_5h", "weekly_all", "weekly_model_Opus"].map { UsageWindow(id: $0, label: $0, percentUsed: 10, resetsAt: nil) }
 check(capped.innerArc?.id == "weekly_all" && capped.disc?.id == "weekly_model_Opus", "other accounts keep their arc and per-model disc")
 

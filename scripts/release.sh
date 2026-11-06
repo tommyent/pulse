@@ -15,6 +15,8 @@ SPARKLE_BIN=.build/artifacts/sparkle/Sparkle/bin
 fail() { print -u2 -- "release: $1"; exit 1 }
 
 git diff --quiet HEAD -- || fail "commit the tracked changes first: a release is built from a commit"
+# Untracked files count too: SwiftPM compiles everything in Sources/Pulse, and the manifest would name a commit without them.
+[[ -z "$(git status --porcelain -- Sources Package.swift Package.resolved package.sh scripts)" ]] || fail "commit or remove the untracked build files first: a release is built from a commit"
 if [[ -z "${DEVELOPER_ID:-}" ]]; then
     IDS=("${(@f)$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application: [^"]*\)"$/\1/p' | sort -u)}")
     (( ${#IDS} == 1 )) && [[ -n "${IDS[1]}" ]] || fail "set DEVELOPER_ID: expected one Developer ID Application identity"
@@ -22,7 +24,8 @@ if [[ -z "${DEVELOPER_ID:-}" ]]; then
 fi
 TEAM="${${DEVELOPER_ID##*\(}%\)}"
 
-./package.sh
+./scripts/check.sh
+./package.sh --only-use-versions-from-resolved-file
 PLIST=.build/Pulse.app/Contents/Info.plist
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
 BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")"

@@ -18,9 +18,11 @@ enum AccountID: String, Codable, CaseIterable, Identifiable {
         case .claude: Color(.displayP3, red: 1.0, green: 0.40, blue: 0.16)
         case .codex: Color(.displayP3, red: 0.22, green: 0.42, blue: 1.0)
         case .grok: Color(.displayP3, red: 1.0, green: 0.72, blue: 0.10)
-        case .antigravity: Color(.displayP3, red: 0.0, green: 0.76, blue: 0.32)
+        case .antigravity: Color(.displayP3, red: 0.60, green: 0.36, blue: 1.0)   // not green: the battery's ring is
         }
     }
+    /// A later pool of models on one account (Antigravity's Claude and GPT) has its own colour, so its ring can't pass for the first.
+    func accent(pool: Int) -> Color { pool == 0 ? accent : Color(.displayP3, red: 0.35, green: 0.72, blue: 1.0) }
     var glyph: String {
         switch self {
         case .claude: "asterisk"
@@ -35,20 +37,67 @@ enum Health: String, Codable { case ok, needsAuth, missingClient, stale, provide
 enum Source: String, Codable { case officialProtocol, officialUsagePage, cliStatus, mock }
 
 struct UsageWindow: Codable, Identifiable {
-    var id: String        // session_5h | weekly_all | weekly_model | weekly_pool
+    var id: String        // session_5h, weekly_all, weekly_model_<model>, period_<product>, or a provider's own
     var label: String
     var percentUsed: Double?   // 0–100
     var resetsAt: Date?
+    var pool: String? = nil   // the group of models sharing this limit, where an account has several
 
     static let nearLimitPercent: Double = 98
     var isNearLimit: Bool { (percentUsed ?? 0) >= Self.nearLimitPercent }
+
+    /// A product's share of Grok's credits, not a limit of its own: "66% left" of Grok Build would be wrong with 44% of the credits left.
+    var isShare: Bool { id.hasPrefix("period_") && id != "period_all" }
+    /// Whether "Show what's left" turns this window around. A share always reads as what was used.
+    func showsLeft(_ remaining: Bool) -> Bool { remaining && !isShare }
+    /// A limit on one model beside the account's general limits: Claude's per-model weeks, an Antigravity model's own limit.
+    var isCap: Bool { id.hasPrefix("weekly_model") }
 }
 
+// A ring's parts go by what each window is, never by provider or model name.
 extension [UsageWindow] {
-    /// The disc behind the logo: a per-model cap (Claude's, Antigravity's) or GrokBot's usage.
-    var disc: UsageWindow? { first { $0.id.hasPrefix("weekly_model") || $0.id == "period_GrokBot" } }
-    /// The inner arc: the next window. GrokBot is skipped so it can't show twice when xAI lists it first.
-    var innerArc: UsageWindow? { dropFirst().first { $0.id != "period_GrokBot" } }
+    /// General limits, shortest first as the adapters list them, then caps, fullest first. A share of a limit gets no slot.
+    /// A cap with no number waits behind the known ones, so it can't hide one that's nearly full, and holds its slot when there's no other.
+    private var ranked: [UsageWindow] {
+        filter { !$0.isCap && !$0.isShare } + filter(\.isCap).sorted { ($0.percentUsed ?? -1) > ($1.percentUsed ?? -1) }
+    }
+    var outerArc: UsageWindow? { ranked.first }
+    var innerArc: UsageWindow? { ranked.dropFirst().first }
+    /// The disc behind the logo.
+    var disc: UsageWindow? { ranked.dropFirst(2).first }
+
+    /// One list per pool of models sharing limits, in the provider's order. Never empty: an account with no numbers still has its ring.
+    var pools: [[UsageWindow]] {
+        var names: [String?] = []
+        for window in self where !names.contains(window.pool) { names.append(window.pool) }
+        return names.isEmpty ? [[]] : names.map { name in filter { $0.pool == name } }
+    }
+
+    /// The pools that get a ring, with their place in `pools`, which sets the colour. A later pool can be switched off by name
+    /// in Settings; the first goes with its account's own switch.
+    func ringPools(hiding hidden: (String) -> Bool = { _ in false }) -> [(index: Int, windows: [UsageWindow])] {
+        pools.enumerated()
+            .filter { $0.offset == 0 || $0.element.first?.pool.map(hidden) != true }
+            .map { (index: $0.offset, windows: $0.element) }
+    }
+
+    /// What VoiceOver reads for a ring: what it draws, then any other window its badge stands for.
+    func spokenValue(remaining: Bool, now: Date = .now) -> String {
+        let drawn = [outerArc, innerArc, disc].compactMap { $0 }
+        let others = filter { window in window.isNearLimit && !drawn.contains { $0.id == window.id } }
+        return (drawn + others).enumerated().compactMap { index, window -> String? in
+            guard let p = window.percentUsed else {
+                return window.resetsAt.map { $0 <= now } == true ? "\(window.label) reset since the last update" : nil
+            }
+            var text = window.showsLeft(remaining) ? "\(window.label) has \(100 - Int(p))% left" : "\(window.label) \(Int(p))% used"
+            if window.isNearLimit { text += ", near its limit" }
+            if index == 0, window.resetsAt != nil {
+                let reset = resetLabel(window.resetsAt, now: now)
+                text += ", " + reset.prefix(1).lowercased() + reset.dropFirst()
+            }
+            return text
+        }.joined(separator: "; ")
+    }
 }
 
 struct AccountSnapshot: Codable, Identifiable {
@@ -67,6 +116,12 @@ struct AccountSnapshot: Codable, Identifiable {
         stale.health = .stale
         stale.detail = detail
         return stale
+    }
+
+    /// A card opened before the first fetch lands: nothing is known yet, so it mustn't ask for a sign-in.
+    static func checking(_ id: AccountID) -> AccountSnapshot {
+        AccountSnapshot(id: id, displayName: id.displayName, planLabel: "", health: .providerError, windows: [],
+                        fetchedAt: .now, source: .cliStatus, detail: "Checking \(id.displayName)…")
     }
 
     /// A fetch that ran out of time, for AppState to handle like any other failed fetch.
@@ -124,19 +179,34 @@ struct AccountSnapshot: Codable, Identifiable {
 
     func alertKey(_ w: UsageWindow) -> String { "\(id.rawValue).\(w.id)" }
 
-    /// Tightest window = the one nearest lockout.
-    var tightestPercent: Double? {
-        windows.compactMap(\.percentUsed).max()
+    /// The time alone today; from any other day the date too, so a days-old reading can't pass for this morning's.
+    func lastUpdated(now: Date = .now) -> String {
+        Calendar.current.isDate(fetchedAt, inSameDayAs: now) ? fetchedAt.formatted(date: .omitted, time: .shortened)
+            : fetchedAt.formatted(date: .abbreviated, time: .shortened)
     }
 
     var healthMessage: String? {
         switch health {
         case .ok: nil
-        case .needsAuth: detail ?? "Connect \(displayName) — subscription login required"
+        case .needsAuth: detail ?? signInMessage
         case .missingClient: "Install \(displayName) CLI"
-        case .stale: "Stale — last updated \(fetchedAt.formatted(date: .omitted, time: .shortened))" + (detail.map { ". \($0)" } ?? "")
+        case .stale: "Stale — last updated \(lastUpdated())" + (detail.map { ". \($0)" } ?? "")
         case .providerError: detail ?? "\(displayName) usage unavailable"
         }
+    }
+
+    /// Here rather than in the adapters, so a needsAuth snapshot saved by an older build also says what to do.
+    private var signInMessage: String {
+        switch id {
+        case .claude: "Sign in to Claude Code, or use Connect"
+        case .codex: "Run `codex login` in Terminal"
+        case .grok, .antigravity: "Sign in to \(displayName)"   // their adapters always give their own reason
+        }
+    }
+
+    /// The sign-in Pulse can open itself. Codex and Antigravity sign in only through their own CLIs.
+    var connectTitle: String? {
+        health == .needsAuth && (id == .claude || id == .grok) ? "Connect \(displayName)…" : nil
     }
 }
 
@@ -215,11 +285,11 @@ func resetLabel(_ date: Date?, now: Date = .now) -> String {
     guard let date else { return "" }
     let s = date.timeIntervalSince(now)
     if s <= 0 { return "Resetting…" }
-    if s < 3600 { return "Resets in \(Int(s / 60)) min" }
-    if s < 24 * 3600 {
-        let h = Int(s) / 3600, m = (Int(s) % 3600) / 60
-        return "Resets in \(h)h \(m)m"
-    }
+    // Rounded: a provider's reset wobbles by under a second, and one reset must not read as both 5:59 and 6:00.
+    let minutes = max(1, Int((s / 60).rounded()))
+    if minutes < 60 { return "Resets in \(minutes) min" }
+    if minutes < 24 * 60 { return "Resets in \(minutes / 60)h \(minutes % 60)m" }
     let day: Date.FormatStyle = s < 6 * 86400 ? .dateTime.weekday() : .dateTime.weekday().month().day()
-    return "Resets " + date.formatted(day.hour().minute())
+    let rounded = Date(timeIntervalSinceReferenceDate: (date.timeIntervalSinceReferenceDate / 60).rounded() * 60)
+    return "Resets " + rounded.formatted(day.hour().minute())
 }

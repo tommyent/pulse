@@ -19,6 +19,7 @@ final class AppState: ObservableObject {
         var voiceHotKey: HotKeyCombo?   // nil = the default shortcut
         var showPet: Bool?   // nil = shown; independent of the Codex usage switch
         var showRemaining: Bool?   // nil = off: rings show what's used
+        var hiddenPools: Set<String>?   // nil = none: "account.pool" for a later pool whose ring is switched off
         var limitAlerts: [String: Date]?   // "account.window" → the reset already announced near its limit
 
         var batterySettings: BatterySettings?   // nil = defaults
@@ -59,6 +60,7 @@ final class AppState: ObservableObject {
             voiceHotKey = c.lenient(HotKeyCombo.self, forKey: .voiceHotKey, in: decoder)
             showPet = c.lenient(Bool.self, forKey: .showPet, in: decoder)
             showRemaining = c.lenient(Bool.self, forKey: .showRemaining, in: decoder)
+            hiddenPools = c.lenient(Set<String>.self, forKey: .hiddenPools, in: decoder)
             limitAlerts = c.lenient([String: Date].self, forKey: .limitAlerts, in: decoder)
             batterySettings = c.lenient(BatterySettings.self, forKey: .batterySettings, in: decoder)
             breakSettings = c.lenient(BreakSettings.self, forKey: .breakSettings, in: decoder)
@@ -118,7 +120,8 @@ final class AppState: ObservableObject {
     }
 
     @Published var persisted: Persisted { didSet { save() } }
-    @Published var selected: AccountID = .claude
+    @Published var selected: AccountID = .claude { didSet { selectedPool = 0 } }
+    @Published var selectedPool = 0   // which of the selected account's rings opened the card (`[UsageWindow].pools`)
     @Published var cardVisible = false
     @Published var hoveringOverlay = false
     @Published var petVisible = false   // the Codex pet's chat/voice card (mutually exclusive with a usage card)
@@ -154,9 +157,10 @@ final class AppState: ObservableObject {
                                                 from: Data(contentsOf: Self.snapshotsURL))) ?? [:]
         for k in cached.keys where cached[k]?.health == .ok { cached[k]?.health = .stale }
         snapshots = cached
+        if cached[.claude]?.source == .officialUsagePage { ClaudeWeb.connected = true }   // signed in before this was remembered
         if let first = enabledAccounts.first { selected = first }
 
-        // ponytail: one flat 2-min poll for everything (three small GETs); per-adapter budgets if a provider ever throttles
+        // ponytail: one flat 2-min poll for everything; per-adapter budgets if a provider ever throttles
         Task {
             while true {
                 await refreshAll(manual: false)
@@ -223,6 +227,18 @@ final class AppState: ObservableObject {
                 if on { self.persisted.enabled.insert(id) } else { self.persisted.enabled.remove(id) }
                 if !on, self.selected == id, let first = self.enabledAccounts.first { self.selected = first }
                 if on { Task { await self.refreshAll() } }
+            })
+    }
+
+    /// A later pool's ring (`[UsageWindow].ringPools`): on until it's switched off.
+    func showsPool(_ id: AccountID, _ pool: String) -> Binding<Bool> {
+        let key = "\(id.rawValue).\(pool)"
+        return Binding(
+            get: { self.persisted.hiddenPools?.contains(key) != true },
+            set: { on in
+                var hidden = self.persisted.hiddenPools ?? []
+                if on { hidden.remove(key) } else { hidden.insert(key) }
+                self.persisted.hiddenPools = hidden.isEmpty ? nil : hidden
             })
     }
 

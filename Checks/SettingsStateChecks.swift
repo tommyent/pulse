@@ -24,6 +24,11 @@ enum SettingsStateChecks {
         assert(p.limitAlerts?["claude.session_5h"] == Date(timeIntervalSinceReferenceDate: 782000000))
         assert(p.battery.lowPercent == 30 && p.battery.criticalPercent == 15 && !p.battery.showInRail && p.battery.criticalSound == nil)
         assert(p.breakSettings == nil && p.breaks == BreakSettings())
+        assert(p.hiddenPools == nil, "a state from before pool switches shows every pool")
+        var switched = AppState.Persisted()
+        switched.hiddenPools = ["antigravity.Claude and GPT"]
+        let reread = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(switched))
+        assert(reread.hiddenPools == ["antigravity.Claude and GPT"], "a switched-off pool stays off after a relaunch")
 
         // Saving migrates Tint to Appearance, drops obsolete appearance keys, and preserves unrelated settings.
         let again = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(p)) as! [String: Any]

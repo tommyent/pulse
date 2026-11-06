@@ -80,7 +80,9 @@ final class WebLogin: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDele
     static func presentClaude(onDone: @escaping () -> Void) {
         present(title: "Connect Claude", url: "https://claude.ai/login", onDone: onDone) { _ in
             // login shares the default WKWebsiteDataStore with the hidden fetcher
-            await ClaudeWeb.shared.fetchUsage().usage != nil
+            guard await ClaudeWeb.shared.fetchUsage().usage != nil else { return false }
+            ClaudeWeb.connected = true
+            return true
         }
     }
 
@@ -147,6 +149,7 @@ final class WebLogin: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDele
         timer?.invalidate()
         popup?.close()
         Self.current = nil
+        if !ClaudeWeb.connected { ClaudeWeb.shared.dropPage() }   // closed with no sign-in: the page its checks loaded goes too
     }
 
     private func runCheck() {
@@ -168,6 +171,11 @@ final class WebLogin: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDele
 @MainActor
 final class ClaudeWeb: NSObject, WKNavigationDelegate {
     static let shared = ClaudeWeb()
+    /// Someone signed in with Connect…. Until then Pulse starts no browser for claude.ai, whatever else fails.
+    nonisolated static var connected: Bool {
+        get { UserDefaults.standard.bool(forKey: "claudeWebConnected") }
+        set { UserDefaults.standard.set(newValue, forKey: "claudeWebConnected") }
+    }
     private var web: WKWebView?
     private let pageLoad = SharedWait()   // a Connect window's check and a poll can both need the page: one load serves both
     private var pageReady = false   // it finished loading: a load still running already names claude.ai, so the URL alone doesn't say
@@ -199,6 +207,11 @@ final class ClaudeWeb: NSObject, WKNavigationDelegate {
         let records = await store.dataRecords(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes())
         await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
                                for: records.filter { $0.displayName.contains("claude.ai") })
+        Self.connected = false
+        dropPage()
+    }
+
+    func dropPage() {
         web = nil
         pageReady = false
         pageLoad.finish()   // whoever waited on the old view's load: the next caller loads the new one

@@ -191,8 +191,8 @@ final class BreakController: ObservableObject {
         history.add(r)
         try? FileManager.default.createDirectory(at: Self.dir, withIntermediateDirectories: true)
         if let h = try? FileHandle(forWritingTo: Self.historyURL) {
-            h.seekToEndOfFile()
-            h.write(BreakHistory.line(r))
+            _ = try? h.seekToEnd()
+            try? h.write(contentsOf: BreakHistory.line(r))   // the older write(_:) raises an exception on a full disk, which would crash Pulse
             try? h.close()
         } else {
             try? BreakHistory.line(r).write(to: Self.historyURL, options: .atomic)

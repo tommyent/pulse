@@ -5,8 +5,15 @@ set -euo pipefail
 cd "$(dirname "$0")"
 [[ -f .env ]] && source .env
 INSTALL=0
+FORCE=0
 ARGS=()
-for a in "$@"; do [[ "$a" == "--install" ]] && INSTALL=1 || ARGS+=("$a"); done
+for a in "$@"; do
+    case "$a" in
+        --install) INSTALL=1 ;;
+        --force) FORCE=1 ;;   # with --install: allow replacing a newer installed build
+        *) ARGS+=("$a") ;;
+    esac
+done
 set -- "${ARGS[@]}"
 
 swift build -c release "$@"
@@ -24,8 +31,8 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
     <key>CFBundleExecutable</key><string>Pulse</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.3.1</string>
-    <key>CFBundleVersion</key><string>4</string>
+    <key>CFBundleShortVersionString</key><string>0.4.0</string>
+    <key>CFBundleVersion</key><string>5</string>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>LSUIElement</key><true/>
     <key>NSMicrophoneUsageDescription</key><string>Live voice with the Codex pet uses your microphone.</string>
@@ -55,6 +62,15 @@ rmdir "$STAGE"
 echo "built: .build/Pulse.app"
 
 if (( INSTALL )); then
+    # A checkout on an older branch would otherwise silently drop whatever the installed build has since.
+    if [[ -e /Applications/Pulse.app ]] && (( ! FORCE )); then
+        INSTALLED="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' /Applications/Pulse.app/Contents/Info.plist)"
+        BUILT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' .build/Pulse.app/Contents/Info.plist)"
+        if (( BUILT < INSTALLED )); then
+            print -u2 -- "not installed: this is build $BUILT and /Applications has build $INSTALLED. Use --force to replace it anyway."
+            exit 1
+        fi
+    fi
     pkill -x Pulse 2>/dev/null || true
     # an installed copy is never deleted: it goes to the Trash
     if [[ -e /Applications/Pulse.app ]]; then

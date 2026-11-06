@@ -84,11 +84,20 @@ enum SecurityChecks {
         assert(ag.map(\.id) == ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"], "\(ag.map(\.id))")
         assert(ag[1].label == "Gemini · weekly" && ag[1].percentUsed == 25 && ag[1].resetsAt != nil)
         assert(ag[2].label == "Claude and GPT · 5-hour" && ag[2].percentUsed == 0)
-        assert(AntigravityAdapter.windows(from: report(1, 0.5)).first?.id == "3p-5h", "the pool nearest its limit leads")
+        for used in 1...99 {   // agy's fractions are 32-bit floats written as doubles: whole percents must not show one too few
+            let fraction = Double(Float(100 - used) / 100)
+            let shown = AntigravityAdapter.windows(from: report(fraction, 1)).first { $0.id == "gemini-weekly" }?.percentUsed
+            assert(shown.map { Int($0) } == used, "\(used)% used read as \(shown ?? -1)")
+        }
+        let fuller = AntigravityAdapter.windows(from: report(1, 0.5))
+        assert(fuller.first?.id == "gemini-5h" && fuller.map(\.pool) == ["Gemini", "Gemini", "Claude and GPT", "Claude and GPT"],
+               "a fuller pool doesn't take the other's place: \(fuller.map(\.id))")
         let capped = AntigravityAdapter.windows(from: report(0.97, 1, argon: 0))
-        assert(capped.map(\.id) == ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly", "weekly_model_gemini-argon-wtu-weekly"],
-               "a full model cap never leads: \(capped.map(\.id))")
-        assert(capped[4].label == "Gemini 4 Argon · weekly" && capped[4].percentUsed == 100)
+        assert(capped.map(\.id) == ["gemini-5h", "gemini-weekly", "weekly_model_gemini-argon-wtu-weekly", "3p-5h", "3p-weekly"],
+               "a model cap joins its own pool: \(capped.map(\.id))")
+        assert(capped[2].label == "Gemini 4 Argon · weekly" && capped[2].percentUsed == 100 && capped[2].pool == "Gemini")
+        assert(capped.pools[0].outerArc?.id == "gemini-5h" && capped.pools[0].disc?.id == capped[2].id, "a full cap never leads")
+        assert(capped.pools[1].disc == nil)
         var failed = report(0.5, 0.5); failed["status"] = "ERROR"
         assert(AntigravityAdapter.windows(from: failed).isEmpty)
         let prompted: [String: Any] = ["status": "SUCCESS", "response": "Here is your usage…", "num_turns": 1]

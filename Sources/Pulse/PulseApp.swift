@@ -2,7 +2,7 @@ import SwiftUI
 import Combine
 import os
 
-/// One line per drop and per landing: how a hand test went, read with
+/// One line per drop and per landing: how a drag went, read with
 /// `/usr/bin/log show --last 5m --predicate 'subsystem == "io.github.tommyent.pulse" AND category == "rail"'`.
 private let railLog = Logger(subsystem: "io.github.tommyent.pulse", category: "rail")
 private func describe(_ f: CGRect) -> String { String(format: "(%.0f,%.0f %.0fx%.0f)", f.minX, f.minY, f.width, f.height) }
@@ -80,7 +80,7 @@ struct PulseApp: App {
 private final class OverlayPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     /// AppKit keeps a window's top below the menu bar. A glide's box and a rail tucked into the top must pass it: what
-    /// lies past the usable screen is masked instead (the owner's logs showed the panel held 274 pt short mid-glide).
+    /// lies past the usable screen is masked instead (the panel was held 274 pt short mid-glide before).
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
@@ -335,7 +335,7 @@ final class OverlayController {
         }
     }
 
-    /// Moves the rail to where it rests now: docked, or tucked into its edge. On `spring` (a drop's is the owner's bouncy
+    /// Moves the rail to where it rests now: docked, or tucked into its edge. On `spring` (a drop's is the bouncy
     /// one), starting at `velocity`; under Reduce Motion at once (a drop) or with a crossfade (`fade`: tucking, peeking).
     private func settle(velocity: CGVector = .zero, fade: Bool = false, spring: Spring = tuckSpring) {
         guard !state.dragging else { return }   // the drop settles it
@@ -358,7 +358,7 @@ final class OverlayController {
         }
         if flight == nil {
             let start = panel.frame
-            // the fastest flicks (9000 pt/s in the owner's logs) only overshoot further: 3200 pt/s already feels immediate
+            // the fastest flicks (9000 pt/s in recorded drags) only overshoot further: 3200 pt/s already feels immediate
             let cap = min(1, 3200 / max(1, hypot(velocity.dx, velocity.dy)))
             flight = (RailGlide(center: AnimatablePair(start.midX, start.midY), velocity: AnimatablePair(velocity.dx * cap, velocity.dy * cap),
                                 target: start, edge: state.dock, spring: spring, slack: state.tuckedAway ? 0 : 16),

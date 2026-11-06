@@ -114,6 +114,7 @@ enum ClaudeAdapter {
     static func fetch() async -> AccountSnapshot {
         var snap = AccountSnapshot(id: .claude, displayName: "Claude", planLabel: "Anthropic",
                                    health: .needsAuth, windows: [], fetchedAt: .now, source: .officialProtocol)
+        var failure: String?   // an answer that isn't about the sign-in: the web session may still work, and if not the last numbers stay
 
         // Preferred: Claude Code's own token against the endpoint its /usage reads. No WebKit, no cookies.
         if let creds = ClaudeKeychain.shared.credentials() {
@@ -130,17 +131,28 @@ enum ClaudeAdapter {
                 if let org = await get("profile").1?["organization"] as? [String: Any] {
                     snap.planLabel = planLabel(org["plan_display_name"] as? String)
                 }
+                snap.windows = keepingSessionSlot(snap.windows, plan: snap.planLabel)
                 if !snap.windows.isEmpty { snap.health = .ok; return snap }
             }
             if status == 401 {
                 ClaudeKeychain.shared.forget()   // token rotated or expired: re-read next poll, use the web session now
             } else if status == 0 || status == 429 || status >= 500 {
                 snap.health = .providerError     // offline or throttled: keep last good windows; the web session is not consulted
+                snap.detail = status == 0 ? "Claude unreachable" : "Claude answered HTTP \(status)"
                 return snap
+            } else if status != 200 {
+                failure = "Claude answered HTTP \(status)"
             }
         }
 
-        // Fallback: Pulse's own claude.ai web session (Connect… in Settings).
+        // Fallback: Pulse's own claude.ai web session, only once someone has signed in with Connect… (on the card, the popover or in Settings).
+        guard ClaudeWeb.connected else {
+            if let failure {
+                snap.health = .providerError
+                snap.detail = failure
+            }
+            return snap
+        }
         let web = await ClaudeWeb.shared.fetchUsage()
         if let usage = web.usage {
             snap.source = .officialUsagePage
@@ -152,6 +164,9 @@ enum ClaudeAdapter {
         if !web.pageLoaded {
             snap.health = .providerError
             snap.detail = "claude.ai didn't load"
+        } else if let failure {
+            snap.health = .providerError
+            snap.detail = failure
         }
         return snap
     }
@@ -161,6 +176,13 @@ enum ClaudeAdapter {
     static func planLabel(_ displayName: String?) -> String {
         guard let name = displayName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return "Anthropic" }
         return name
+    }
+
+    /// Max always has a 5-hour limit, so a null `five_hour` must not change its ring's layout between refreshes: the slot stays, blank.
+    /// shortcut: goes by the plan's name, and the claude.ai fallback has no plan name; a real idle Max reply would show if this ever runs.
+    static func keepingSessionSlot(_ windows: [UsageWindow], plan: String) -> [UsageWindow] {
+        guard plan.localizedCaseInsensitiveContains("max"), !windows.isEmpty, !windows.contains(where: { $0.id.hasPrefix("session_5h") }) else { return windows }
+        return [UsageWindow(id: "session_5h_five_hour", label: "Current session", percentUsed: nil, resetsAt: nil)] + windows
     }
 
     /// Tolerant parse: any top-level object carrying `utilization` becomes a window.
@@ -182,9 +204,8 @@ enum ClaudeAdapter {
                                                percentUsed: util, resetsAt: resets)))
         }
         for l in json["limits"] as? [[String: Any]] ?? [] where l["kind"] as? String == "weekly_scoped" {
-            guard let pct = l["percent"] as? Double,
-                  let name = ((l["scope"] as? [String: Any])?["model"] as? [String: Any])?["display_name"] as? String else { continue }
-            out.append((2, UsageWindow(id: "weekly_model_\(name)", label: name, percentUsed: pct,
+            guard let name = ((l["scope"] as? [String: Any])?["model"] as? [String: Any])?["display_name"] as? String else { continue }
+            out.append((2, UsageWindow(id: "weekly_model_\(name)", label: name, percentUsed: l["percent"] as? Double,
                                        resetsAt: (l["resets_at"] as? String).flatMap(parseISO))))
         }
         return out.sorted { $0.0 < $1.0 }.map(\.1)
@@ -197,20 +218,27 @@ enum ClaudeAdapter {
 enum CodexAdapter {
     // Codex's own sign-in (~/.codex/auth.json) against the usage endpoint the Codex app reads.
     // Replaces spawning `codex app-server` every poll: one HTTPS call, real reset timestamps.
-    static func fetch() async -> AccountSnapshot {
+    static func fetch(authFile: URL = home.appending(path: ".codex/auth.json"),
+                      cliFound: Bool = locateBinary("codex") != nil,
+                      session: URLSession = ProviderHTTP.session) async -> AccountSnapshot {
         var snap = AccountSnapshot(id: .codex, displayName: "Codex", planLabel: "OpenAI",
                                    health: .needsAuth, windows: [], fetchedAt: .now, source: .officialProtocol)
-        guard let auth = try? JSONSerialization.jsonObject(with: Data(contentsOf: home.appending(path: ".codex/auth.json"))) as? [String: Any],
+        guard let auth = try? JSONSerialization.jsonObject(with: Data(contentsOf: authFile)) as? [String: Any],
               let tokens = auth["tokens"] as? [String: Any],
               let token = tokens["access_token"] as? String, !token.isEmpty,
               let account = tokens["account_id"] as? String, !account.isEmpty
-        else { return snap }
+        else {
+            // An auth file means Codex has run here, perhaps from a folder Pulse doesn't search, so it's only missing with neither.
+            // shortcut: signed out with the CLI off the search path also reads as not installed; the README's fix is a link in ~/.local/bin.
+            if !cliFound, !FileManager.default.fileExists(atPath: authFile.path) { snap.health = .missingClient }
+            return snap
+        }
         var req = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!, timeoutInterval: 15)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue(account, forHTTPHeaderField: "ChatGPT-Account-Id")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         do {
-            let (data, resp) = try await ProviderHTTP.session.data(for: req)
+            let (data, resp) = try await session.data(for: req)
             let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
             if status == 401 || status == 403 { return snap }                 // token rotated or signed out: run codex
             guard status == 200, let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -555,11 +583,12 @@ enum GrokAdapter {
     }
 
     /// Live cookies from the shared WebKit store (they rotate as the login webview browses),
-    /// falling back to the header saved at connect time.
+    /// falling back to the header saved at connect time. Never connected: no header, so WebKit isn't woken.
     @MainActor
     static func cookieHeader() async -> String? {
+        guard let saved = Keychain.read("grok-cookies") else { return nil }
         let live = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
-        return cookieHeader(from: live) ?? Keychain.read("grok-cookies")
+        return cookieHeader(from: live) ?? saved
     }
 
     /// True only when the header carries a signed-in session that yields real quota numbers.
@@ -636,8 +665,13 @@ enum AntigravityAdapter {
             snap.detail = "Offline, Antigravity check skipped"
             return snap
         }
-        guard let report = await run(agy, ["-p", "/usage", "--output-format", "json", "--print-timeout", "45s"],
-                                     timeout: .seconds(60)) else {
+        // agy's log goes in the folder `run` removes, not one more file per refresh in ~/.gemini. An older agy that refuses the flag runs without it.
+        let usage = ["-p", "/usage", "--output-format", "json", "--print-timeout", "45s"]
+        var answer = await run(agy, usage + ["--log-file", "agy.log"], timeout: .seconds(60))
+        if let refused = answer, String(decoding: refused.err, as: UTF8.self).contains("not defined") {
+            answer = await run(agy, usage, timeout: .seconds(60))
+        }
+        guard let report = answer else {
             snap.detail = stalled
             return snap
         }
@@ -664,12 +698,13 @@ enum AntigravityAdapter {
 
     /// `command.data.groups[]` are pools ("Gemini Models", "Claude and GPT models"), each with a 5-hour and a
     /// weekly bucket, plus groups named for one model ("Gemini 4 Argon") that cap only that model.
-    /// The pool nearest its limit leads, so the ring shows it; model caps come last, as the ring's dimmed tail.
+    /// Pools keep the order reported, so a ring always means the same pool. Nothing in the report ties a model's group
+    /// to a pool, so it joins the pool its first word names, else the first pool.
     static func windows(from json: [String: Any]) -> [UsageWindow] {
         guard json["status"] as? String == "SUCCESS",
               let command = json["command"] as? [String: Any], command["name"] as? String == "usage",
               let groups = (command["data"] as? [String: Any])?["groups"] as? [[String: Any]] else { return [] }
-        var pools: [[UsageWindow]] = [], caps: [UsageWindow] = []
+        var pools: [(name: String, windows: [UsageWindow])] = [], caps: [(group: String, window: UsageWindow)] = []
         for group in groups {
             let name = group["name"] as? String ?? "Quota"
             let isPool = name.range(of: "models", options: .caseInsensitive) != nil
@@ -679,18 +714,24 @@ enum AntigravityAdapter {
                 let window = b["window"] as? String
                 let label = window == "5h" ? "5-hour" : window == "weekly" ? "weekly" : b["name"] as? String ?? id
                 return UsageWindow(id: isPool ? id : "weekly_model_\(id)", label: "\(pool) · \(label)",
-                                   percentUsed: (b["remaining_fraction"] as? Double).map { (1 - $0) * 100 },
-                                   resetsAt: (b["reset_time"] as? String).flatMap(parseISO))
+                                   percentUsed: (b["remaining_fraction"] as? Double).map { (((1 - $0) * 100) * 10_000).rounded() / 10_000 },   // 1 - 0.8 lands just under 20, which would show as 19
+                                   resetsAt: (b["reset_time"] as? String).flatMap(parseISO), pool: isPool ? pool : nil)
             }
-            if isPool {
-                pools.append(windows.sorted { $0.label.hasSuffix("5-hour") && !$1.label.hasSuffix("5-hour") })   // session first, like Codex
-            } else {
-                caps += windows
+            if !isPool {
+                caps += windows.map { (name, $0) }
+            } else if !windows.isEmpty {
+                pools.append((pool, windows.sorted { $0.label.hasSuffix("5-hour") && !$1.label.hasSuffix("5-hour") }))   // session first, like Codex
             }
         }
-        return pools.filter { !$0.isEmpty }
-            .sorted { ($0.compactMap(\.percentUsed).max() ?? 0) > ($1.compactMap(\.percentUsed).max() ?? 0) }
-            .flatMap { $0 } + caps.sorted { ($0.percentUsed ?? 0) > ($1.percentUsed ?? 0) }
+        guard !pools.isEmpty else { return caps.map(\.window) }
+        for (group, window) in caps {
+            let word = group.split { !$0.isLetter }.first.map { $0.lowercased() } ?? ""
+            let home = pools.firstIndex { $0.name.lowercased().contains(word) } ?? 0
+            var cap = window
+            cap.pool = pools[home].name
+            pools[home].windows.append(cap)
+        }
+        return pools.flatMap(\.windows)
     }
 
     /// Only consulted when the report had no usage: agy also prints "not signed in" briefly while it
