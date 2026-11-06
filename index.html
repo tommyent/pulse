@@ -30,7 +30,10 @@
   --night: #0f0d16; --night-2: #1a1630; --text: #f2f0f7; --muted: #b7b1c8; --faint: #8d86a3;
   --glow: #6e52cf; --bar: #a993ff; --on-bar: #150d33;
   /* from the app's source (Models.swift, Appearance.swift, Battery.swift, Breaks.swift) */
-  --p-surface: #121214; --p-track: #252527; --p-label: rgba(255, 255, 255, 0.85);   /* SwiftUI .primary in dark mode is labelColor, white at 85% */
+  --p-surface: #090909; --p-track: #252527;
+  --p-coat: radial-gradient(ellipse 85% 85% at 16% -8%, rgba(255,255,255,.19), rgba(255,255,255,.06) 45%, transparent), #090909;   /* PulseSurface */
+  --p-rim: linear-gradient(to bottom right, rgba(255,255,255,.42), #252527 50%, #1c1c1c);   /* PulseRim */
+  --p-label: rgba(255, 255, 255, 0.85);   /* SwiftUI .primary in dark mode is labelColor, white at 85% */
   --p-claude: #ff5700; --p-codex: #216dff; --p-grok: #ffb400; --p-agy: #a358ff; --p-agy2: #22baff;
   --p-green: #30d158; --p-yellow: #ffd60a; --p-break-bar: #a993ff;
 }
@@ -86,13 +89,16 @@ h1 em { font-style: normal; color: var(--bar); }
 /* At rest the rail is small: 28 pt rings without numbers. While the pointer is over it (.open) they grow to 52 pt with
    their percentages. Pushed into its edge (.tucked) only a 7 pt sliver stays on screen, with a tick per ring. */
 .rail { position: fixed; z-index: 12; right: 12px; top: 50%; transform: translateY(-50%); touch-action: none; cursor: grab;
-  display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 10px 8px; border-radius: 18px;
-  background: var(--p-surface); box-shadow: inset 0 0 0 1px var(--p-track), 0 10px 30px rgba(0,0,0,.45);
-  transition: gap .28s, padding .28s, border-radius .28s, translate .35s cubic-bezier(.25,.1,.25,1); }
-.rail.open { gap: 18px; padding: 16px 12px; border-radius: 26px; }
+  display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px 8px; border-radius: 999px;
+  background: var(--p-coat); box-shadow: 0 10px 30px rgba(0,0,0,.45);
+  transition: gap .28s, padding .28s, translate .35s cubic-bezier(.25,.1,.25,1); }
+.rail.open { gap: 18px; padding: 22px 12px; }
+/* A 1 pt rim that follows the light, which a box-shadow can't do */
+.rail::before, .hint::before { content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; background: var(--p-rim); pointer-events: none;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
 .rail .ring, .rail .pet { zoom: .5385; transition: zoom .28s; }   /* 28 / 52 */
 .rail.open .ring, .rail.open .pet { zoom: 1; }
-@media (max-height: 800px) and (min-width: 761px) { .rail.open { gap: 6px; padding: 10px 12px; } .rail.open .ring, .rail.open .pet { zoom: .86; } }
+@media (max-height: 800px) and (min-width: 761px) { .rail.open { gap: 6px; padding: 14px 12px; } .rail.open .ring, .rail.open .pet { zoom: .86; } }
 .rail:not(.open) .pct, .rail:not(.open) .wave { display: none; }
 .rail:not(.open) .pet:not(.waving) .sprite { animation: none; }   /* as in the app, the small pet holds still */
 .rail.tucked { translate: 49px 0; }   /* 12 pt margin + 44 pt rail - the 7 pt sliver */
@@ -102,9 +108,9 @@ h1 em { font-style: normal; color: var(--bar); }
 .rail.tucked .tick { opacity: 1; transition: opacity .16s .18s; }   /* in as the rail reaches its slot */
 .sliver { display: none; position: absolute; top: 0; bottom: 0; left: -12px; width: 19px; padding: 0; border: 0; background: none; cursor: pointer; border-radius: 0; }
 .rail.tucked .sliver { display: block; }
-/* below the resting rail (6 items x 28 + 5 gaps x 10 + 20 padding = 238 pt), clear of the section's screenshots */
-.hint { position: fixed; z-index: 11; right: 12px; top: calc(50% + 131px); max-width: 11rem; padding: .7rem .9rem;
-  border-radius: 14px; background: var(--p-surface); box-shadow: inset 0 0 0 1px var(--p-track), 0 10px 30px rgba(0,0,0,.45);
+/* below the resting rail (6 items x 28 + 5 gaps x 10 + 28 padding = 246 pt), clear of the section's screenshots */
+.hint { position: fixed; z-index: 11; right: 12px; top: calc(50% + 135px); max-width: 11rem; padding: .7rem .9rem;
+  border-radius: 14px; background: var(--p-coat); box-shadow: 0 10px 30px rgba(0,0,0,.45);
   font-size: .92rem; line-height: 1.4; color: var(--text); opacity: 0; transition: opacity .3s; pointer-events: none; }
 .hint.on { opacity: 1; }
 .rail.open ~ .hint { opacity: 0; }
@@ -164,6 +170,11 @@ kbd { font: 600 .92em Geist; padding: .05em .4em; border-radius: 6px; background
 .shot-nologo { display: none; }
 [data-logos="off"] .shot-logo { display: none; }
 [data-logos="off"] .shot-nologo { display: block; }
+.views { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2rem; margin-top: 4rem; }
+.views figure { margin: 0; min-width: 0; }
+.views img { width: 100%; height: auto; }
+.views figcaption { margin-top: .8rem; color: var(--muted); text-align: center; }
+@media (max-width: 760px) { .views { grid-template-columns: minmax(0, 1fr); } }
 
 /* the break: the season's film, or the break screen */
 .break { position: relative; margin-top: 18vh; padding: 14vh calc(130px + 4vw) 14vh 7vw; isolation: isolate;
@@ -206,7 +217,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
   .feature { grid-template-columns: 1fr; gap: 2.4rem; }
   .feature.flip > :first-child { order: 0; }
   body { padding-bottom: 76px; }
-  .rail { top: auto; bottom: 12px; right: 50%; transform: translateX(50%); flex-direction: row; padding: 8px 10px; }
+  .rail { top: auto; bottom: 12px; right: 50%; transform: translateX(50%); flex-direction: row; padding: 8px 14px; }
   .rail.tucked { translate: 0 49px; }
   .rail .item { gap: 0; }
   .rail .tick { left: 50%; top: -6px; translate: -50% 0; width: calc(4px + 16px * var(--used, 0) / 100); height: 3px; }
@@ -252,18 +263,30 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
       <h2>Every limit, at the edge of your screen.</h2>
       <p>Each ring's outer arc is the account's shortest limit, usually the 5-hour session, and the inner arc the next, usually the weekly limit. Click a ring for its limits and reset times. Usage refreshes every 2 minutes.</p>
       <ul>
+        <li><strong>Used or what's left, your choice.</strong> Rings show what you've used, or turn on Show what's left in Settings → Rings and they empty as you go. The cards follow.</li>
         <li><strong>98%, 99%, 100%.</strong> The ring gets a red badge and an alert stays in the middle of the screen until you dismiss it.</li>
         <li><strong>Per-model caps</strong> fill the gray disc behind the logo as they're used.</li>
         <li><strong>A ring per pool.</strong> Antigravity's Gemini models and its Claude and GPT models have separate limits, so each gets a ring. A switch in Settings hides the second.</li>
-        <li><strong>Show what's left</strong> turns the rings around, so they empty as you use them.</li>
         <li><strong>Small until you need it.</strong> The rings sit at a screen edge, small and without numbers until the pointer is over them; then they grow and show their percentages.</li>
         <li><strong>Flick it, tuck it.</strong> Drag the rail to any edge or flick it toward one, and it glides there. Push it into its own edge and it tucks away to a thin sliver, with a tick for each ring. Click the sliver to bring it back.</li>
       </ul>
     </div>
     <div>
-      <img class="shot shot-logo" src="assets/usage-card.png" width="891" height="1421" loading="lazy" alt="Pulse with sample numbers: the rail with the Codex pet, Claude, Codex, Grok, Antigravity's violet and sky blue rings and the battery, and the Claude card open with current session, all models and Fable">
-      <img class="shot shot-nologo" src="assets/usage-card-nologo.png" width="891" height="1421" loading="lazy" alt="The rail of usage rings with sample numbers and a usage card open: current session, all models and one model's limit">
+      <img class="shot shot-logo" src="assets/usage-card.png" width="891" height="1421" loading="lazy" alt="Pulse with sample numbers and Show what's left on: the rail with the Codex pet, Claude, Codex, Grok, Antigravity's violet and sky blue rings and the battery, and the Claude card open with current session, all models and Fable">
+      <img class="shot shot-nologo" src="assets/usage-card-nologo.png" width="891" height="1421" loading="lazy" alt="The rail of usage rings with sample numbers and Show what's left on, and a usage card open: current session, all models and one model's limit">
     </div>
+  </div>
+  <div class="views">
+    <figure>
+      <img class="shot-logo" src="assets/rail-used.png" width="752" height="202" loading="lazy" alt="The same rings showing what's used: 34%, 26%, 38%, 12% and 20%">
+      <img class="shot-nologo" src="assets/rail-used-nologo.png" width="752" height="202" loading="lazy" alt="The same rings showing what's used: 34%, 26%, 38%, 12% and 20%">
+      <figcaption>What you've used</figcaption>
+    </figure>
+    <figure>
+      <img class="shot-logo" src="assets/rail-left.png" width="752" height="202" loading="lazy" alt="The same rings showing what's left: 66%, 74%, 62%, 88% and 80%">
+      <img class="shot-nologo" src="assets/rail-left-nologo.png" width="752" height="202" loading="lazy" alt="The same rings showing what's left: 66%, 74%, 62%, 88% and 80%">
+      <figcaption>What's left</figcaption>
+    </figure>
   </div>
 </section>
 
@@ -279,8 +302,8 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
       </ul>
     </div>
     <div>
-      <img class="shot shot-logo" src="assets/pet-card.png" width="1520" height="718" loading="lazy" alt="The Codex pet card: the work model gpt-6.1-sol, talks at medium and helpers at xhigh, a text field, Send and the voice button">
-      <img class="shot shot-nologo" src="assets/pet-card-nologo.png" width="1520" height="718" loading="lazy" alt="The pet card: the work model gpt-6.1-sol, talks at medium and helpers at xhigh, a text field, Send and the voice button">
+      <img class="shot shot-logo" src="assets/pet-card.png" width="742" height="368" loading="lazy" alt="The Codex pet card: the work model gpt-6.1-sol, talks at medium and helpers at xhigh, a text field, Send and the voice button">
+      <img class="shot shot-nologo" src="assets/pet-card-nologo.png" width="742" height="368" loading="lazy" alt="The pet card: the work model gpt-6.1-sol, talks at medium and helpers at xhigh, a text field, Send and the voice button">
     </div>
   </div>
 </section>
@@ -452,7 +475,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
     } else { const bw = w - t, r = h / 2, m = h / 2;
       d = `M${r},0H${bw - r}A${r},${r} 0 0 1 ${bw - 4},${m - 8}L${w},${m}L${bw - 4},${m + 8}A${r},${r} 0 0 1 ${bw - r},${h}H${r}A${r},${r} 0 0 1 ${r},0Z`; }
     shape.setAttribute("viewBox", `0 0 ${w} ${h}`);
-    shape.innerHTML = `<defs><clipPath id="pill"><path d="${d}"/></clipPath></defs><path d="${d}" fill="var(--p-surface)"/><path d="${d}" fill="none" stroke="var(--p-track)" stroke-width="2" clip-path="url(#pill)"/>`;
+    shape.innerHTML = `<defs><clipPath id="pill"><path d="${d}"/></clipPath><radialGradient id="coat" cx=".16" cy="-.08" r=".85"><stop offset="0" stop-color="#fff" stop-opacity=".19"/><stop offset=".45" stop-color="#fff" stop-opacity=".06"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient><linearGradient id="rim" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".42"/><stop offset=".5" stop-color="#252527"/><stop offset="1" stop-color="#1c1c1c"/></linearGradient></defs><path d="${d}" fill="var(--p-surface)"/><path d="${d}" fill="url(#coat)"/><path d="${d}" fill="none" stroke="url(#rim)" stroke-width="2" clip-path="url(#pill)"/>`;
     chip.style.padding = phone.matches ? "0 12px 7px 7px" : "0 19px 0 7px";
   };
   const total = 30; let left = total, timer = null;
