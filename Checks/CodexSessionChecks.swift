@@ -839,7 +839,20 @@ enum CodexSessionChecks {
         try await wait("a new conversation starts") { lines(log).contains("turn/start:fresh") }
         assert(count("resume:fixture-thread:reconnect") == 1 && count("thread") == 2, "New conversation after an idle stop opens a new thread")
         finished("fixture-turn")
-        print("Idle stop checks passed: a closed card's quiet Codex stops after five minutes, the card or a call restarts the count, calls, helpers and reports keep it, the next message resumes")
+
+        // A new conversation with no turn yet isn't on disk, so a new server couldn't reopen it (Codex 0.167: "no rollout found"): it keeps Codex.
+        session.clear()
+        session.startVoice()
+        try await wait("a call in a new conversation goes live") { session.voiceState == .live || session.voiceState == .speaking }
+        session.stopVoice()
+        try await pass(10)
+        assert(running, "a conversation with no turn yet keeps Codex")
+        session.send("first words")
+        try await wait("its first turn starts") { lines(log).contains("turn/start:first words") }
+        finished("fixture-turn")
+        try await pass(5.1)
+        try await wait("once it has a turn, Codex stops") { !running && closes == 3 }
+        print("Idle stop checks passed: a closed card's quiet Codex stops after five minutes, the card or a call restarts the count, calls, helpers, reports and a conversation not yet on disk keep it, the next message resumes")
     }
 
     /// The conversation continues across restarts and a lost server, and never silently becomes a new one.

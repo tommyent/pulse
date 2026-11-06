@@ -355,6 +355,7 @@ final class CodexPetSession: ObservableObject {
     static var idlePoll: Duration = .seconds(10)   // checks shorten it
     var clock: () -> Date = { .now }               // checks move it
     private var idleSince: Date?                   // drained at every look since then
+    private var unwritten = false                  // a new thread with no turn yet: not on disk, so no new server could reopen it
     private var serverWatch: Task<Void, Never>?
 
     /// Hidden: stops the app-server as soon as it's drained. Card closed: once it has stayed drained for `idleStop`.
@@ -372,7 +373,7 @@ final class CodexPetSession: ObservableObject {
     }
 
     private func stopServerIfIdle() {
-        guard drained else { idleSince = nil; return }
+        guard drained, !unwritten else { idleSince = nil; return }
         guard let since = idleSince else { idleSince = clock(); return }
         if clock().timeIntervalSince(since) >= Self.idleStop { stopServerIfDrained() }
     }
@@ -842,6 +843,7 @@ final class CodexPetSession: ObservableObject {
         closesExpected = 0   // the old thread's closes no longer reach this conversation
         threadTask?.cancel(); lookup?.cancel(); lookup = nil
         threadId = nil; threadTask = nil   // next message starts a fresh thread, even if one was being created
+        unwritten = false
         resumeId = nil; legacyCandidate = nil; earlierCursor = nil; recoveryMessage = nil
         model = nil; effort = nil; folder = nil; conversationStarted = nil   // the draft stays: it may be for the new conversation
         defaults.removeObject(forKey: Self.savedThreadKey)
@@ -994,6 +996,7 @@ final class CodexPetSession: ObservableObject {
 
     struct Opened {
         let id: String; let history: [ChatMessage]; let earlier: String?; let note: String?; var reconnected = false
+        var new = false             // from thread/start, not a resume
         var model: String?, effort: String?, folder: String?, started: Date?
         var hintEffort: String?     // the helpers' effort its rule names
         var helperEffort: String?   // that effort, when the opened model and the pet's lower effort prove a split
@@ -1021,7 +1024,7 @@ final class CodexPetSession: ObservableObject {
             let opened = try await task.value
             guard conversation == epoch, threadTask == task || threadId == opened.id else { throw CancellationError() }
             if threadId != opened.id {   // the first caller to finish applies it, once
-                threadId = opened.id; resumeId = nil; legacyCandidate = nil
+                threadId = opened.id; resumeId = nil; legacyCandidate = nil; unwritten = opened.new
                 defaults.set(opened.id, forKey: Self.savedThreadKey)
                 defaults.set(true, forKey: Self.legacyCheckedKey)
                 // History goes above anything typed while it loaded.
@@ -1075,7 +1078,7 @@ final class CodexPetSession: ObservableObject {
         guard let id else {
             let r = try await server.request("thread/start", params)
             guard let id = (r["thread"] as? [String: Any])?["id"] as? String else { throw CodexAppServer.Failure.remote("thread/start returned no id") }
-            var opened = Opened(id: id, history: [], earlier: nil, note: nil)
+            var opened = Opened(id: id, history: [], earlier: nil, note: nil, new: true)
             opened.describe(r)
             opened.hintEffort = opening.work
             // A model Pulse named as Codex's default must be the one that opened; otherwise no split is claimed.
@@ -1184,6 +1187,7 @@ final class CodexPetSession: ObservableObject {
         switch method {
         case "turn/started":
             turnId = (p["turn"] as? [String: Any])?["id"] as? String
+            unwritten = false
             thinking = true   // also work the voice delegated, so Stop can interrupt it
         case "item/agentMessage/delta":
             guard let delta = p["delta"] as? String, let item = p["itemId"] as? String else { return }
