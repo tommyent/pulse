@@ -15,3 +15,8 @@ build/
 auth.json
 .credentials.json
 xcuserdata/
+# Local working files
+/docs/idea-runs/
+/docs/mockups/
+/PRODUCT.md
+/.beads.gate.lock
