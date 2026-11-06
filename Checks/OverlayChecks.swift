@@ -43,6 +43,14 @@ enum OverlayChecks {
             assert(Set(drawn).count == drawn.count, "\(name) draws a window twice: \(drawn)")
         }
 
+        // A tucked tick turns fully red only for the account's longest limit; a session or a model's cap gets a dot instead.
+        assert([w(h5, 10), w(week, 99)].longestLimitSpent, "a spent week")
+        assert([w("period_all", 98), w("period_GrokBuild", 40)].longestLimitSpent, "Grok's one limit")
+        assert(![w(h5, 100), w(week, 40)].longestLimitSpent, "a spent session isn't the week")
+        assert(![w("gemini-5h", 0), w("gemini-weekly", 1), w(argon, 100)].longestLimitSpent, "a model's cap isn't the week")
+        assert(![w("period_all", 61), w("period_GrokBuild", 100)].longestLimitSpent, "a product's share isn't the week")
+        assert(![w(fable, 100)].longestLimitSpent && ![UsageWindow]().longestLimitSpent, "only a cap, or nothing at all")
+
         // One ring per pool, in the order reported. A later pool can be switched off; an account with nothing still has its ring.
         func tagged(_ id: String, _ p: Double?, _ pool: String) -> UsageWindow { UsageWindow(id: id, label: id, percentUsed: p, resetsAt: nil, pool: pool) }
         let gemini = [tagged("gemini-5h", 0, "Gemini"), tagged("gemini-weekly", 1, "Gemini"), tagged(argon, 99, "Gemini")]

@@ -17,7 +17,6 @@ enum PulsePalette {
     // Match the dark menu progress track with opaque ink, independent of glass and backdrop.
     static let track = Color(.sRGB, red: 37.0 / 255, green: 37.0 / 255, blue: 39.0 / 255, opacity: 1)
     static let secondary = Color(.sRGB, red: 0.9, green: 0.9, blue: 0.9, opacity: 1)
-    static let border = track
 }
 
 struct RingTrack: View {
@@ -33,40 +32,43 @@ struct RingTrack: View {
 struct PulseSurface<S: Shape>: View {
     @Environment(\.pulseAppearance) private var appearance
     let shape: S
-    var polished = false   // the floating pieces; a whole screen or window stays flat
 
     var body: some View {
         switch appearance {
         case .glass:
             // Keep the foreground outside glass's adaptive foreground/vibrancy treatment.
             Color.clear.glassEffect(.regular, in: shape)
-                // A fixed legibility veil keeps untinted glass dark over bright windows too.
+                // A fixed legibility veil keeps untinted glass dark over bright windows too. A veil, because a tint in
+                // the glass only shows while its window is key. Much darker and the rings' tracks disappear into it.
                 .overlay { shape.fill(.black.opacity(0.65)) }
                 .environment(\.appearsActive, true)
-        case .solid where polished:
-            // A clear coat on deeper black: one soft light from the top left.
-            ZStack {
-                shape.fill(Color(white: 0.035))
-                shape.fill(EllipticalGradient(stops: [.init(color: .white.opacity(0.19), location: 0),
-                                                      .init(color: .white.opacity(0.06), location: 0.45),
-                                                      .init(color: .clear, location: 1)],
-                                              center: UnitPoint(x: 0.16, y: -0.08), startRadiusFraction: 0, endRadiusFraction: 0.85))
-            }
         case .solid:
             shape.fill(PulsePalette.surface)
         }
     }
 }
 
-/// A 1 pt rim. On Solid it follows the surface's light, brightest at the top left.
-private struct PulseRim<S: Shape>: View {
-    @Environment(\.pulseAppearance) private var appearance
+/// A clear coat: one soft light from the top left. It goes over the content, because under it the surface
+/// would brighten past the rings' fixed track shade and hide empty rings; over it, both rise together.
+private struct PulseLight<S: Shape>: View {
     let shape: S
 
     var body: some View {
-        let lit = LinearGradient(colors: [.white.opacity(0.42), PulsePalette.track, Color(white: 0.11)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        shape.fill(EllipticalGradient(stops: [.init(color: .white.opacity(0.17), location: 0),
+                                              .init(color: .white.opacity(0.05), location: 0.45),
+                                              .init(color: .clear, location: 1)],
+                                      center: UnitPoint(x: 0.16, y: -0.08), startRadiusFraction: 0, endRadiusFraction: 0.85))
+    }
+}
+
+/// A 1 pt rim that follows the light, brightest at the top left.
+private struct PulseRim<S: Shape>: View {
+    let shape: S
+
+    var body: some View {
         // Clip the centered stroke to keep a 1 pt rim inside shapes with tails too.
-        shape.stroke(appearance == .solid ? AnyShapeStyle(lit) : AnyShapeStyle(PulsePalette.border), style: StrokeStyle(lineWidth: 2, lineJoin: .round))
+        shape.stroke(LinearGradient(colors: [.white.opacity(0.42), PulsePalette.track, Color(white: 0.11)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                     style: StrokeStyle(lineWidth: 2, lineJoin: .round))
             .clipShape(shape)
     }
 }
@@ -99,13 +101,14 @@ private struct PulseWindowBacking: NSViewRepresentable {
 
 extension View {
     func pulseSurface<S: Shape>(in shape: S, bordered: Bool = true) -> some View {
-        background { PulseSurface(shape: shape, polished: true) }
+        background { PulseSurface(shape: shape) }
             .overlay {
-                if bordered {
-                    PulseRim(shape: shape)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
+                ZStack {
+                    PulseLight(shape: shape)
+                    if bordered { PulseRim(shape: shape) }
                 }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             }
     }
     func pulsePresentation(_ state: AppState) -> some View { modifier(PulsePresentation(state: state)) }

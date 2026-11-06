@@ -65,6 +65,8 @@ extension [UsageWindow] {
     var innerArc: UsageWindow? { ranked.dropFirst().first }
     /// The disc behind the logo.
     var disc: UsageWindow? { ranked.dropFirst(2).first }
+    /// The account's longest general limit, usually its week, is nearly spent. A session or one model's cap near its limit isn't this.
+    var longestLimitSpent: Bool { last { !$0.isCap && !$0.isShare }?.isNearLimit == true }
 
     /// One list per pool of models sharing limits, in the provider's order. Never empty: an account with no numbers still has its ring.
     var pools: [[UsageWindow]] {

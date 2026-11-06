@@ -833,8 +833,16 @@ struct OverlayView: View {
                     .overlay(alignment: tuckBand.alignment) {
                         let used = windows.outerArc?.percentUsed ?? 0
                         let shown = max(0, min(state.showsRemaining ? 100 - used : used, 100))
-                        Capsule().fill(windows.contains(where: \.isNearLimit) ? Color.red : id.accent(pool: pool.index))
+                        let spent = windows.longestLimitSpent
+                        Capsule().fill(spent ? Color.red : id.accent(pool: pool.index))
                             .frame(width: state.dock.isVertical ? 3 : 4 + 16 * shown / 100, height: state.dock.isVertical ? 4 + 16 * shown / 100 : 3)
+                            // Any other limit near its end keeps the ring's colour, with a red dot like the ring's badge
+                            .overlay(alignment: state.dock.isVertical ? .top : .leading) {
+                                if !spent, windows.contains(where: \.isNearLimit) {
+                                    Circle().fill(Color.red).frame(width: 4, height: 4)
+                                        .offset(x: state.dock.isVertical ? 0 : -6, y: state.dock.isVertical ? -6 : 0)
+                                }
+                            }
                             .offset(tuckBand.offset)
                             .opacity(state.tuckedAway && windows.outerArc?.percentUsed != nil ? (stale ? staleOpacity : 1) : 0)
                             // in only as the rail reaches its slot, so the ticks never sit on top of the rings
