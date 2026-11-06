@@ -1061,27 +1061,35 @@ struct MenuBarPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(state.enabledAccounts) { id in
-                if let snap = state.snapshots[id] {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 6) {
-                            BrandIcon(account: id, size: 13)
-                            Text("\(snap.displayName) Usage").font(.headline)
-                        }
-                        .foregroundStyle(.primary)
-                        ForEach(Array(snap.shownWindows().pools.enumerated()), id: \.offset) { pool, windows in
-                            ForEach(Array(windows.enumerated()), id: \.element.id) { i, w in
-                                WindowRow(window: w, tint: id.accent(pool: pool).opacity(i == 0 ? 1 : 0.5))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(state.enabledAccounts) { id in
+                        if let snap = state.snapshots[id] {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 6) {
+                                    BrandIcon(account: id, size: 13)
+                                    Text("\(snap.displayName) Usage").font(.headline)
+                                }
+                                .foregroundStyle(.primary)
+                                ForEach(Array(snap.shownWindows().pools.enumerated()), id: \.offset) { pool, windows in
+                                    ForEach(Array(windows.enumerated()), id: \.element.id) { i, w in
+                                        WindowRow(window: w, tint: id.accent(pool: pool).opacity(i == 0 ? 1 : 0.5))
+                                    }
+                                }
+                                if let msg = snap.healthMessage {
+                                    Text(msg).font(.caption).foregroundStyle(PulsePalette.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)   // wraps: a failure's reason is the part you need
+                                }
+                                ConnectButton(snapshot: snap)
                             }
                         }
-                        if let msg = snap.healthMessage {
-                            Text(msg).font(.caption).foregroundStyle(PulsePalette.secondary)
-                                .fixedSize(horizontal: false, vertical: true)   // wraps: a failure's reason is the part you need
-                        }
-                        ConnectButton(snapshot: snap)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // shortcut: the key window's screen, not always the popover's; read the popover's own if a second display ever clips it
+            .frame(maxHeight: (NSScreen.main?.visibleFrame.height ?? 800) - 230)
+            .fixedSize(horizontal: false, vertical: true)   // grows with its rows, and scrolls before they push the buttons off the screen
             if state.enabledAccounts.isEmpty {
                 Text("All accounts disabled").foregroundStyle(PulsePalette.secondary)
             }
