@@ -80,7 +80,7 @@ final class WebLogin: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDele
     static func presentClaude(onDone: @escaping () -> Void) {
         present(title: "Connect Claude", url: "https://claude.ai/login", onDone: onDone) { _ in
             // login shares the default WKWebsiteDataStore with the hidden fetcher
-            await ClaudeWeb.shared.fetchUsage() != nil
+            await ClaudeWeb.shared.fetchUsage().usage != nil
         }
     }
 
@@ -169,11 +169,14 @@ final class WebLogin: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDele
 final class ClaudeWeb: NSObject, WKNavigationDelegate {
     static let shared = ClaudeWeb()
     private var web: WKWebView?
-    private var loadContinuation: CheckedContinuation<Void, Never>?
+    private let pageLoad = SharedWait()   // a Connect window's check and a poll can both need the page: one load serves both
+    private var pageReady = false   // it finished loading: a load still running already names claude.ai, so the URL alone doesn't say
 
-    /// Returns the usage payload, or nil when not signed in / unreachable.
-    func fetchUsage() async -> [String: Any]? {
+    /// The usage payload, or nil when not signed in or unreachable. `pageLoaded` false: the page never loaded, so a nil
+    /// says nothing about the sign-in.
+    func fetchUsage() async -> (usage: [String: Any]?, pageLoaded: Bool) {
         let web = await ensureLoaded()
+        guard pageReady else { return (nil, false) }
         let js = """
         const orgs = await fetch('/api/organizations',{headers:{accept:'application/json'}}).then(r=>r.ok?r.json():null);
         if (!orgs || !orgs.length) { return null; }
@@ -186,8 +189,8 @@ final class ClaudeWeb: NSObject, WKNavigationDelegate {
               let str = result as? String,
               let obj = try? JSONSerialization.jsonObject(with: Data(str.utf8)) as? [String: Any],
               let usage = obj["usage"] as? [String: Any]
-        else { return nil }
-        return usage
+        else { return (nil, true) }
+        return (usage, true)
     }
 
     /// Disconnect: drop the claude.ai web session (cookies, storage) and the hidden webview.
@@ -197,33 +200,26 @@ final class ClaudeWeb: NSObject, WKNavigationDelegate {
         await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
                                for: records.filter { $0.displayName.contains("claude.ai") })
         web = nil
+        pageReady = false
+        pageLoad.finish()   // whoever waited on the old view's load: the next caller loads the new one
     }
 
     private func ensureLoaded() async -> WKWebView {
-        if let web, web.url?.host?.hasSuffix("claude.ai") == true { return web }
+        if let web, pageReady, web.url?.host?.hasSuffix("claude.ai") == true { return web }
         let web = self.web ?? WKWebView(frame: .zero)
         web.customUserAgent = safariUA
         self.web = web
         web.navigationDelegate = self
-        web.load(URLRequest(url: URL(string: "https://claude.ai/robots.txt")!))
-        await withCheckedContinuation { cont in
-            loadContinuation = cont
-            Task { @MainActor in   // don't hang the poll loop if the load stalls
-                try? await Task.sleep(for: .seconds(15))
-                self.loadContinuation?.resume()
-                self.loadContinuation = nil
-            }
+        await pageLoad.join(limit: .seconds(15)) {   // the limit: don't hang the poll loop if the load stalls
+            if !web.isLoading { web.load(URLRequest(url: URL(string: "https://claude.ai/robots.txt")!)) }   // a slow one keeps going
         }
         return web
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        loadContinuation?.resume()
-        loadContinuation = nil
+        if webView === web { pageReady = true }
+        pageLoad.finish()
     }
 
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        loadContinuation?.resume()
-        loadContinuation = nil
-    }
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { pageLoad.finish() }
 }

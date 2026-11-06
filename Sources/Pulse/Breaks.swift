@@ -3,6 +3,21 @@ import Foundation
 /// Break reminders without any UI or system calls: the settings, the schedule, the overlay's colours and picking
 /// the idea. The checks compile this file on its own.
 
+/// Passed in a decoder's `userInfo`: says whether a decode skipped a value that was there, so the file it came from can be
+/// kept before the next save replaces it.
+final class DecodeLosses: @unchecked Sendable { var any = false }   // one decode, on one thread
+extension CodingUserInfoKey { static let decodeLosses = CodingUserInfoKey(rawValue: "pulse.decodeLosses")! }
+
+extension KeyedDecodingContainer {
+    /// A value this version can't read, such as a newer Pulse's, costs only that value, and is noted in `DecodeLosses`.
+    func lenient<T: Decodable>(_ type: T.Type, forKey key: Key, in decoder: Decoder) -> T? {
+        do { return try decodeIfPresent(type, forKey: key) } catch {
+            (decoder.userInfo[.decodeLosses] as? DecodeLosses)?.any = true
+            return nil
+        }
+    }
+}
+
 enum BreakKind: String, Codable { case micro, long }
 
 /// What counts as a break taken without one on screen. `idle`: the screen locked, the Mac asleep, or 5 minutes with
@@ -34,27 +49,27 @@ struct BreakSettings: Codable, Equatable {
 
     init() {}
 
-    // Every field may be missing, so a state.json from an older or newer Pulse still decodes.
+    // Every field may be missing or unreadable, so a state.json from an older or newer Pulse still decodes: own ideas survive a bad colour.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = BreakSettings()
-        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
-        microEvery = try c.decodeIfPresent(TimeInterval.self, forKey: .microEvery) ?? d.microEvery
-        microLength = try c.decodeIfPresent(TimeInterval.self, forKey: .microLength) ?? d.microLength
-        longEnabled = try c.decodeIfPresent(Bool.self, forKey: .longEnabled) ?? d.longEnabled
-        longEvery = try c.decodeIfPresent(TimeInterval.self, forKey: .longEvery) ?? d.longEvery
-        longLength = try c.decodeIfPresent(TimeInterval.self, forKey: .longLength) ?? d.longLength
-        color = try c.decodeIfPresent(String.self, forKey: .color) ?? d.color
-        showAgents = try c.decodeIfPresent(Bool.self, forKey: .showAgents) ?? d.showAgents
-        partyMode = try c.decodeIfPresent(Bool.self, forKey: .partyMode) ?? d.partyMode
-        holidays = try c.decodeIfPresent(Bool.self, forKey: .holidays) ?? d.holidays
-        ideas = try c.decodeIfPresent(Bool.self, forKey: .ideas) ?? d.ideas
-        ideaLevel = min(2, max(0, try c.decodeIfPresent(Int.self, forKey: .ideaLevel) ?? d.ideaLevel))
-        ownIdeas = try c.decodeIfPresent(String.self, forKey: .ownIdeas) ?? d.ownIdeas
-        awayMode = (try? c.decodeIfPresent(BreakAwayMode.self, forKey: .awayMode)) ?? d.awayMode
-        waitForCalls = try c.decodeIfPresent(Bool.self, forKey: .waitForCalls) ?? d.waitForCalls
-        startSound = try c.decodeIfPresent(String.self, forKey: .startSound) ?? d.startSound
-        endSound = try c.decodeIfPresent(String.self, forKey: .endSound) ?? d.endSound
+        enabled = c.lenient(Bool.self, forKey: .enabled, in: decoder) ?? d.enabled
+        microEvery = c.lenient(TimeInterval.self, forKey: .microEvery, in: decoder) ?? d.microEvery
+        microLength = c.lenient(TimeInterval.self, forKey: .microLength, in: decoder) ?? d.microLength
+        longEnabled = c.lenient(Bool.self, forKey: .longEnabled, in: decoder) ?? d.longEnabled
+        longEvery = c.lenient(TimeInterval.self, forKey: .longEvery, in: decoder) ?? d.longEvery
+        longLength = c.lenient(TimeInterval.self, forKey: .longLength, in: decoder) ?? d.longLength
+        color = c.lenient(String.self, forKey: .color, in: decoder) ?? d.color
+        showAgents = c.lenient(Bool.self, forKey: .showAgents, in: decoder) ?? d.showAgents
+        partyMode = c.lenient(Bool.self, forKey: .partyMode, in: decoder) ?? d.partyMode
+        holidays = c.lenient(Bool.self, forKey: .holidays, in: decoder) ?? d.holidays
+        ideas = c.lenient(Bool.self, forKey: .ideas, in: decoder) ?? d.ideas
+        ideaLevel = min(2, max(0, c.lenient(Int.self, forKey: .ideaLevel, in: decoder) ?? d.ideaLevel))
+        ownIdeas = c.lenient(String.self, forKey: .ownIdeas, in: decoder) ?? d.ownIdeas
+        awayMode = c.lenient(BreakAwayMode.self, forKey: .awayMode, in: decoder) ?? d.awayMode
+        waitForCalls = c.lenient(Bool.self, forKey: .waitForCalls, in: decoder) ?? d.waitForCalls
+        startSound = c.lenient(String.self, forKey: .startSound, in: decoder) ?? d.startSound
+        endSound = c.lenient(String.self, forKey: .endSound, in: decoder) ?? d.endSound
     }
 
     /// The sound a break event plays: one as a break starts, another when it runs its full length, so it can be taken

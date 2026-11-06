@@ -33,7 +33,7 @@ enum BatteryLevel: Int, Comparable {
     }
 }
 
-/// Saved inside state.json. New fields must be optional: a key missing there fails the whole file's decode.
+/// Saved inside state.json. New fields must be optional: a key missing there makes all of these fall back to their defaults.
 struct BatterySettings: Codable, Equatable {
     var showInRail = true
     var alerts = true

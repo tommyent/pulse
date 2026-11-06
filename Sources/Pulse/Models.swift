@@ -69,6 +69,25 @@ struct AccountSnapshot: Codable, Identifiable {
         return stale
     }
 
+    /// A fetch that ran out of time, for AppState to handle like any other failed fetch.
+    static func noAnswer(_ id: AccountID) -> AccountSnapshot {
+        AccountSnapshot(id: id, displayName: id.displayName, planLabel: "", health: .providerError, windows: [],
+                        fetchedAt: .now, source: .cliStatus, detail: "\(id.displayName) didn't answer")
+    }
+
+    /// The windows to draw. Until its reset, a stale number can only have grown, so it stays, dimmed by the views, its
+    /// near-limit badge included. Past its reset it's known to be wrong, so it becomes unknown instead of still reading 99%.
+    /// The rail rereads this on every refresh pass (`refreshing` is published), so that shows within one poll of the reset.
+    func shownWindows(now: Date = .now) -> [UsageWindow] {
+        guard health == .stale else { return windows }
+        return windows.map { w in
+            guard let reset = w.resetsAt, reset <= now else { return w }
+            var unknown = w
+            unknown.percentUsed = nil
+            return unknown
+        }
+    }
+
     /// Windows that just reached 98, 99 or 100%, each step announced once per reset period. `alerted` maps
     /// "account.window" (98, as before there were steps) and "account.window@99" / "@100" to the reset already
     /// announced; dropping under 95% rearms them except for Grok, whose dips do not prove a reset.
@@ -121,6 +140,73 @@ struct AccountSnapshot: Codable, Identifiable {
     }
 }
 
+
+/// Keeps one stuck provider from stopping the rest. A task group waits for every child, and a fetch blocked on a `security`
+/// prompt or a WebKit call ignores cancellation, so `answer` waits on a stream instead: past `limit` the fetch counts as
+/// failed and is cancelled. If it still doesn't end it isn't started again until it does, since each new one would only
+/// queue behind the same prompt or lock and hold another thread. The default limit leaves room for the slowest honest
+/// failure: Grok's CLI path timing out at every step before its web fallback, about 109 s.
+@MainActor
+final class ProviderFetches {
+    private let limit: Duration
+    private let fetch: @Sendable (AccountID) async -> AccountSnapshot
+    private var running: Set<AccountID> = []
+
+    init(limit: Duration = .seconds(120), fetch: @escaping @Sendable (AccountID) async -> AccountSnapshot) {
+        self.limit = limit
+        self.fetch = fetch
+    }
+
+    /// nil: the provider's last fetch still hasn't ended, so there's nothing new; its snapshot already says it didn't answer.
+    func answer(_ id: AccountID) async -> AccountSnapshot? {
+        guard running.insert(id).inserted else { return nil }
+        let (answers, sink) = AsyncStream.makeStream(of: AccountSnapshot.self)
+        let work = Task {
+            let snap = await fetch(id)
+            running.remove(id)   // before the answer, so a pass straight after this one can fetch again
+            sink.yield(snap)
+        }
+        let timer = Task {
+            try? await Task.sleep(for: limit)
+            if !Task.isCancelled { sink.yield(.noAnswer(id)) }
+        }
+        let first = await answers.first { _ in true }
+        timer.cancel()
+        work.cancel()
+        sink.finish()   // a late answer goes nowhere
+        return first
+    }
+}
+
+/// Everyone asking for one slow thing waits on a single attempt, until `finish` or `limit`. An earlier attempt's limit never
+/// wakes a later attempt's waiters.
+@MainActor
+final class SharedWait {
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var attempt = 0
+
+    /// Joins the attempt in flight, or calls `start` to begin one.
+    func join(limit: Duration, start: () -> Void) async {
+        await withCheckedContinuation { cont in
+            waiting.append(cont)
+            guard waiting.count == 1 else { return }
+            attempt += 1
+            let mine = attempt
+            start()
+            Task {
+                try? await Task.sleep(for: limit)
+                if attempt == mine { finish() }
+            }
+        }
+    }
+
+    func finish() {
+        let done = waiting
+        waiting = []
+        attempt += 1
+        done.forEach { $0.resume() }
+    }
+}
 
 /// "Resets in 51 min" / "Resets in 4h 12m" / "Resets Mon 3:00 AM" / "Resets Fri, Sep 25, 12:21 PM".
 /// Time follows the user's locale and 12/24-hour setting. From six days out a weekday alone is

@@ -141,11 +141,17 @@ enum ClaudeAdapter {
         }
 
         // Fallback: Pulse's own claude.ai web session (Connect… in Settings).
-        if let usage = await ClaudeWeb.shared.fetchUsage() {
+        let web = await ClaudeWeb.shared.fetchUsage()
+        if let usage = web.usage {
             snap.source = .officialUsagePage
             snap.windows = windows(from: usage)
             snap.health = snap.windows.isEmpty ? .providerError : .ok
             return snap
+        }
+        // A page that never loaded says nothing about the sign-in, so the last numbers stay.
+        if !web.pageLoaded {
+            snap.health = .providerError
+            snap.detail = "claude.ai didn't load"
         }
         return snap
     }

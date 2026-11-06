@@ -111,6 +111,8 @@ private struct CodexPet: View {
     }
 }
 
+private let staleOpacity = 0.5
+
 struct RingView: View {
     @Environment(\.showsRemaining) private var remaining
     let account: AccountID
@@ -120,6 +122,7 @@ struct RingView: View {
     var size: CGFloat = 52
     var showPercent = true
     var nearLimit = false   // any of the account's windows at 98%+, drawn or not
+    var stale = false   // the numbers are from an earlier refresh: dimmed, so they never pass for live ones
 
     var body: some View {
         VStack(spacing: 6) {
@@ -143,6 +146,8 @@ struct RingView: View {
                 BrandIcon(account: account, size: size * 0.4)
             }
             .frame(width: size, height: size)
+            .compositingGroup()   // dims the ring as one piece, so the track doesn't show through its arcs
+            .opacity(stale ? staleOpacity : 1)
             // Claude's accent is nearly red, so a red arc alone wouldn't read: same badge style as the pet's paused mic
             .overlay(alignment: .bottomTrailing) {
                 if nearLimit {
@@ -158,6 +163,7 @@ struct RingView: View {
                 Text(percent.map { "\(remaining ? 100 - Int($0) : Int($0))%" } ?? "—")   // 98.4 used is 98%, so 2% left
                     .font(.system(size: 15, weight: .semibold).monospacedDigit())
                     .foregroundStyle(Color.primary)
+                    .opacity(stale ? staleOpacity : 1)
             }
         }
     }
@@ -233,6 +239,8 @@ struct WindowRow: View {
                     Text(resetLabel(window.resetsAt)).font(.caption)
                 }
                 .foregroundStyle(PulsePalette.secondary)
+            } else if let reset = window.resetsAt, reset <= .now {
+                Text("Reset since the last update").font(.caption).foregroundStyle(PulsePalette.secondary)
             }
         }
     }
@@ -281,6 +289,7 @@ private struct BubbleShape: Shape {
 
 struct UsageCard: View {
     let snapshot: AccountSnapshot
+    let windows: [UsageWindow]   // read by the rail's view, which redraws every refresh: an open card follows a reset passing
     var tailEdge: Edge = .trailing
     var tailAt: CGFloat? = nil
 
@@ -293,7 +302,7 @@ struct UsageCard: View {
                 Text(snapshot.planLabel).font(.caption).foregroundStyle(PulsePalette.secondary)
             }
             .foregroundStyle(Color.primary)
-            ForEach(Array(snapshot.windows.enumerated()), id: \.element.id) { i, w in
+            ForEach(Array(windows.enumerated()), id: \.element.id) { i, w in
                 WindowRow(window: w, tint: i == 0 ? snapshot.id.accent : snapshot.id.accent.opacity(0.5))
             }
             if let msg = snapshot.healthMessage {
@@ -746,7 +755,8 @@ struct OverlayView: View {
             PetCard(tailEdge: tail, tailAt: tailAt("pet"), showUsage: state.persisted.enabled.contains(.codex) ? { toggleCard(.codex) } : nil)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
         } else if state.cardVisible, state.persisted.enabled.contains(state.selected) {
-            UsageCard(snapshot: state.snapshots[state.selected] ?? placeholder(state.selected),
+            let snapshot = state.snapshots[state.selected] ?? placeholder(state.selected)
+            UsageCard(snapshot: snapshot, windows: snapshot.shownWindows(),
                       tailEdge: tail, tailAt: tailAt(state.selected.rawValue))
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
         }
@@ -761,7 +771,8 @@ struct OverlayView: View {
                 PetRailItem(expanded: expanded, onFrame: { itemFrames["pet"] = $0 }, toggle: togglePet)
             }
             ForEach(state.enabledAccounts) { id in
-                let windows = state.snapshots[id]?.windows ?? []
+                let windows = state.snapshots[id]?.shownWindows() ?? []
+                let stale = state.snapshots[id]?.health == .stale
                 Button {
                     toggleCard(id)
                 } label: {
@@ -772,7 +783,8 @@ struct OverlayView: View {
                              tertiary: windows.disc?.percentUsed,
                              size: expanded ? 52 : 28,
                              showPercent: expanded,
-                             nearLimit: windows.contains(where: \.isNearLimit))
+                             nearLimit: windows.contains(where: \.isNearLimit),
+                             stale: stale)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -783,18 +795,18 @@ struct OverlayView: View {
                     Capsule().fill(windows.contains(where: \.isNearLimit) ? Color.red : id.accent)
                         .frame(width: state.dock.isVertical ? 3 : 4 + 16 * shown / 100, height: state.dock.isVertical ? 4 + 16 * shown / 100 : 3)
                         .offset(tuckBand.offset)
-                        .opacity(state.tuckedAway && windows.first?.percentUsed != nil ? 1 : 0)
+                        .opacity(state.tuckedAway && windows.first?.percentUsed != nil ? (stale ? staleOpacity : 1) : 0)
                         // in only as the rail reaches its slot, so the ticks never sit on top of the rings
                         .animation(state.tuckedAway ? .easeOut(duration: 0.16).delay(0.18) : .easeOut(duration: 0.1), value: state.tuckedAway)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
                 .accessibilityLabel("\(id.displayName) usage")
-                .accessibilityValue(windows.filter(\.isNearLimit).map { w in
+                .accessibilityValue((windows.filter(\.isNearLimit).map { w in
                     let p = w.percentUsed ?? 0
                     return state.showsRemaining ? "\(w.label) has \(100 - Int(p))% left, near its limit"
                         : "\(w.label) at \(Int(p))%, near its limit"
-                }.joined(separator: "; "))
+                } + (stale ? [state.snapshots[id]?.healthMessage ?? ""] : [])).joined(separator: "; "))
             }
             // last: the bottom of a vertical rail, the right end of a horizontal one
             if state.persisted.battery.showInRail, let reading = battery.reading {
@@ -915,7 +927,7 @@ struct MenuBarPopover: View {
                             Text("\(snap.displayName) Usage").font(.headline)
                         }
                         .foregroundStyle(.primary)
-                        ForEach(Array(snap.windows.enumerated()), id: \.element.id) { i, w in
+                        ForEach(Array(snap.shownWindows().enumerated()), id: \.element.id) { i, w in
                             WindowRow(window: w, tint: i == 0 ? id.accent : id.accent.opacity(0.5))
                         }
                         if let msg = snap.healthMessage {
@@ -1006,12 +1018,18 @@ struct SettingsView: View {
                     ForEach(AccountID.allCases) { id in
                         LabeledContent {
                             if id == .claude {
-                                if state.snapshots[id]?.source == .officialProtocol, state.snapshots[id]?.health == .ok {
+                                // a stale row is still signed in the same way: only a refresh failed, and the caption says so
+                                let signedIn = state.snapshots[id]?.health == .ok || state.snapshots[id]?.health == .stale
+                                if state.snapshots[id]?.source == .officialProtocol, signedIn {
                                     Text("via Claude Code").font(.caption).foregroundStyle(PulsePalette.secondary)
                                         .help("Reads Claude Code's own sign-in from the Keychain; no separate login needed")
-                                } else if state.snapshots[id]?.source == .officialUsagePage, state.snapshots[id]?.health == .ok {
+                                } else if state.snapshots[id]?.source == .officialUsagePage, signedIn {
                                     Button("Disconnect") {
-                                        Task { await ClaudeWeb.shared.clearSession(); await state.refreshAll() }
+                                        Task {
+                                            await ClaudeWeb.shared.clearSession()
+                                            state.snapshots[id] = nil   // signed out on request: a slow page mustn't keep the old numbers as stale
+                                            await state.refreshAll()
+                                        }
                                     }
                                 } else {
                                     Button("Connect…") {
