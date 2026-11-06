@@ -5,9 +5,17 @@ A macOS menu bar app with floating usage rings for Claude, Codex, Grok and Antig
 Everything runs on your own subscription sign-ins. There are no API keys, no accounts with Pulse, and no backend of its own.
 
 <p align="center">
-  <img src="docs/screenshots/usage-card.png" width="445" alt="The rail at the screen edge with sample numbers: the Codex pet, Claude, Codex, Grok, Antigravity's violet and sky blue rings and the battery, with the Claude card open: current session, all models and Fable, each with its reset time">
+  <img src="docs/screenshots/usage-card.png" width="445" alt="The rail at the screen edge with sample numbers and Show what's left on: the Codex pet, Claude, Codex, Grok, Antigravity's violet and sky blue rings and the battery, with the Claude card open: current session, all models and Fable, each with what's left and its reset time">
   &nbsp;
-  <img src="docs/screenshots/pet-card.png" width="377" alt="The Codex pet card with an empty chat: the work model and effort in the header, a text field, Send and the voice button">
+  <img src="docs/screenshots/pet-card.png" width="371" alt="The Codex pet card with an empty chat: the work model and effort in the header, a text field, Send and the voice button">
+</p>
+
+Rings show what you've used, or turn on **Settings → Rings → Show what's left** and they empty as you go. The cards follow. Here are the same numbers both ways:
+
+<p align="center">
+  <img src="docs/screenshots/rail-used.png" width="376" alt="Five rings showing what's used: 34%, 26%, 38%, 12% and 20%">
+  &nbsp;
+  <img src="docs/screenshots/rail-left.png" width="376" alt="The same rings showing what's left: 66%, 74%, 62%, 88% and 80%">
 </p>
 
 ## Requirements
@@ -71,9 +79,9 @@ Turn on **Settings → Breaks → Remind me to take breaks** for regular breaks 
   <img src="docs/screenshots/break-screen.png" width="600" alt="The break screen in violet: Time to take a break, 0:15 left with a violet bar, the idea Mix two teas in a cup and name the blend aloud with Reroll and Surprise me, then Back to Work, Pause and Snooze 5 min; the Codex pet, a small Codex agent and two Claude crabs along the bottom, and Grok and Antigravity floating at the top">
 </p>
 <p align="center">
-  <img src="docs/screenshots/break-countdown.png" width="270" alt="The countdown beside the rail: 28 seconds in an emptying ring and 20-sec break">
+  <img src="docs/screenshots/break-countdown.png" width="260" alt="The countdown beside the rail: 28 seconds in an emptying ring and 20-sec break">
   &nbsp;
-  <img src="docs/screenshots/break-next.png" width="405" alt="The pointer over the rail shows Next: micro in 7 min, long in 47 min">
+  <img src="docs/screenshots/break-next.png" width="339" alt="The pointer over the rail shows Next: micro in 18 min, and Pause for 30 min, 1 hr or 2 hr">
 </p>
 
 Thirty seconds before a break, a small countdown grows out of the middle of the rail: the seconds left in a ring that empties, and the break's length. Click it to start the break now; otherwise the break starts when the ring is empty. With the rings hidden, the countdown appears at the middle of the screen's right edge.
@@ -93,7 +101,7 @@ The break covers every display: a dark screen with a coloured glow at its edges,
   <img src="docs/screenshots/break-agents.png" width="600" alt="The break screen in a custom teal colour with stand-in agents: the Codex pet sliding down a rope, a small Codex agent standing on Back to Work, a Claude crab pacing and one waiting with an exclamation mark, Antigravity floating, and Grok waiting with an exclamation mark">
 </p>
 <p align="center">
-  <img src="docs/screenshots/settings-breaks.png" width="400" alt="Settings, Breaks tab: the reminder switch, micro break every 10 min for 20 s, long break every 60 min for 5 min, time away counting only when locked or asleep (fixed schedule), the colour presets, custom colour #3FB8AF, Blow as the sound at start and Glass at end, and Show agents that are working">
+  <img src="docs/screenshots/settings-breaks.png" width="400" alt="Settings, Breaks tab: the reminder switch, micro break every 20 min for 20 s, long break every 60 min for 5 min, time away counting when locked, asleep or idle for 5 minutes, Wait during calls, the colour presets with violet chosen, Blow as the sound at start, Glass at the end, and the Show agents switch">
   &nbsp;
   <img src="docs/screenshots/break-history.png" width="400" alt="Settings, Breaks, History: today 2 taken, 1 ended early, 1 snoozed, 1 skipped, 2 away, and the latest breaks with their times and how each ended">
 </p>
