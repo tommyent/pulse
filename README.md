@@ -102,7 +102,7 @@ To try it without waiting, turn breaks on and run `defaults write io.github.tomm
 
 ### The Codex pet
 
-Click the pet to chat. **Settings → Codex pet → Show the Codex pet** hides it, separately from the Codex usage ring. Hiding it, or the usage rings on the desktop, ends a call, frees the voice shortcut and starts nothing new; work already running finishes, then Pulse stops Codex until you open the pet again.
+Click the pet to chat. **Settings → Codex pet → Show the Codex pet** hides it, separately from the Codex usage ring. Hiding it, or the usage rings on the desktop, ends a call, frees the voice shortcut and starts nothing new; work already running finishes, then Pulse stops Codex until you open the pet again. With the pet showing, Pulse also stops Codex and its MCP servers once the card has been closed with nothing running for five minutes; opening the card picks up the same conversation.
 
 - **Voice:** the waveform button below the expanded pet ring starts or ends voice without opening the pop-out. **Command-click the pet** to start voice, then Command-click again to end the session; another Command-click starts a new voice session. Command-click leaves the pop-out closed (or preserves the current card).
 - **Status:** the **ring around the pet** is gray when voice is off, yellow only while connecting, Codex blue while listening, and red when the microphone is paused. A white slashed-microphone badge and **Microphone paused · voice still on** in the card also show the paused state; replies can still play. The waveform buttons use the same colors, and Pulse plays the macOS Pluck sound when the microphone goes live and Pong when a live call ends.

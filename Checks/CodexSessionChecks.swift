@@ -482,13 +482,14 @@ enum CodexSessionChecks {
                 fputs("--suite requires a suite name\n", stderr); exit(64)
             }
             let suite = CommandLine.arguments[option + 1]
-            if ["voice-results", "helpers", "helper-races"].contains(suite) {
+            if ["voice-results", "helpers", "helper-races", "idle"].contains(suite) {
                 try prepareNativeVoice(in: dir, server: cli)
             }
             switch suite {
             case "voice-results": try await checkVoiceResults(in: dir)
             case "helpers": try await checkHelpers(in: dir)
             case "helper-races": try await checkHelperRaces(in: dir)
+            case "idle": try await checkIdleStop(in: dir)
             case "work-model": try await checkWorkModel(in: dir)
             case "lifecycle": try await checkLifecycle(in: dir)
             case "recovery": try await checkRecovery(in: dir)
@@ -539,6 +540,7 @@ enum CodexSessionChecks {
         try await checkVoiceResults(in: dir)
         try await checkHelpers(in: dir)
         try await checkHelperRaces(in: dir)
+        try await checkIdleStop(in: dir)
         try await checkAuditFixes(in: dir)
         try await checkVoiceRecovery(in: dir)
         try await checkThreadTrims(in: dir)
@@ -748,6 +750,96 @@ enum CodexSessionChecks {
         unsetenv("PULSE_CHECK_SLOW_START")
         session.hidden = false
         print("Lifecycle checks passed: delegated voice work, results after hangup, failures, retries, waiting state, stale work after New conversation, Stop before and during turn start, a lost server, a hidden pet")
+    }
+
+    /// A closed card lets an idle app-server go after five quiet minutes, never while a turn, a helper, its report or a
+    /// call is on, and the next message reconnects to the same conversation. Needs the native voice fake.
+    @MainActor
+    static func checkIdleStop(in dir: URL) async throws {
+        let log = dir.appendingPathComponent("idle.log")
+        setenv("PULSE_CHECK_LOG", log.path, 1)
+        CodexAppServer.shared.stop()
+        try await Task.sleep(for: .milliseconds(50))
+        let session = CodexPetSession(workspace: dir.appendingPathComponent("pet-idle"), defaults: isolatedDefaults())
+        session.playCue = { _ in }
+        session.muted = true   // the fake helper expects calls to open muted
+        var now = Date()
+        session.clock = { now }
+        let poll = CodexPetSession.idlePoll
+        CodexPetSession.idlePoll = .milliseconds(20)
+        defer { session.cardOpen = true; CodexPetSession.idlePoll = poll }   // ends the watch
+        var closes = 0
+        let forward = CodexAppServer.shared.onNotification!
+        CodexAppServer.shared.onNotification = { method, params in forward(method, params); if method == "pulse/closed" { closes += 1 } }
+        defer { CodexAppServer.shared.onNotification = forward }
+        func on(_ thread: String, _ method: String, _ fields: [String: Any] = [:]) {
+            var p = fields; p["threadId"] = thread
+            CodexAppServer.shared.onNotification?(method, p)
+        }
+        func settle() async throws { try await Task.sleep(for: .milliseconds(150)) }
+        func pass(_ minutes: Double) async throws { try await settle(); now += minutes * 60; try await settle() }   // the watch looks before and after
+        func finished(_ turn: String) { on("fixture-thread", "turn/completed", ["turn": ["id": turn, "status": "completed"]]) }
+        var running: Bool { CodexAppServer.shared.ready }
+        func count(_ line: String) -> Int { lines(log).filter { $0 == line }.count }
+
+        session.send("hello")
+        try await wait("a turn starts") { session.thinking && lines(log).contains("turn/start:hello") }
+        finished("fixture-turn")
+        try await pass(10)
+        assert(running, "an open card keeps Codex however long it's quiet")
+
+        session.cardOpen = false
+        try await pass(4)
+        assert(running, "four quiet minutes after closing the card, Codex still runs")
+        session.cardOpen = true; session.cardOpen = false   // opening the card starts the quiet over
+        try await pass(4)
+        assert(running, "reopening the card restarted the countdown")
+
+        // A call from the rail's waveform, card closed: it keeps Codex however long it lasts; the quiet counts from its end.
+        session.startVoice()
+        try await wait("a call goes live (\(session.voiceState), \(session.status ?? "no status"))") { session.voiceState == .live || session.voiceState == .speaking }
+        try await pass(10)
+        assert(running, "a call keeps Codex")
+        session.stopVoice()
+        try await pass(4)
+        assert(running, "the quiet counts from the call's end")
+        let shown = session.messages.count
+        try await pass(1.1)
+        try await wait("five quiet minutes with the card closed stop Codex") { !running && closes == 1 }
+        try await settle()
+        assert(session.status == nil && session.messages.count == shown, "an idle stop is no news and keeps the conversation on screen (status \(session.status ?? "none"))")
+
+        // The next message reconnects to the same conversation.
+        session.send("after idle")
+        try await wait("the next message reconnects") { lines(log).contains("turn/start:after idle") }
+        assert(count("resume:fixture-thread:reconnect") == 1 && count("thread") == 1, "an idle stop resumes the saved conversation, never a new one")
+
+        // A helper, then its report, keep Codex too.
+        let item: [String: Any] = ["type": "subAgentActivity", "id": "spawn-idle", "kind": "started", "agentThreadId": "idle-helper", "agentPath": "/root/idle_helper"]
+        on("fixture-thread", "item/started", ["turnId": "fixture-turn", "item": item]); on("fixture-thread", "item/completed", ["turnId": "fixture-turn", "item": item])
+        on("idle-helper", "turn/started", ["turn": ["id": "ih-work"]])
+        finished("fixture-turn")
+        try await wait("the helper works while the pet is free") { session.helpersWorking == 1 && !session.thinking }
+        try await pass(10)
+        assert(running, "a running helper keeps Codex")
+        on("idle-helper", "turn/completed", ["turn": ["id": "ih-work", "status": "completed", "items": [["id": "ih-final", "type": "agentMessage", "text": "Done.", "phase": "final_answer"]]]])
+        try await wait("the pet is asked to report") { lines(log).contains { $0.hasPrefix("report:") } }
+        try await pass(10)
+        assert(running, "a report on its way keeps Codex")
+        on("fixture-thread", "turn/completed", ["turn": ["id": "report-1", "status": "completed",
+                                                  "items": [["id": "r-final", "type": "agentMessage", "text": "A helper finished.", "phase": "final_answer"]]]])
+        try await pass(4)
+        assert(running, "the quiet counts from the report's end")
+        try await pass(1.1)
+        try await wait("then Codex stops") { !running && closes == 2 }
+
+        // New conversation still starts fresh after an idle stop.
+        session.clear()
+        session.send("fresh")
+        try await wait("a new conversation starts") { lines(log).contains("turn/start:fresh") }
+        assert(count("resume:fixture-thread:reconnect") == 1 && count("thread") == 2, "New conversation after an idle stop opens a new thread")
+        finished("fixture-turn")
+        print("Idle stop checks passed: a closed card's quiet Codex stops after five minutes, the card or a call restarts the count, calls, helpers and reports keep it, the next message resumes")
     }
 
     /// The conversation continues across restarts and a lost server, and never silently becomes a new one.

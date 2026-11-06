@@ -486,6 +486,7 @@ final class OverlayController {
             .removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [panel] visible in
+                CodexPetSession.shared.cardOpen = visible   // closed, an idle Codex stops after a while
                 if visible {
                     // typing needs key status; an accessory app activating shows no Dock or menu change
                     NSApp.activate(ignoringOtherApps: true)

@@ -13,7 +13,8 @@ private let voiceLog = Logger(subsystem: "io.github.tommyent.pulse", category: "
 // The pet's chat, live voice, and activity all ride on Codex's own app-server, which signs in with
 // ~/.codex/auth.json: the same subscription the Codex app uses, no API key. The process is spawned
 // when the pet card opens (to show the saved conversation and the work models) or by the first message
-// or voice start, and lives until Pulse quits (the usage rings never touch it).
+// or voice start. It stops once the pet is hidden, or its card has been closed with nothing running for
+// five minutes, and the next open reconnects (the usage rings never touch it).
 
 final class CodexAppServer: @unchecked Sendable {
     static let shared = CodexAppServer()
@@ -342,20 +343,39 @@ final class CodexPetSession: ObservableObject {
     var hidden = false {
         didSet {
             guard hidden != oldValue else { return }
-            hiddenWatch?.cancel(); hiddenWatch = nil
-            guard hidden else { return }
-            stopVoice()
-            // ponytail: a 2 s check for as long as it's hidden, since work ends on many paths (events, replies,
-            // timeouts) and a server may still be starting; one completion hook per path if the poll ever matters
-            hiddenWatch = Task { [weak self] in
-                while let self, self.hidden {
-                    self.stopServerIfDrained()
-                    guard (try? await Task.sleep(for: .seconds(2))) != nil else { return }
-                }
+            if hidden { stopVoice() }
+            watchServer()
+        }
+    }
+    /// The pet's chat card. Closed, an idle app-server (and the MCP servers Codex runs under it) stops once nothing has
+    /// been left to finish for `idleStop`; the next open or message reconnects to the same conversation. Pulse's panel
+    /// sets it; until then, as in checks that never do, nothing is timed.
+    var cardOpen = true { didSet { if cardOpen != oldValue { watchServer() } } }
+    static let idleStop: TimeInterval = 5 * 60
+    static var idlePoll: Duration = .seconds(10)   // checks shorten it
+    var clock: () -> Date = { .now }               // checks move it
+    private var idleSince: Date?                   // drained at every look since then
+    private var serverWatch: Task<Void, Never>?
+
+    /// Hidden: stops the app-server as soon as it's drained. Card closed: once it has stayed drained for `idleStop`.
+    private func watchServer() {
+        serverWatch?.cancel(); serverWatch = nil; idleSince = nil
+        guard hidden || !cardOpen else { return }
+        // ponytail: a poll (2 s hidden, 10 s closed), since work ends on many paths (events, replies, timeouts) and a
+        // server may still be starting; one completion hook per path if the poll ever matters
+        serverWatch = Task { [weak self] in
+            while let self, self.hidden || !self.cardOpen {
+                if self.hidden { self.stopServerIfDrained() } else { self.stopServerIfIdle() }
+                guard (try? await Task.sleep(for: self.hidden ? .seconds(2) : Self.idlePoll)) != nil else { return }
             }
         }
     }
-    private var hiddenWatch: Task<Void, Never>?
+
+    private func stopServerIfIdle() {
+        guard drained else { idleSince = nil; return }
+        guard let since = idleSince else { idleSince = clock(); return }
+        if clock().timeIntervalSince(since) >= Self.idleStop { stopServerIfDrained() }
+    }
     private var quietStop = false   // Pulse stopped the server itself: not news for the status line
     private var queuedRequests = 0   // typed messages and reports not yet answered by Codex
     @Published private(set) var waitingOnYou = false   // Codex is paused on an approval or a question
@@ -845,6 +865,7 @@ final class CodexPetSession: ObservableObject {
     /// `retryOnAudioGlitch` is false only for the one automatic retry below, so it can never loop.
     func startVoice(retryOnAudioGlitch: Bool = true) {
         guard voiceState == .off else { return }
+        idleSince = nil   // the rail's waveform starts a call with the card closed: the quiet starts over
         voiceMayRetry = retryOnAudioGlitch
         callNumber += 1; voiceInputs = [:]; delegations = [:]; heard = [:]; pairedBy = [:]; repeatOf = [:]; answeredInputs = []
         forgetAsks(); answered = []; assembling = []; heardOut = []
@@ -1142,13 +1163,17 @@ final class CodexPetSession: ObservableObject {
         return String(text[open.upperBound..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Stops a ready server once nothing is left to finish: no turn, queued message or report, no conversation
-    /// opening or model list loading, no helper running or with a result still to report (one held after Stop waits
-    /// for the owner's return), and no call. A server still starting is left for the next check.
+    /// A ready server with nothing left to finish: no turn, queued message or report, no conversation opening or model
+    /// list loading, no helper running or with a result still to report (one held after Stop waits for the owner's
+    /// return), and no call. A server still starting is left for the next check.
+    private var drained: Bool {
+        server.ready && !thinking && turnId == nil && queuedRequests == 0 && report == nil && voiceState == .off && helpersWorking == 0
+            && threadTask == nil && lookup == nil && !loadingWorkModels
+            && !helpers.values.contains(where: { $0.epoch == epoch && $0.parent == nil && $0.state != .reported })
+    }
+
     private func stopServerIfDrained() {
-        guard server.ready, !thinking, turnId == nil, queuedRequests == 0, report == nil, voiceState == .off, helpersWorking == 0,
-              threadTask == nil, lookup == nil, !loadingWorkModels,
-              !helpers.values.contains(where: { $0.epoch == epoch && $0.parent == nil && $0.state != .reported }) else { return }
+        guard drained else { return }
         quietStop = true
         server.stop()
     }
