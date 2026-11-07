@@ -227,20 +227,26 @@ struct BatteryDetails: Equatable {
         return d
     }
 
-    /// System Information's power data, about 60 ms; killed after 5 s so a stuck run can't hold the card's task.
-    static func profilerJSON() -> Data? {
+    /// System Information's power data, about 60 ms; given up after 5 s. Its output goes to a file, not a pipe:
+    /// system_profiler starts a helper of its own (seen 2026-11-07), which could hold a pipe open past a kill.
+    static func profilerJSON() async -> Data? {
+        let fm = FileManager.default
+        let file = fm.temporaryDirectory.appending(path: "pulse-power-\(UUID().uuidString).json")
+        guard fm.createFile(atPath: file.path, contents: nil), let out = try? FileHandle(forWritingTo: file) else { return nil }
+        defer { try? out.close(); try? fm.removeItem(at: file) }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
         p.arguments = ["SPPowerDataType", "-json"]
-        let out = Pipe()
         p.standardOutput = out; p.standardError = FileHandle.nullDevice; p.standardInput = FileHandle.nullDevice
         guard (try? p.run()) != nil else { return nil }
-        let stop = DispatchWorkItem { if p.isRunning { p.terminate() } }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: stop)
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        stop.cancel()
-        return p.terminationStatus == 0 ? data : nil
+        let deadline = ContinuousClock.now + .seconds(5)
+        while p.isRunning {
+            guard ContinuousClock.now < deadline, (try? await Task.sleep(for: .milliseconds(20))) != nil else {
+                p.terminate()
+                return nil
+            }
+        }
+        return p.terminationStatus == 0 ? try? Data(contentsOf: file) : nil
     }
 }
 

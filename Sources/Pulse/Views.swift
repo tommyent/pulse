@@ -272,7 +272,8 @@ struct BatteryCard: View {
                 Spacer()
             }
             .foregroundStyle(Color.primary)
-            Text((details ?? BatteryDetails()).status(reading)).font(.subheadline).foregroundStyle(Color.primary)
+            // until the first read, only the charge: a default would claim "not charging" for a frame
+            Text(details?.status(reading) ?? "\(reading.percent)%").font(.subheadline).foregroundStyle(Color.primary)
             let lines = [details?.power, details?.health, details?.cycleCount,
                          details?.lowPowerMode == true ? "Low Power Mode is on" : nil].compactMap { $0 }
             if !lines.isEmpty {
@@ -288,7 +289,8 @@ struct BatteryCard: View {
         .frame(width: tailEdge == .trailing || tailEdge == .leading ? 320 + BubbleShape.tailWidth : 320)
         .pulseSurface(in: BubbleShape(edge: tailEdge, at: tailAt))
         .task {
-            let json = await Task.detached { BatteryDetails.profilerJSON() }.value
+            details = BatteryDetails.read()   // the IOKit part at once; the health follows System Information
+            let json = await BatteryDetails.profilerJSON()
             while !Task.isCancelled {
                 var next = BatteryDetails.read()
                 if let json { next?.addHealth(profilerJSON: json) }

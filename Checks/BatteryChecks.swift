@@ -4,7 +4,7 @@ import SwiftUI
 
 @main
 enum BatteryChecks {
-    static func main() {
+    static func main() async {
         let s = BatterySettings()   // yellow at 20, red at 10
         assert(s.level(100) == .ok && s.level(21) == .ok)
         assert(s.level(20) == .low && s.level(11) == .low)
@@ -93,7 +93,7 @@ enum BatteryChecks {
             let d = BatteryDetails.read()
             assert(d != nil && (d!.cycles ?? 0) > 0)
             var withHealth = d!
-            if let json = BatteryDetails.profilerJSON() { withHealth.addHealth(profilerJSON: json); assert(withHealth.maxCapacity != nil) }
+            if let json = await BatteryDetails.profilerJSON() { withHealth.addHealth(profilerJSON: json); assert(withHealth.maxCapacity != nil) }
         }
         print("battery checks passed")
     }
