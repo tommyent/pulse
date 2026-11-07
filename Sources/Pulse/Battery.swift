@@ -182,14 +182,16 @@ struct BatteryDetails: Equatable {
         return "\(reading.percent)% · \(state)" + (reading.simulated ? " (simulated)" : "")
     }
 
-    /// "The Mac is using 14.7 W · charging at 2.2 W from a 100 W adapter".
+    /// "The Mac is using 14.7 W", then "Charging at 2.2 W from a 100 W adapter" while it charges.
+    /// Charging takes a second line, which the card's width would otherwise break mid-phrase. Non-breaking spaces keep
+    /// each number with its unit.
     var power: String? {
         guard let macWatts else { return nil }
-        func watts(_ w: Double) -> String { "\(w.formatted(.number.precision(.fractionLength(1)))) W" }
-        var line = "The Mac is using \(watts(macWatts))"
-        if charging, let into = batteryWatts, into >= 0.1 { line += " · charging at \(watts(into))" }
-        if let adapterWatts { line += " from a \(adapterWatts) W adapter" }
-        return line
+        func watts(_ w: Double) -> String { "\(w.formatted(.number.precision(.fractionLength(1))))\u{00A0}W" }
+        let adapter = adapterWatts.map { " from a \($0)\u{00A0}W adapter" } ?? ""
+        let using = "The Mac is using \(watts(macWatts))"
+        guard charging, let into = batteryWatts, into >= 0.1 else { return using + adapter }
+        return using + "\nCharging at \(watts(into))" + adapter
     }
 
     /// "Maximum Capacity 95% · Normal".

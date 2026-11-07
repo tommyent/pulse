@@ -62,7 +62,7 @@ enum BatteryChecks {
         var charging = BatteryDetails.parse(source: source, registry: registry, adapter: ["Watts": 100])
         assert(charging.charging && charging.minutesToFull == 40 && charging.adapterWatts == 100 && charging.cycles == 234)
         assert(abs(charging.macWatts! - 14.706) < 0.001 && abs(charging.batteryWatts! - 2.24264) < 0.001)
-        assert(charging.power == "The Mac is using 14.7 W · charging at 2.2 W from a 100 W adapter", charging.power ?? "nil")
+        assert(charging.power == "The Mac is using 14.7\u{00A0}W\nCharging at 2.2\u{00A0}W from a 100\u{00A0}W adapter", charging.power ?? "nil")
         assert(charging.status(ac(100)) == "100% · Charging, full in about \(batteryTimeLeft(40))")
         assert(charging.cycleCount == "234 cycles" && charging.health == nil)
         // System Information's JSON, trimmed to what the card reads
@@ -78,10 +78,10 @@ enum BatteryChecks {
         assert(BatteryDetails.parse(source: ["Is Charging": true, "Time to Full Charge": -1], registry: [:], adapter: nil).minutesToFull == nil)
         let full = BatteryDetails.parse(source: ["Is Charging": false, "Time to Full Charge": 0], registry: registry, adapter: ["Watts": 100])
         assert(full.minutesToFull == nil && full.status(ac(100)) == "100% · Plugged in, fully charged" && full.status(ac(80)) == "80% · Plugged in, not charging")
-        assert(full.power == "The Mac is using 14.7 W from a 100 W adapter")
+        assert(full.power == "The Mac is using 14.7\u{00A0}W from a 100\u{00A0}W adapter")
         // on battery, with no telemetry: the battery's own discharge is the Mac's draw, and no adapter
         let draining = BatteryDetails.parse(source: ["Is Charging": false], registry: ["Voltage": 12500, "Amperage": -640], adapter: nil)
-        assert(abs(draining.macWatts! - 8.0) < 0.001 && draining.power == "The Mac is using 8.0 W", draining.power ?? "nil")
+        assert(abs(draining.macWatts! - 8.0) < 0.001 && draining.power == "The Mac is using 8.0\u{00A0}W", draining.power ?? "nil")
         assert(draining.status(BatteryReading(percent: 64, onAC: false, minutesLeft: 180)) == "64% · On battery, about \(batteryTimeLeft(180)) left")
         assert(draining.status(on(64)) == "64% · On battery" && BatteryDetails().power == nil)
         assert(BatteryReading.simulated("8")!.summary == "8% (simulated)" && ac(50).summary == "50%, plugged in")
