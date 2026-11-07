@@ -58,10 +58,11 @@ extension CodexPetSession {
     }
 }
 
-private struct CodexPet: View {
+private struct CodexPet: View, Animatable {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var session = CodexPetSession.shared
-    let size: CGFloat
+    var size: CGFloat
+    var animatableData: CGFloat { get { size } set { size = newValue } }   // track and sprite grow together on hover
     var animateIdle = true   // false in the collapsed rail: an always-on 10 fps idle loop costs CPU all day
     private static let frames: [CodexPetSprite.State: [CGImage]] = Bundle.pulseResources
         .url(forResource: "Resources/codex-pet", withExtension: "webp")
@@ -156,7 +157,9 @@ private struct PercentText: View {
     }
 }
 
-struct RingView: View {
+struct RingView: View, Animatable {
+    // stroke widths, icon and badge all follow the size: animated together, nothing jumps at the end of a hover's growth
+    var animatableData: CGFloat { get { size } set { size = newValue } }
     @Environment(\.showsRemaining) private var remaining
     let account: AccountID
     var pool = 0   // which of the account's rings: sets the colour
@@ -206,6 +209,7 @@ struct RingView: View {
                 PercentText(text: percent.map { "\(remaining ? 100 - Int($0) : Int($0))%" } ?? "—", beside: beside)   // 98.4 used is 98%, so 2% left
                     .foregroundStyle(Color.primary)
                     .opacity(stale ? staleOpacity : 1)
+                    .transition(.railExtra)
             }
         }
     }
@@ -227,7 +231,8 @@ struct RingView: View {
 }
 
 /// The battery as the rail's last ring: green, yellow or red by charge, a bolt while plugged in.
-struct BatteryRing: View {
+struct BatteryRing: View, Animatable {
+    var animatableData: CGFloat { get { size } set { size = newValue } }   // as RingView's
     let reading: BatteryReading
     let level: BatteryLevel
     var size: CGFloat = 52
@@ -251,6 +256,7 @@ struct BatteryRing: View {
             if showPercent {
                 PercentText(text: "\(reading.percent)%", beside: beside)
                     .foregroundStyle(level == .critical ? Color.red : Color.primary)
+                    .transition(.railExtra)
             }
         }
     }
@@ -748,6 +754,7 @@ struct OverlayView: View {
     var onHintFrame: ((CGRect) -> Void)? = nil
     var onPillFrame: ((CGRect) -> Void)? = nil
     var pointerInside: (() -> Bool)? = nil   // whether the pointer is really over the panel
+    var morph = MorphPlacement()   // the controller's: set while a hover grows or shrinks the rail
     @ObservedObject private var battery = BatteryMonitor.shared
     @ObservedObject private var breaks = BreakController.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -784,6 +791,12 @@ struct OverlayView: View {
     }
 
     var body: some View {
+        // Animated only inside a morph's box: elsewhere the panel resizes at once, and the rail would slide from its old spot.
+        DockPlacement(morph: morph) { content }
+            .animation(morph.dock == nil ? nil : .smooth(duration: hoverSeconds()), value: state.hoveringOverlay)
+    }
+
+    @ViewBuilder private var content: some View {
         let layout = state.dock.isVertical
             ? AnyLayout(HStackLayout(alignment: .center, spacing: 16))
             : AnyLayout(VStackLayout(spacing: 16))
@@ -800,8 +813,7 @@ struct OverlayView: View {
                 if part == "rail" { rail } else { card(tail: tail) }
             }
         }
-        // Only a drop animates layout, inside a glide that sizes the panel for it; elsewhere the panel resizes at once,
-        // so an animated rail would slide from its old spot.
+        // A drop animates layout inside its glide's box, a hover inside its morph's box (see body).
         .padding(12)
         .onHover { over in
             guard !state.dragging, !state.gliding else { return }
@@ -843,6 +855,7 @@ struct OverlayView: View {
             // hovering the rail with nothing else open: when the next breaks come
             if state.hoveringOverlay, !state.cardVisible, !state.petVisible, breaks.phase.isWorking, breaks.settings.enabled {
                 NextBreakHint(controller: breaks, tail: tail)
+                    .transition(.railExtra)
                     // its Pause buttons take clicks, so a click there isn't a click away
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onHintFrame?($0) }
                     .onDisappear { onHintFrame?(.zero) }
@@ -1012,6 +1025,7 @@ struct OverlayView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .transition(.railExtra)
                     .accessibilityLabel(session.voiceState == .off ? "Start live voice" : "End live voice")
                     .help(session.voiceState == .off ? "Start live voice" : "End live voice")
                 }

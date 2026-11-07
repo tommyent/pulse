@@ -93,7 +93,14 @@ enum OverlayChecks {
                 assert(screen.contains(collapsed) && screen.contains(expanded))
                 assert(edge.anchor(of: collapsed) == edge.anchor(of: expanded))
                 for point in [screen.origin, CGPoint(x: screen.maxX, y: screen.maxY)] {
-                    assert(screen.contains(edge.frame(size: expanded.size, anchor: point, in: screen)))
+                    let grown = edge.frame(size: expanded.size, anchor: point, in: screen)
+                    assert(screen.contains(grown))
+                    // Dropped in a corner, the rail grows away from it only, so it shrinks back into the same spot...
+                    let small = edge.frame(size: collapsed.size, anchor: point, in: screen)
+                    assert(edge.isVertical ? grown.minY == small.minY || grown.maxY == small.maxY
+                                           : grown.minX == small.minX || grown.maxX == small.maxX, "\(edge) grows out of its corner")
+                    // ...as long as the dropped point is kept: the grown frame's own anchor would move it out of the corner
+                    assert(edge.frame(size: collapsed.size, anchor: edge.anchor(of: grown), in: screen) != small)
                 }
                 assert(edge.isVertical == (edge == .left || edge == .right))
                 assert((try! JSONDecoder().decode(DockEdge.self, from: JSONEncoder().encode(edge))) == edge)
@@ -200,6 +207,19 @@ enum OverlayChecks {
             let short = edge.anchor(of: usable.insetBy(dx: 30, dy: 30))
             assert(!DockEdge.landing(from: short, velocity: .zero, current: edge, in: usable, display: display).tuck)
         }
+        // Pushed into a corner, it docks there on its own edge (or the corner's first, coming from elsewhere) and never
+        // tucks: the owner's throw into the top-right at 1710,1107 from the top tucked it out of sight.
+        let corners: [(CGPoint, Set<DockEdge>)] = [(CGPoint(x: 0, y: 0), [.left, .bottom]), (CGPoint(x: 1710, y: 0), [.right, .bottom]),
+                                                   (CGPoint(x: 0, y: 1107), [.left, .top]), (CGPoint(x: 1710, y: 1107), [.right, .top])]
+        for (corner, edges) in corners {
+            for current in DockEdge.allCases {
+                let got = DockEdge.landing(from: corner, velocity: .zero, current: current, in: usable, display: display)
+                assert(!got.tuck && edges.contains(got.edge) && (!edges.contains(current) || got.edge == current),
+                       "pushed into \(corner) from \(current): \(got)")
+            }
+        }
+        let owners = DockEdge.landing(from: CGPoint(x: 1710, y: 1107), velocity: CGVector(dx: 1461, dy: 0), current: .top, in: usable, display: display)
+        assert(owners.edge == .top && !owners.tuck, "the owner's corner throw: \(owners)")
         // Pushed into the menu bar short of the display's top (a recorded push stopped at 1104 of 1107): 8 pt past
         // the usable screen is a push too. From another edge it docks there instead.
         assert(DockEdge.landing(from: CGPoint(x: 1118, y: 1104), velocity: .zero, current: .top, in: usable, display: display).tuck)
@@ -305,6 +325,34 @@ enum OverlayChecks {
         assert(visibleParts(of: crossing, in: [displayA, displayB])?.count == 2, "dragged across the shared edge: drawn on both")
         assert(visibleParts(of: dockedOnA, in: [displayA]) == nil, "fully on its display: no mask")
         assert(visibleParts(of: CGRect(x: 2000, y: 400, width: 84, height: 262), in: [displayA]) == [], "off its display: hidden, not unmasked")
+        // The mask keeps those parts measured from the panel's top (its view is flipped), within the panel's own size: a top
+        // tuck keeps its bottom 35 pt (the 7 pt sliver among them), a right tuck its left 35 pt, a bottom tuck its top.
+        let usableAir = CGRect(x: 0, y: 0, width: 1710, height: 1073)
+        let topTuck = CGRect(x: 1398, y: 1038, width: 308, height: 84), rightTuck = CGRect(x: 1675, y: 424, width: 84, height: 232)
+        assert(visibleParts(of: topTuck, in: [usableAir])!.map { flippedRect(of: $0, in: topTuck) } == [CGRect(x: 0, y: 49, width: 308, height: 35)])
+        assert(visibleParts(of: rightTuck, in: [usableAir])!.map { flippedRect(of: $0, in: rightTuck) } == [CGRect(x: 0, y: 0, width: 35, height: 232)])
+        // A hover's morph: in the box, each size sits at its own docked spot. At rest (the panel fitting it) that is the
+        // panel's origin, so ending a morph moves nothing; mid-edge the rail grows both ways about its middle, in a
+        // corner only away from it.
+        let small = CGSize(width: 84, height: 308), big = CGSize(width: 116, height: 489)
+        for edge in [DockEdge.right, .left] {
+            for (anchor, end) in [(CGPoint(x: 0, y: 536), "middle"), (CGPoint(x: 0, y: 0), "bottom"), (CGPoint(x: 0, y: 1073), "top")] {
+                let at = CGPoint(x: edge == .right ? 1710 : 0, y: anchor.y)
+                let rest = edge.frame(size: small, anchor: at, in: usableAir)
+                assert(dockedOrigin(of: small, edge: edge, anchor: at, bounds: usableAir, in: rest) == .zero, "\(edge) \(end): a fitted panel")
+                let box = edge.frame(size: CGSize(width: 84 + 420, height: 1073), anchor: at, in: usableAir)
+                let a = dockedOrigin(of: small, edge: edge, anchor: at, bounds: usableAir, in: box)
+                let b = dockedOrigin(of: big, edge: edge, anchor: at, bounds: usableAir, in: box)
+                assert(edge == .right ? a.x + 84 == b.x + 116 : a.x == b.x, "\(edge) \(end): the outer side stays on the edge")
+                switch end {
+                case "middle": assert(a.y + 154 == b.y + 244.5, "grows both ways about its middle")
+                case "bottom": assert(a.y + 308 == b.y + 489, "grows up from the bottom corner")
+                default: assert(a.y == b.y, "grows down from the top corner")
+                }
+            }
+        }
+        let bottomTuck = CGRect(x: 700, y: -49, width: 308, height: 84)
+        assert(visibleParts(of: bottomTuck, in: [usableAir])!.map { flippedRect(of: $0, in: bottomTuck) } == [CGRect(x: 0, y: 0, width: 308, height: 35)])
         // After a glide lands, the pointer decides what hover missed while it moved (exits during a glide are dropped).
         // Left during a peek: the peek ends. Still on the peeked rail: it counts as hovered. A tucked sliver never expands,
         // and an open pet card keeps the rail out.

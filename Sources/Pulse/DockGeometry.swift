@@ -78,7 +78,8 @@ enum DockEdge: String, Codable, CaseIterable {
     /// Released with the pointer pinned against the `display`'s edge, or 8 pt or more past the usable screen (into the
     /// menu bar or the Dock), the rail was pushed there: the cursor stopped while the hand went on, so its speed says
     /// nothing (it may even slide along the edge). Unless it is already pulling away, it goes to that edge, and tucks into
-    /// it if that is the edge it is on. The rail sits 16 pt or more inside its edge, so getting there takes a push.
+    /// it if that is the edge it is on. Pushed into a corner (two edges at once) it docks there instead: a corner is a
+    /// place to keep it. The rail sits 16 pt or more inside its edge, so getting there takes a push.
     /// A fast flick into its own edge, released short of that, tucks too.
     static func landing(from point: CGPoint, velocity v: CGVector, current: DockEdge, in screen: CGRect,
                         display: CGRect = .null) -> (edge: DockEdge, point: CGPoint, tuck: Bool) {
@@ -90,7 +91,7 @@ enum DockEdge: String, Codable, CaseIterable {
             (edge.distance(from: point, in: display) <= 2 || edge.into(CGVector(dx: point.x - p.x, dy: point.y - p.y)) >= 8)
                 && edge.into(v) >= -50
         }
-        if let pushed = pinned.contains(current) ? current : pinned.first { return (pushed, p, pushed == current) }
+        if let pushed = pinned.contains(current) ? current : pinned.first { return (pushed, p, pushed == current && pinned.count == 1) }
         if current.tucks(from: point, velocity: v, in: screen) { return (current, p, true) }
         guard hypot(v.dx, v.dy) >= flickSpeed else { return (nearest(to: p, in: screen), coasted, false) }
         let along = current.isVertical ? abs(v.dy) > abs(v.dx) : abs(v.dx) > abs(v.dy)
@@ -233,6 +234,62 @@ struct RailGlide {
 func visibleParts(of frame: CGRect, in areas: [CGRect]) -> [CGRect]? {
     let parts = areas.map { frame.intersection($0) }.filter { !$0.isNull && $0.width > 0 && $0.height > 0 }
     return parts == [frame] ? nil : parts
+}
+
+/// `part` of the panel at `frame` (both in screen coordinates) in its view's flipped coordinates, as its backing layer
+/// draws them (measured: the panel's hosting view and its layer are both flipped). Measured within the frame's own size,
+/// not the view's bounds: at launch the view is still its 68×148 placeholder, which put a top tuck's mask below the view.
+func flippedRect(of part: CGRect, in frame: CGRect) -> CGRect {
+    CGRect(x: part.minX - frame.minX, y: frame.maxY - part.maxY, width: part.width, height: part.height)
+}
+
+/// Where content of `size` sits in the panel at `box` (top-left origin, as SwiftUI lays out): its docked spot, the frame
+/// `edge.frame(size:anchor:in:)` gives it. While the rail grows or shrinks the panel is a box with room for both sizes,
+/// and each lands where it rests: mid-edge it grows both ways along the edge, in a corner away from it.
+func dockedOrigin(of size: CGSize, edge: DockEdge, anchor: CGPoint, bounds: CGRect, in box: CGRect) -> CGPoint {
+    let f = edge.frame(size: size, anchor: anchor, in: bounds)
+    return CGPoint(x: f.minX - box.minX, y: box.maxY - f.maxY)
+}
+
+/// Set by the overlay controller, synchronously, before it makes the panel a box for a hover's growth (SwiftUI has to
+/// read it in the layout pass that resize triggers, so it isn't published); nil whenever the panel fits its content.
+final class MorphPlacement {
+    var dock: (edge: DockEdge, anchor: CGPoint, bounds: CGRect, box: CGRect)?
+}
+
+/// The overlay's root: its content as is, except mid-morph, when it fills the box and puts the content at its docked spot.
+struct DockPlacement: Layout {
+    let morph: MorphPlacement
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        return morph.dock == nil ? content.sizeThatFits(proposal)
+            : proposal.replacingUnspecifiedDimensions(by: content.sizeThatFits(.unspecified))
+    }
+
+    func placeSubviews(in rect: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let content = subviews.first else { return }
+        let size = content.sizeThatFits(.unspecified)
+        let origin = morph.dock.map { dockedOrigin(of: size, edge: $0.edge, anchor: $0.anchor, bounds: $0.bounds, in: $0.box) }
+            ?? CGPoint(x: (rect.width - size.width) / 2, y: (rect.height - size.height) / 2)
+        content.place(at: CGPoint(x: rect.minX + origin.x, y: rect.minY + origin.y), proposal: ProposedViewSize(size))
+    }
+}
+
+/// The hover's growth and shrink. The hidden `railHoverSeconds` default slows it down to watch it frame by frame:
+/// `defaults write io.github.tommyent.pulse railHoverSeconds 3`.
+func hoverSeconds() -> Double {
+    let seconds = UserDefaults.standard.double(forKey: "railHoverSeconds")
+    return seconds > 0 ? seconds : 0.3
+}
+
+extension AnyTransition {
+    /// What only the grown rail shows (percentages, the voice button, the next-break hint) appears where it ends up, so
+    /// shown mid-growth it would float beside the growing rings: it fades in as they finish, and out before they shrink.
+    static var railExtra: AnyTransition {
+        .asymmetric(insertion: .opacity.animation(.easeOut(duration: hoverSeconds() * 0.35).delay(hoverSeconds() * 0.65)),
+                    removal: .opacity.animation(.easeOut(duration: hoverSeconds() * 0.25)))
+    }
 }
 
 enum LandingHover { case collapse, hover, leave }

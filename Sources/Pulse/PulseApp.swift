@@ -124,6 +124,11 @@ final class OverlayController {
     /// the content centred in it.
     private var flight: (glide: RailGlide, box: CGSize, time: CFTimeInterval?)?
     private var flightLink: CADisplayLink?
+    /// While a hover grows or shrinks the rail, the panel is a box with room for both sizes and SwiftUI animates the
+    /// content inside it; the panel fits the content again once the spring is done.
+    private let morph = MorphPlacement()
+    private var morphEnd: DispatchWorkItem?
+    private var dropping = false   // a drop's own collapse rides its glide, not a morph
     private var peekWatch: Timer?
     private let ticker = FrameTicker()
     private var railFrame = CGRect.zero
@@ -215,6 +220,10 @@ final class OverlayController {
         guard size.width > 1, size.height > 1 else { return }
         contentSize = size
         guard let frame = restingFrame() else { return }
+        if let box = morph.dock?.box {
+            guard !box.contains(frame) else { return }   // the box has room: SwiftUI puts it at its spot
+            return endMorph()   // grown past it (a card opened mid-morph): fit the panel now
+        }
         if var f = flight {   // the glide lands on it; the box keeps room for the old layout too
             f.glide.target = frame
             f.glide.slack = state.tuckedAway ? 0 : 16   // a tuck stops at its spot: further in, the sliver would vanish
@@ -235,10 +244,11 @@ final class OverlayController {
         guard !state.dragging, let screen = liveScreen ?? panel.screen ?? NSScreen.main else { return nil }
         dockScreen = screen
         let bounds = screen.visibleFrame
+        // `pinned` stays where the rail was dropped: read back from a frame the screen's end had clamped, it would move
+        // a rail in a corner out of it once a hover or card grew it
         let frame = state.dock.frame(size: contentSize,
                                      anchor: pinned ?? CGPoint(x: bounds.midX, y: bounds.midY),
                                      in: bounds)
-        pinned = state.dock.anchor(of: frame)
         return state.tuckedAway ? state.dock.tucked(frame, in: bounds) : frame
     }
 
@@ -253,11 +263,10 @@ final class OverlayController {
         guard let parts = visibleParts(of: frame, in: areas) else { view.layer?.mask = nil; return }
         let mask = view.layer?.mask as? CAShapeLayer ?? CAShapeLayer()
         let path = CGMutablePath()
-        // window coordinates to the view's (flipped, as its backing layer is: measured offscreen)
-        for part in parts { path.addRect(view.convert(part.offsetBy(dx: -frame.minX, dy: -frame.minY), from: nil)) }
+        for part in parts { path.addRect(flippedRect(of: part, in: frame)) }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        mask.frame = view.bounds
+        mask.frame = CGRect(origin: .zero, size: frame.size)   // not view.bounds: see flippedRect
         mask.path = path   // empty when the panel is off its display altogether: hidden, not unmasked
         CATransaction.commit()
         view.layer?.mask = mask
@@ -283,15 +292,52 @@ final class OverlayController {
 
     /// The part of the panel on screen, where the pointer can be on it.
     private var visiblePanel: CGRect {
-        guard let screen = dockScreen ?? panel.screen else { return panel.frame }
-        let visible = panel.frame.intersection(screen.visibleFrame)
-        return visible.isNull ? panel.frame : visible
+        // mid-morph the panel is a box with room to spare: the content is where it rests
+        let shown = morph.dock.map { $0.edge.frame(size: contentSize, anchor: $0.anchor, in: $0.bounds) } ?? panel.frame
+        guard let screen = dockScreen ?? panel.screen else { return shown }
+        let visible = shown.intersection(screen.visibleFrame)
+        return visible.isNull ? shown : visible
+    }
+
+    /// A hover changed: make the panel a box the content can grow or shrink in, at the spot it rests at. Runs as the
+    /// change is made (the publisher fires before SwiftUI applies it), so the box is laid out before the animation starts.
+    private func beginMorph() {
+        guard !dropping, !state.dragging, flight == nil, state.persisted.tucked != true, !state.peeking,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, let screen = dockScreen ?? panel.screen else { return }
+        morphEnd?.cancel()
+        if morph.dock == nil {
+            let bounds = screen.visibleFrame, anchor = pinned ?? CGPoint(x: bounds.midX, y: bounds.midY)
+            // the whole edge's length, and room past the widest card beside the rail
+            let room = state.dock.isVertical ? CGSize(width: panel.frame.width + 420, height: bounds.height)
+                                             : CGSize(width: bounds.width, height: panel.frame.height + 420)
+            let box = state.dock.frame(size: room, anchor: anchor, in: bounds)
+            guard box.contains(panel.frame) else { return }   // not at its spot (mid-glide, pulled out): as before
+            morph.dock = (state.dock, anchor, bounds, box)
+            (panel.contentView as? OverlayHostingView)?.sizingOptions = []
+            place(box)
+            panel.contentView?.layoutSubtreeIfNeeded()   // the content at its spot in the box before anything draws
+        }
+        let end = DispatchWorkItem { [weak self] in self?.endMorph() }
+        morphEnd = end
+        DispatchQueue.main.asyncAfter(deadline: .now() + hoverSeconds() * 1.3 + 0.05, execute: end)
+    }
+
+    /// The panel fits its content again, which sits exactly where it was: nothing moves on screen.
+    private func endMorph() {
+        morphEnd?.cancel()
+        morphEnd = nil
+        guard morph.dock != nil else { return }
+        morph.dock = nil
+        if let frame = restingFrame() { place(frame) }
+        panel.contentView?.layoutSubtreeIfNeeded()
+        (panel.contentView as? OverlayHostingView)?.sizingOptions = .standardBounds
     }
 
     /// The pointer in screen coordinates; the gesture's own locations move with the panel, which a landing resizes.
     private func drag() {
         let mouse = NSEvent.mouseLocation
         if dragStart == nil {
+            endMorph()   // picked up mid-growth: the panel fits the rail before it follows the pointer
             if let flight { land(CGRect(x: flight.glide.center.first - contentSize.width / 2, y: flight.glide.center.second - contentSize.height / 2,
                                         width: contentSize.width, height: contentSize.height), caught: true) }   // caught mid-glide
             dragStart = (mouse, panel.frame.origin)
@@ -317,6 +363,7 @@ final class OverlayController {
             pinned = landing.point
             edge = landing.edge
             tuck = landing.tuck
+            UserDefaults.standard.set([landing.point.x, landing.point.y], forKey: "railAnchor")
         }
         railLog.notice("drop at \(String(format: "%.0f,%.0f", mouse.x, mouse.y), privacy: .public) v \(String(format: "%.0f,%.0f", velocity.dx, velocity.dy), privacy: .public) \(self.state.dock.rawValue, privacy: .public) -> \(edge.rawValue, privacy: .public)\(tuck ? " tucked" : "", privacy: .public)")
         dragStart = nil
@@ -326,11 +373,13 @@ final class OverlayController {
             guard let self else { return }
             self.state.dragging = false
             let still = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion   // a plain, immediate move
+            self.dropping = true
             withAnimation(still ? nil : .spring(morphSpring)) {
                 self.state.persisted.dock = edge
                 self.state.collapseOverlay()
                 self.state.tuckedBinding.wrappedValue = tuck
             }
+            self.dropping = false
             self.settle(velocity: velocity, spring: tuck ? tuckSpring : railSpring())
         }
     }
@@ -365,7 +414,9 @@ final class OverlayController {
                       CGSize(width: start.width + 32, height: start.height + 32), nil)
             // only the glide sizes the panel meanwhile: no window resize from Auto Layout before the box catches up
             (panel.contentView as? OverlayHostingView)?.sizingOptions = []
-            flightLink = panel.contentView?.displayLink(target: ticker, selector: #selector(FrameTicker.frame(_:)))
+            // the landing display's clock: the panel's own link never fires while it is off every display, where a drag
+            // can leave it, and then the rail would never land
+            flightLink = (dockScreen ?? panel.screen ?? NSScreen.main)?.displayLink(target: ticker, selector: #selector(FrameTicker.frame(_:)))
             flightLink?.add(to: .main, forMode: .common)
             state.gliding = true   // hover waits: the box sliding under a still pointer would expand the rail mid-flight
         }
@@ -420,14 +471,21 @@ final class OverlayController {
             onHintFrame: { [weak self] in self?.hintFrame = $0 },
             onPillFrame: { [weak self] in self?.pillFrame = $0 },
             // the same area the peek watch and a landing use, so no path ends a peek the others would keep
-            pointerInside: { [weak self] in self.map { $0.peekArea.contains(NSEvent.mouseLocation) } ?? false }))
+            pointerInside: { [weak self] in self.map { $0.peekArea.contains(NSEvent.mouseLocation) } ?? false },
+            morph: morph))
         panel.contentView = hosting
         hosting.wantsLayer = true   // the mask that hides what lies past the screen edge
         ticker.onFrame = { [weak self] link in MainActor.assumeIsolated { self?.glide(link) } }
-        if panel.setFrameUsingName("PulseOverlay"), panel.frame.width > 50 {
-            pinned = state.dock.anchor(of: panel.frame)
+        // The saved frame itself: the panel takes only its origin now, keeping its 68×148 placeholder size until its content
+        // is laid out, and a spot read off that would sit half the difference away (120 pt for a 308 pt top rail).
+        let saved = UserDefaults.standard.string(forKey: "NSWindow Frame PulseOverlay")?.split(separator: " ").compactMap { Double($0) } ?? []
+        if panel.setFrameUsingName("PulseOverlay"), saved.count >= 4, saved[2] > 50 {
+            let frame = CGRect(x: saved[0], y: saved[1], width: saved[2], height: saved[3])
+            // where it was dropped; the frame's own spot is off if Pulse quit while the rail was grown (or mid-morph)
+            let dropped = UserDefaults.standard.array(forKey: "railAnchor") as? [Double] ?? []
+            pinned = dropped.count == 2 ? CGPoint(x: dropped[0], y: dropped[1]) : state.dock.anchor(of: frame)
             // the display the rail's own band is on: a tucked panel mostly hangs past its edge, maybe onto another display
-            let band = state.dock.railPoint(of: panel.frame)
+            let band = state.dock.railPoint(of: frame)
             dockScreen = NSScreen.screens.first { $0.frame.contains(band) } ?? panel.screen
         }
         panel.setFrameAutosaveName("PulseOverlay")
@@ -443,6 +501,11 @@ final class OverlayController {
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: clicks) { [weak self] _ in
             MainActor.assumeIsolated { self?.state.collapseOverlay() }
         }
+
+        // no receive(on:): the box has to be in place as the hover changes, before SwiftUI lays the change out
+        state.$hoveringOverlay.removeDuplicates().dropFirst()
+            .sink { [weak self] _ in self?.beginMorph() }
+            .store(in: &cancellables)
 
         // while the pet card holds the keyboard Pulse is the active app; switching to another app closes it
         NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
