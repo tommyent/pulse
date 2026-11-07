@@ -284,7 +284,7 @@ func hoverSeconds() -> Double {
 }
 
 extension AnyTransition {
-    /// What only the grown rail shows (percentages, the voice button, the next-break hint) appears where it ends up, so
+    /// What only the grown rail shows (percentages, the voice button, the break cup) appears where it ends up, so
     /// shown mid-growth it would float beside the growing rings: it fades in as they finish, and out before they shrink.
     static var railExtra: AnyTransition {
         .asymmetric(insertion: .opacity.animation(.easeOut(duration: hoverSeconds() * 0.35).delay(hoverSeconds() * 0.65)),

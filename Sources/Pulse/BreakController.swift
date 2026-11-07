@@ -71,7 +71,7 @@ final class BreakController: ObservableObject {
         }
     }
 
-    /// For the rail on hover and the menu: "Next: micro in 7 min". nil while breaks are off.
+    /// For the menu bar menu: "Next: micro in 7 min". nil while breaks are off.
     func nextText(_ now: Date) -> String? {
         guard schedule.settings.enabled else { return nil }
         if !phase.isWorking { return "Break now" }
@@ -327,7 +327,7 @@ final class BreakController: ObservableObject {
     func reroll() { requestIdea(surprise: false) }
     func surprise() { requestIdea(surprise: true) }
 
-    /// The hover hint's Pause, for a meeting without a call on this Mac; nil resumes.
+    /// The rail's break cup menu: Pause, for a meeting without a call on this Mac; nil resumes.
     func pauseBreaks(for seconds: TimeInterval?) {
         objectWillChange.send()
         schedule.pausedUntil = seconds.map { Date().addingTimeInterval($0) }

@@ -81,7 +81,7 @@ To try the alerts without draining the battery, simulate a charge: `defaults wri
 
 ### Breaks
 
-Turn on **Settings → Breaks → Remind me to take breaks** for regular breaks from the screen: by default a 20-second micro break every 20 minutes and a 5-minute long break every hour, which takes the place of a micro break due within two minutes of it. Both are set there, and the long break can be turned off. Breaks keep to their times: each is due one interval after the previous one was due, however long that one took, so every 20 minutes means every 20 minutes. With the pointer over the rail, and in the menu bar menu, Pulse shows when the next ones come.
+Turn on **Settings → Breaks → Remind me to take breaks** for regular breaks from the screen: by default a 20-second micro break every 20 minutes and a 5-minute long break every hour, which takes the place of a micro break due within two minutes of it. Both are set there, and the long break can be turned off. Breaks keep to their times: each is due one interval after the previous one was due, however long that one took, so every 20 minutes means every 20 minutes. The menu bar menu shows when the next ones come.
 
 <p align="center">
   <img src="docs/screenshots/break-screen.png" width="600" alt="The break screen in violet: Time to take a break, 0:15 left with a violet bar, the idea Mix two teas in a cup and name the blend aloud with Reroll and Surprise me, then Back to Work, Pause and Snooze 5 min; the Codex pet, a small Codex agent and two Claude crabs along the bottom, and Grok and Antigravity floating at the top">
@@ -89,7 +89,7 @@ Turn on **Settings → Breaks → Remind me to take breaks** for regular breaks 
 <p align="center">
   <img src="docs/screenshots/break-countdown.png" width="242" alt="The countdown beside the rail: 28 seconds in an emptying ring and 20-sec break">
   &nbsp;
-  <img src="docs/screenshots/break-next.png" width="321" alt="The pointer over the rail shows Next: micro in 20 min, and Pause for 30 min, 1 hr or 2 hr">
+  <img src="docs/screenshots/break-pause.png" width="214" alt="The grown rail with a cup at its end, and the cup's menu open beside it: Pause breaks for 30 minutes, 1 hour or 2 hours, and Break settings">
 </p>
 
 Thirty seconds before a break, a small countdown grows out of the middle of the rail: the seconds left in a ring that empties, and the break's length. Click it to start the break now; otherwise the break starts when the ring is empty. With the rings hidden, the countdown appears at the middle of the screen's right edge.
@@ -97,7 +97,7 @@ Thirty seconds before a break, a small countdown grows out of the middle of the 
 The break covers every display: a dark screen with a coloured glow at its edges, the time left, and **Back to Work** (ends it early), **Pause** and **Snooze 5 min** (brings the same break back in 5 minutes without moving the ones after it). Escape skips it. The colour is violet by default, one of six presets, or your own: the colour well opens the Mac's colour picker, whose sliders also take a hex code. A sound plays as a break starts and another when it has run its full length (Blow and Glass by default, at the system volume), so you can rest your eyes and still know when it's over; choose others, your own imported sounds or None in Settings → Breaks. Snooze, Escape and Back to Work end a break without a sound.
 
 - **Waiting:** no break starts during a Pulse voice call, while another app is using the microphone, as on a video call (**Wait during calls**, on by default), or while the screen is locked; it comes once that's over. A countdown already showing stops for any of these, a break on screen only for the lock. Time on a call doesn't count as time away.
-- **Pause:** for a meeting that isn't a call on this Mac, hover over the rail and choose **Pause** for 30 minutes, 1 hour or 2 hours. The hint then says when breaks come back and offers **Resume**. A pause outlasts a restart, and a break that came due during it comes as it ends.
+- **Pause:** for a meeting that isn't a call on this Mac, hover over the rail and click the cup at its end (the bottom of a side rail, the right end of a top or bottom one), then choose 30 minutes, 1 hour or 2 hours. While breaks are paused the cup has a pause badge, and its menu says when they come back and offers **Resume breaks**. **Break settings…** in the same menu opens Settings at Breaks. A pause outlasts a restart, and a break that came due during it comes as it ends.
 - **Time away counts as a break**, and the clocks start over when you come back. By default that's the screen locked or the Mac asleep for as long as a break, or 5 minutes with no keyboard or pointer input. Choose **Only when locked or asleep (fixed schedule)** if you watch the screen without touching anything: then no input never counts.
 - **Restarts:** the times are saved, so after quitting, an update or a restart Pulse carries on where it was, with at most one overdue break at launch. Time it wasn't running counts as time away by the same rules; with the fixed schedule only the time the Mac was off counts.
 - **History:** **Settings → Breaks → History** counts today's and this week's breaks by how they ended (taken, ended early, snoozed, skipped, or time away) and lists the latest. It's kept on this Mac for 90 days.

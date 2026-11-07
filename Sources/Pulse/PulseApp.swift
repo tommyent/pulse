@@ -104,6 +104,21 @@ final class OverlayHostingView: NSHostingView<AnyView> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+/// A menu item that runs a closure. The item holds it (as its represented object): its target is weak.
+@MainActor private final class MenuAction: NSObject {
+    private let run: () -> Void
+    private init(_ run: @escaping () -> Void) { self.run = run }
+    @objc private func fire() { run() }
+
+    static func item(_ title: String, _ run: @escaping () -> Void) -> NSMenuItem {
+        let action = MenuAction(run)
+        let item = NSMenuItem(title: title, action: #selector(fire), keyEquivalent: "")
+        item.target = action
+        item.representedObject = action
+        return item
+    }
+}
+
 /// CADisplayLink calls an Objective-C selector; this hands each frame to a closure.
 private final class FrameTicker: NSObject {
     var onFrame: (CADisplayLink) -> Void = { _ in }
@@ -133,7 +148,6 @@ final class OverlayController {
     private let ticker = FrameTicker()
     private var railFrame = CGRect.zero
     private var cardFrame = CGRect.zero
-    private var hintFrame = CGRect.zero   // the next-break hint on hover; .zero while it's hidden
     private var pillFrame = CGRect.zero   // a break's countdown; stale once it ends, so read only during one
     private var localClickMonitor: Any?
     private var globalClickMonitor: Any?
@@ -209,7 +223,7 @@ final class OverlayController {
         }
         // a click on the countdown must not collapse the rail: the pill would move off the pointer before mouse-up
         if event.window !== panel || overlayClickIsOutside(point, in: CGRect(origin: .zero, size: panel.frame.size),
-                                                          rail: railFrame, card: state.cardVisible || state.petVisible ? cardFrame : hintFrame)
+                                                          rail: railFrame, card: state.cardVisible || state.petVisible ? cardFrame : nil)
             && !(BreakController.shared.phase.isCountdown && pillFrame.contains(point)) {
             state.collapseOverlay()
         }
@@ -320,6 +334,47 @@ final class OverlayController {
         let end = DispatchWorkItem { [weak self] in self?.endMorph() }
         morphEnd = end
         DispatchQueue.main.asyncAfter(deadline: .now() + hoverSeconds() * 1.3 + 0.05, execute: end)
+    }
+
+    /// The cup's menu: pause breaks for 30 minutes, an hour or two, or resume them. It opens beside the cup, into the
+    /// screen. The rail stays open while it's up (the pointer leaves the panel to reach it), and Pulse isn't activated,
+    /// so the app being typed in keeps the keyboard.
+    private func showBreakMenu(at cup: CGRect, openSettings: @escaping () -> Void) {
+        let breaks = BreakController.shared, menu = NSMenu()
+        menu.autoenablesItems = false
+        if let until = breaks.pausedUntil, until > Date() {
+            menu.addItem(.sectionHeader(title: "Breaks paused until \(until.formatted(date: .omitted, time: .shortened))"))
+            menu.addItem(MenuAction.item("Resume breaks") { breaks.pauseBreaks(for: nil) })
+            menu.addItem(.separator())
+            menu.addItem(.sectionHeader(title: "Pause from now"))
+        } else {
+            menu.addItem(.sectionHeader(title: "Pause breaks"))
+        }
+        for (title, seconds) in [("30 minutes", 1800.0), ("1 hour", 3600), ("2 hours", 7200)] {
+            menu.addItem(MenuAction.item(title) { breaks.pauseBreaks(for: seconds) })
+        }
+        menu.addItem(.separator())
+        menu.addItem(MenuAction.item("Break settings…", openSettings))
+        // The menu's top-left on screen: clear of the rail, lined up with the cup along it. Both frames are in the
+        // panel's flipped coordinates.
+        func onScreen(_ r: CGRect) -> CGRect {
+            CGRect(x: panel.frame.minX + r.minX, y: panel.frame.maxY - r.maxY, width: r.width, height: r.height)
+        }
+        let c = onScreen(cup), rail = onScreen(railFrame), size = menu.size
+        let corner = switch state.dock {
+        case .right: CGPoint(x: rail.minX - size.width - 6, y: c.maxY)
+        case .left: CGPoint(x: rail.maxX + 6, y: c.maxY)
+        case .top: CGPoint(x: c.maxX - size.width, y: rail.minY - 6)
+        case .bottom: CGPoint(x: c.maxX - size.width, y: rail.maxY + 6 + size.height)
+        }
+        state.menuOpen = true
+        menu.popUp(positioning: nil, at: corner, in: nil)   // returns once the menu closes
+        state.menuOpen = false
+        // after the chosen item has run: if the pointer left the rail meanwhile, it collapses as it would have
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.state.petVisible, !self.peekArea.contains(NSEvent.mouseLocation) else { return }
+            self.state.collapseOverlay()
+        }
     }
 
     /// The panel fits its content again, which sits exactly where it was: nothing moves on screen.
@@ -468,8 +523,8 @@ final class OverlayController {
             onDrop: { [weak self] in self?.drop() },
             onRailFrame: { [weak self] in self?.railFrame = $0 },
             onCardFrame: { [weak self] in self?.cardFrame = $0 },
-            onHintFrame: { [weak self] in self?.hintFrame = $0 },
             onPillFrame: { [weak self] in self?.pillFrame = $0 },
+            onBreakMenu: { [weak self] cup, openSettings in self?.showBreakMenu(at: cup, openSettings: openSettings) },
             // the same area the peek watch and a landing use, so no path ends a peek the others would keep
             pointerInside: { [weak self] in self.map { $0.peekArea.contains(NSEvent.mouseLocation) } ?? false },
             morph: morph))
@@ -489,7 +544,7 @@ final class OverlayController {
             dockScreen = NSScreen.screens.first { $0.frame.contains(band) } ?? panel.screen
         }
         panel.setFrameAutosaveName("PulseOverlay")
-        // A frame saved while a card or the hover hint widened the panel would otherwise keep the rail off its edge
+        // A frame saved while a card widened the panel would otherwise keep the rail off its edge
         // until its size next changed: place it from the content's own size now.
         contentSized(hosting.fittingSize)
 

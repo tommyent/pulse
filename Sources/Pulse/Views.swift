@@ -751,14 +751,16 @@ struct OverlayView: View {
     var onDrop: (() -> Void)? = nil
     var onRailFrame: ((CGRect) -> Void)? = nil
     var onCardFrame: ((CGRect) -> Void)? = nil
-    var onHintFrame: ((CGRect) -> Void)? = nil
     var onPillFrame: ((CGRect) -> Void)? = nil
+    var onBreakMenu: ((CGRect, @escaping () -> Void) -> Void)? = nil   // the cup's frame, and how to open Break settings
     var pointerInside: (() -> Bool)? = nil   // whether the pointer is really over the panel
     var morph = MorphPlacement()   // the controller's: set while a hover grows or shrinks the rail
     @ObservedObject private var battery = BatteryMonitor.shared
     @ObservedObject private var breaks = BreakController.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openSettings) private var openSettings
     @State private var exitWatch: Task<Void, Never>?
+    @State private var cupFrame = CGRect.zero
 
     private var expanded: Bool { !state.tuckedAway && (state.hoveringOverlay || state.cardVisible || state.petVisible) }
     @State private var itemFrames: [String: CGRect] = [:]   // the pet and each ring, so a card's tail points at its own
@@ -852,14 +854,6 @@ struct OverlayView: View {
             : AnyLayout(HStackLayout(alignment: tail == .top ? .top : .bottom, spacing: 10))
         beside {
             BreakPill(controller: breaks, tail: tail, onFrame: onPillFrame)
-            // hovering the rail with nothing else open: when the next breaks come
-            if state.hoveringOverlay, !state.cardVisible, !state.petVisible, breaks.phase.isWorking, breaks.settings.enabled {
-                NextBreakHint(controller: breaks, tail: tail)
-                    .transition(.railExtra)
-                    // its Pause buttons take clicks, so a click there isn't a click away
-                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onHintFrame?($0) }
-                    .onDisappear { onHintFrame?(.zero) }
-            }
             let shift = cardShift(state.petVisible ? "pet" : batteryCard ? "battery" : ringKey(state.selected, pool: state.selectedPool))
             usageOrPetCard(tail: tail)
                 .offset(x: state.dock.isVertical ? 0 : shift, y: state.dock.isVertical ? shift : 0)
@@ -957,6 +951,25 @@ struct OverlayView: View {
                 .accessibilityValue(reading.summary)
                 .help(reading.summary)
             }
+            // after the rings, only while grown: pausing breaks is a choice, never something that pops up on hover
+            if expanded, breaks.settings.enabled {
+                let paused = breaks.pausedUntil.map { "Paused until \($0.formatted(date: .omitted, time: .shortened))" }
+                Button {
+                    onBreakMenu?(cupFrame) {
+                        state.settingsTab = "Breaks"
+                        showSettings(openSettings)
+                    }
+                } label: {
+                    BreakCup(pausedUntil: breaks.pausedUntil)
+                }
+                .buttonStyle(.plain)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cupFrame = $0 }
+                .transition(.railExtra)
+                .accessibilityLabel("Breaks")
+                .accessibilityValue(paused ?? "On")
+                .accessibilityHint("Pause or resume breaks")
+                .help(state.menuOpen ? "" : paused ?? "Pause breaks")
+            }
         }
         .focusEffectDisabled()   // the panel can be key now (pet composer); no focus ring on the rail
         .padding(vertical ? .vertical : .horizontal, expanded ? (vertical ? 16 : 20) : 14)
@@ -980,7 +993,8 @@ struct OverlayView: View {
         .simultaneousGesture(DragGesture(minimumDistance: 4, coordinateSpace: .global)
             .onChanged { _ in onDrag?() }
             .onEnded { _ in onDrop?() })
-        .help(state.cardVisible || state.petVisible ? "" : "Drag to any screen edge, or throw into this one to minimize")   // it would cover the open card
+        // it would cover the open card, or the cup's menu
+        .help(state.cardVisible || state.petVisible || state.menuOpen ? "" : "Drag to any screen edge, or throw into this one to minimize")
     }
 
     /// The side of the rail a tuck leaves on screen (away from the edge), and where a ring's tick sits in that 7 pt band:
@@ -1129,14 +1143,8 @@ struct MenuBarPopover: View {
                 }
                 Spacer()
                 Button("Settings…") {
-                    // accessory app: without activation the settings window opens behind everything
-                    NSApp.activate(ignoringOtherApps: true)
-                    openSettings()
+                    showSettings(openSettings)
                     dismiss()   // the popover would stay open behind Settings
-                    DispatchQueue.main.async {
-                        NSApp.windows.first { $0.title.contains("Settings") || $0.title.contains("Pulse") }?
-                            .orderFrontRegardless()
-                    }
                 }
                 Button("Quit") { NSApp.terminate(nil) }
             }
@@ -1149,6 +1157,15 @@ struct MenuBarPopover: View {
     }
 }
 
+/// Opens Settings in front: Pulse is an accessory app, so without activation the window opens behind everything.
+@MainActor func showSettings(_ openSettings: OpenSettingsAction) {
+    NSApp.activate(ignoringOtherApps: true)
+    openSettings()
+    DispatchQueue.main.async {
+        NSApp.windows.first { $0.title.contains("Settings") || $0.title.contains("Pulse") }?.orderFrontRegardless()
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject var state: AppState
     // owned by macOS, not state.json, so a change in System Settings → Login Items shows here too
@@ -1156,7 +1173,7 @@ struct SettingsView: View {
 
     /// One tab per group. Only the layout is grouped: every value is saved where it always was.
     var body: some View {
-        TabView {
+        TabView(selection: $state.settingsTab) {
             tab("General", "gearshape", height: 210) {
                 Section {
                     Toggle("Launch at login", isOn: Binding(
@@ -1292,6 +1309,7 @@ struct SettingsView: View {
             .scrollContentBackground(.hidden)
             .frame(width: 460, height: height)
             .tabItem { Label(title, systemImage: symbol) }
+            .tag(title)
     }
 }
 

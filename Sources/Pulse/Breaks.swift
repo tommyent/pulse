@@ -200,7 +200,7 @@ struct BreakSchedule {
     private(set) var nextMicro: Date
     private(set) var nextLong: Date
     private(set) var snoozedUntil: Date?
-    /// The hover hint's Pause: no breaks until then, through time away and a restart. The clocks keep running, so a
+    /// The break cup's Pause: no breaks until then, through time away and a restart. The clocks keep running, so a
     /// break that came due meanwhile comes as the pause ends.
     var pausedUntil: Date?
     private var currentDue: Date?                // when the break counting down or on screen was due

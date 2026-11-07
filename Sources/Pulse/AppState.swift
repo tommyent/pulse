@@ -130,6 +130,9 @@ final class AppState: ObservableObject {
     @Published var dragging = false
     @Published var peeking = false   // a tucked rail slid out while the pointer rests on it
     var gliding = false   // the rail is moving to its edge: hover changes would move its target mid-flight
+    // the break cup's menu is up: the pointer leaves the rail to reach it, which mustn't close it; tooltips hide meanwhile
+    @Published var menuOpen = false
+    @Published var settingsTab = "General"   // Break settings… opens Settings at Breaks
     private var refreshRequested = false
     private var agy = AgyPause()   // agy signed out or stalled: only a manual refresh runs it again
     private let fetches = ProviderFetches { await fetchSnapshot($0) }
@@ -174,7 +177,7 @@ final class AppState: ObservableObject {
     }
 
     func collapseOverlay() {
-        guard !dragging else { return }
+        guard !dragging, !menuOpen else { return }
         if cardVisible { cardVisible = false }
         if petVisible { petVisible = false }
         if hoveringOverlay { hoveringOverlay = false }

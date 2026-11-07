@@ -904,44 +904,28 @@ struct BreakHistorySection: View {
     }
 }
 
-/// On hover, beside the rail: when the next break comes, and Pause for a meeting that isn't a call on this Mac.
-struct NextBreakHint: View {
-    @ObservedObject var controller: BreakController
-    var tail: Edge = .trailing
+/// The grown rail's last item: a click opens the pause menu (`OverlayController.showBreakMenu`), for a meeting that
+/// isn't a call on this Mac. No ring: while breaks are paused it carries a badge, and the menu says until when.
+struct BreakCup: View {
+    let pausedUntil: Date?
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 20)) { context in
-            if let text = controller.nextText(context.date) {
-                let paused = controller.pausedUntil.map { $0 > context.date } ?? false
-                VStack(alignment: .leading, spacing: 7) {
-                    Label(text, systemImage: paused ? "pause.circle" : "cup.and.saucer")
-                    HStack(spacing: 6) {
-                        if paused {
-                            chip("Resume", help: "Breaks come on their times again") { controller.pauseBreaks(for: nil) }
-                        } else {
-                            Text("Pause").foregroundStyle(PulsePalette.secondary).accessibilityHidden(true)
-                            ForEach([30, 60, 120], id: \.self) { minutes in
-                                let length = minutes < 60 ? "\(minutes) min" : "\(minutes / 60) hr"
-                                chip(length, help: "No breaks for \(length)") { controller.pauseBreaks(for: TimeInterval(minutes * 60)) }
-                                    .accessibilityLabel("Pause breaks for \(Duration.seconds(minutes * 60).formatted(.units(allowed: [.hours, .minutes], width: .wide)))")
-                            }
-                        }
+        TimelineView(.periodic(from: .now, by: 30)) { context in   // the badge goes when the pause runs out
+            Image(systemName: "cup.and.saucer")
+                .font(.system(size: 19, weight: .medium))
+                .foregroundStyle(Color.primary)
+                .frame(width: 44, height: 44)
+                .overlay(alignment: .bottomTrailing) {
+                    if let until = pausedUntil, until > context.date {
+                        Image(systemName: "pause.fill")
+                            .font(.system(size: 7, weight: .heavy))
+                            .foregroundStyle(.black)
+                            .frame(width: 15, height: 15)
+                            .background(Color.orange, in: Circle())
+                            .offset(x: -4, y: -5)
                     }
                 }
-                .font(.system(size: 12.5, weight: .medium))
-                .fixedSize()
-                .padding(.horizontal, 14).padding(.vertical, 9)
-                .padding(Edge.Set(tail), PillShape.tailWidth)
-                .pulseSurface(in: PillShape(edge: tail, maxRadius: 16))
-                .accessibilityElement(children: .contain)
-            }
+                .contentShape(Rectangle())
         }
-    }
-
-    private func chip(_ title: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(title, action: action)
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .help(help)
     }
 }

@@ -75,7 +75,7 @@ enum BreakChecks {
         assert(s.tick(now: at(45.5 + 1.0 / 3), idle: 0, voiceActive: false) == .end(.micro, .taken, due: at(20)))
         assert(next(s, 46).0 == at(60))   // the slot at 40 passed during the hold: skipped, not stacked
 
-        // Pause from the hover hint: nothing comes until it ends, time away leaves it, then the break due comes;
+        // Pause from the rail's break cup: nothing comes until it ends, time away leaves it, then the break due comes;
         // turning breaks off ends it
         s = BreakSchedule(settings: on, now: t0)
         s.pausedUntil = at(90)
