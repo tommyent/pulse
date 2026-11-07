@@ -5,7 +5,7 @@ A macOS menu bar app with floating usage rings for Claude, Codex, Grok and Antig
 Everything runs on your own subscription sign-ins. There are no API keys, no accounts with Pulse, and no backend of its own.
 
 <p align="center">
-  <img src="docs/screenshots/usage-card.png" width="445" alt="The rail at the screen edge with sample numbers and Show what's left on: the Codex pet, Claude, Codex, Grok, Antigravity's violet and sky blue rings and the battery, with the Claude card open: current session, all models and Fable, each with what's left and its reset time">
+  <img src="docs/screenshots/usage-card.png" width="428" alt="The rail at the screen edge with sample numbers and Show what's left on: the Codex pet, Claude, Codex, Grok, Antigravity's violet and sky blue rings and the battery, with the Claude card open: current session, all models and Fable, each with what's left and its reset time">
   &nbsp;
   <img src="docs/screenshots/pet-card.png" width="371" alt="The Codex pet card with an empty chat: the work model and effort in the header, a text field, Send and the voice button">
 </p>
@@ -13,9 +13,9 @@ Everything runs on your own subscription sign-ins. There are no API keys, no acc
 Rings show what you've used, or turn on **Settings → Rings → Show what's left** and they empty as you go. The cards follow. Here are the same numbers both ways:
 
 <p align="center">
-  <img src="docs/screenshots/rail-used.png" width="376" alt="Five rings showing what's used: 34%, 26%, 38%, 12% and 20%">
-  &nbsp;
-  <img src="docs/screenshots/rail-left.png" width="376" alt="The same rings showing what's left: 66%, 74%, 62%, 88% and 80%">
+  <img src="docs/screenshots/rail-used.png" width="581" alt="Five rings showing what's used: 34%, 26%, 38%, 12% and 20%">
+  <br>
+  <img src="docs/screenshots/rail-left.png" width="581" alt="The same rings showing what's left: 66%, 74%, 62%, 88% and 80%">
 </p>
 
 ## Requirements
@@ -67,6 +67,10 @@ On a Mac with a battery, the last ring on the rail is the battery: at the bottom
 
 Click it for its card: the charge and whether it's charging, with the time until full or the time left; what the whole Mac is drawing, how much of it goes into the battery and the adapter's wattage; the battery's Maximum Capacity and condition as System Settings shows them; its cycle count; and whether Low Power Mode is on. It reads the numbers when it opens and the power every few seconds while it stays open.
 
+<p align="center">
+  <img src="docs/screenshots/battery-card.png" width="428" alt="The battery card beside the rail, with sample numbers: 84%, charging, full in about 35 min; the Mac is using 9.6 W; charging at 21.3 W from a 70 W adapter; Maximum Capacity 95%, Normal; 234 cycles">
+</p>
+
 When the charge reaches either level, Pulse shows its own alert in the middle of the screen with the percentage and, when macOS has an estimate, the time left. It never uses Notification Center. The alert doesn't take the keyboard, ignores clicks for its first second, and stays until you click **Dismiss** or plug in; plugging in also stops its sound. Each level alerts once per discharge.
 
 **Settings → Battery** sets both levels (20% and 10% by default), a sound for each, and whether it loops until you act. The sounds are macOS's alert sounds, anything in `~/Library/Sounds`, and audio files you add with **Import Sounds…**, which copies them into `~/Library/Application Support/Pulse/Sounds`. If `~/.config/pushover.env` holds `PUSHOVER_USER` and `PUSHOVER_TOKEN` (and optionally `PUSHOVER_DEVICE`) for [Pushover](https://pushover.net), a critical alert is also pushed to your phone; **Send Test Push** checks the setup.
@@ -81,9 +85,9 @@ Turn on **Settings → Breaks → Remind me to take breaks** for regular breaks 
   <img src="docs/screenshots/break-screen.png" width="600" alt="The break screen in violet: Time to take a break, 0:15 left with a violet bar, the idea Mix two teas in a cup and name the blend aloud with Reroll and Surprise me, then Back to Work, Pause and Snooze 5 min; the Codex pet, a small Codex agent and two Claude crabs along the bottom, and Grok and Antigravity floating at the top">
 </p>
 <p align="center">
-  <img src="docs/screenshots/break-countdown.png" width="260" alt="The countdown beside the rail: 28 seconds in an emptying ring and 20-sec break">
+  <img src="docs/screenshots/break-countdown.png" width="242" alt="The countdown beside the rail: 28 seconds in an emptying ring and 20-sec break">
   &nbsp;
-  <img src="docs/screenshots/break-next.png" width="339" alt="The pointer over the rail shows Next: micro in 18 min, and Pause for 30 min, 1 hr or 2 hr">
+  <img src="docs/screenshots/break-next.png" width="321" alt="The pointer over the rail shows Next: micro in 20 min, and Pause for 30 min, 1 hr or 2 hr">
 </p>
 
 Thirty seconds before a break, a small countdown grows out of the middle of the rail: the seconds left in a ring that empties, and the break's length. Click it to start the break now; otherwise the break starts when the ring is empty. With the rings hidden, the countdown appears at the middle of the screen's right edge.
