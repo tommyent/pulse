@@ -132,6 +132,30 @@ private struct CapDisc: View {
     }
 }
 
+/// A rail item: its ring with the percentage (or the pet's voice button) under it, or to its right on a horizontal rail.
+/// 9 pt beside, because a ring's stroke reaches 3 pt past its frame.
+private func ringItemLayout(beside: Bool) -> AnyLayout {
+    beside ? AnyLayout(HStackLayout(spacing: 9)) : AnyLayout(VStackLayout(spacing: 6))
+}
+
+/// A ring's percentage. Beside its ring it keeps room for two digits, so the rings after it don't shift as a value
+/// crosses from 9% to 10%.
+private struct PercentText: View {
+    let text: String
+    let beside: Bool
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            if beside { Text("00%").hidden() }
+            Text(text)
+        }
+        .font(.system(size: 15, weight: .semibold).monospacedDigit())
+        // Never squeezed: the panel takes the rail's laid-out size, so a number that could shrink would shrink to nothing
+        // rather than widen the panel.
+        .fixedSize()
+    }
+}
+
 struct RingView: View {
     @Environment(\.showsRemaining) private var remaining
     let account: AccountID
@@ -142,11 +166,13 @@ struct RingView: View {
     var tertiary: Double? = nil    // how full it is; with no number it stays empty
     var size: CGFloat = 52
     var showPercent = true
+    var beside = false   // the percentage to the ring's right, not under it
     var nearLimit = false   // any of the account's windows at 98%+, drawn or not
     var stale = false   // the numbers are from an earlier refresh: dimmed, so they never pass for live ones
 
     var body: some View {
-        VStack(spacing: 6) {
+        let layout = ringItemLayout(beside: beside)
+        layout {
             ZStack {
                 if hasDisc {
                     CapDisc(level: discLevel, diameter: size * 0.61)   // inside the inner track
@@ -177,8 +203,7 @@ struct RingView: View {
                 }
             }
             if showPercent {
-                Text(percent.map { "\(remaining ? 100 - Int($0) : Int($0))%" } ?? "—")   // 98.4 used is 98%, so 2% left
-                    .font(.system(size: 15, weight: .semibold).monospacedDigit())
+                PercentText(text: percent.map { "\(remaining ? 100 - Int($0) : Int($0))%" } ?? "—", beside: beside)   // 98.4 used is 98%, so 2% left
                     .foregroundStyle(Color.primary)
                     .opacity(stale ? staleOpacity : 1)
             }
@@ -207,9 +232,11 @@ struct BatteryRing: View {
     let level: BatteryLevel
     var size: CGFloat = 52
     var showPercent = true
+    var beside = false   // the percentage to the ring's right, not under it
 
     var body: some View {
-        VStack(spacing: 6) {
+        let layout = ringItemLayout(beside: beside)
+        layout {
             ZStack {
                 RingTrack(lineWidth: size * 0.12)
                 Circle()
@@ -222,8 +249,7 @@ struct BatteryRing: View {
             }
             .frame(width: size, height: size)
             if showPercent {
-                Text("\(reading.percent)%")
-                    .font(.system(size: 15, weight: .semibold).monospacedDigit())
+                PercentText(text: "\(reading.percent)%", beside: beside)
                     .foregroundStyle(level == .critical ? Color.red : Color.primary)
             }
         }
@@ -698,11 +724,13 @@ struct OverlayView: View {
     /// The tail's position along the card's edge: at the rail item that opened the card.
     private func tailAt(_ item: String) -> CGFloat? {
         guard let target = itemFrames[item], cardFrame != .zero else { return nil }
-        return state.dock.isVertical ? ringCentre(target) - cardFrame.minY : target.midX - cardFrame.minX
+        return ringCentre(target) - (state.dock.isVertical ? cardFrame.minY : cardFrame.minX)
     }
 
-    /// On a vertical rail an item is its ring with the percentage under it: the tail points at the ring.
-    private func ringCentre(_ item: CGRect) -> CGFloat { item.minY + min(item.width, item.height) / 2 }
+    /// An item is its ring with the percentage under it (vertical rail) or to its right (horizontal): the tail points at the ring.
+    private func ringCentre(_ item: CGRect) -> CGFloat {
+        (state.dock.isVertical ? item.minY : item.minX) + min(item.width, item.height) / 2
+    }
 
     /// How far along the rail an open card moves so its tail lands on the item that opened it. A card centred on a
     /// long rail couldn't reach the items near its ends. It stays within the rail's length, so inside the panel, and
@@ -712,7 +740,7 @@ struct OverlayView: View {
         let vertical = state.dock.isVertical
         let room = (vertical ? railFrame.height - cardFrame.height : railFrame.width - cardFrame.width) / 2
         guard room > 0 else { return 0 }
-        return min(max(vertical ? ringCentre(target) - railFrame.midY : target.midX - railFrame.midX, -room), room)
+        return min(max(ringCentre(target) - (vertical ? railFrame.midY : railFrame.midX), -room), room)
     }
 
     var body: some View {
@@ -802,12 +830,14 @@ struct OverlayView: View {
     }
 
     private var rail: some View {
-        let layout = state.dock.isVertical
-            ? AnyLayout(VStackLayout(spacing: expanded ? 18 : 10))
-            : AnyLayout(HStackLayout(alignment: .top, spacing: expanded ? 18 : 10))
+        let vertical = state.dock.isVertical
+        let beside = expanded && !vertical   // a horizontal rail puts each percentage to its ring's right, so it grows only in length
+        let layout = vertical
+            ? AnyLayout(VStackLayout(spacing: expanded ? 12 : 10))
+            : AnyLayout(HStackLayout(spacing: expanded ? 16 : 10))
         return layout {
             if state.showsPet {
-                PetRailItem(expanded: expanded, onFrame: { itemFrames["pet"] = $0 }, toggle: togglePet)
+                PetRailItem(expanded: expanded, beside: beside, onFrame: { itemFrames["pet"] = $0 }, toggle: togglePet)
             }
             ForEach(state.enabledAccounts) { id in
                 let stale = state.snapshots[id]?.health == .stale
@@ -824,6 +854,7 @@ struct OverlayView: View {
                                  tertiary: windows.disc?.percentUsed,
                                  size: expanded ? 52 : 28,
                                  showPercent: expanded,
+                                 beside: beside,
                                  nearLimit: windows.contains(where: \.isNearLimit),
                                  stale: stale)
                             .contentShape(Rectangle())
@@ -858,12 +889,12 @@ struct OverlayView: View {
             // last: the bottom of a vertical rail, the right end of a horizontal one
             if state.persisted.battery.showInRail, let reading = battery.reading {
                 BatteryRing(reading: reading, level: state.persisted.battery.level(reading.percent),
-                            size: expanded ? 52 : 28, showPercent: expanded)
+                            size: expanded ? 52 : 28, showPercent: expanded, beside: beside)
             }
         }
         .focusEffectDisabled()   // the panel can be key now (pet composer); no focus ring on the rail
-        .padding(state.dock.isVertical ? .vertical : .horizontal, expanded ? 22 : 14)
-        .padding(state.dock.isVertical ? .horizontal : .vertical, expanded ? 12 : 8)
+        .padding(vertical ? .vertical : .horizontal, expanded ? (vertical ? 16 : 20) : 14)
+        .padding(vertical ? .horizontal : .vertical, expanded ? 12 : 8)
         .pulseSurface(in: Capsule())
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { railFrame = $0; onRailFrame?($0) }
         .overlay {
@@ -900,11 +931,13 @@ struct OverlayView: View {
     private struct PetRailItem: View {
         @ObservedObject private var session = CodexPetSession.shared
         let expanded: Bool
+        var beside = false   // the voice button to the pet's right, as a horizontal rail's percentages are
         let onFrame: (CGRect) -> Void
         let toggle: (Bool) -> Void
 
         var body: some View {
-            VStack(spacing: 6) {
+            let layout = ringItemLayout(beside: beside)
+            layout {
                 Button { toggle(NSApp.currentEvent?.modifierFlags.contains(.command) == true) } label: {
                     CodexPet(size: expanded ? 52 : 28, animateIdle: expanded)
                         .contentShape(Rectangle())
@@ -922,7 +955,7 @@ struct OverlayView: View {
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(session.voiceTint ?? Color.primary)
                             .symbolEffect(.variableColor.iterative, isActive: session.voiceState == .connecting)
-                            .frame(width: 52)
+                            .frame(width: beside ? 24 : 52, height: beside ? 52 : nil)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
