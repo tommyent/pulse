@@ -55,10 +55,45 @@ enum BatteryChecks {
         assert(Pushover.request(title: "", message: "", keys: ["PUSHOVER_USER": "u"]) == nil)
         assert(Pushover.request(title: "", message: "", keys: ["PUSHOVER_USER": "u", "PUSHOVER_TOKEN": ""]) == nil)
 
+        // The battery card. Charging on a 100 W adapter: the readings an Air gave on 2026-11-07.
+        let source: [String: Any] = ["Type": "InternalBattery", "Is Charging": true, "Time to Full Charge": 40]
+        let registry: [String: Any] = ["Voltage": 13192, "Amperage": 170, "CycleCount": 234,
+                                       "PowerTelemetryData": ["SystemLoad": 14706, "SystemPowerIn": 16948, "BatteryPower": 2242]]
+        var charging = BatteryDetails.parse(source: source, registry: registry, adapter: ["Watts": 100])
+        assert(charging.charging && charging.minutesToFull == 40 && charging.adapterWatts == 100 && charging.cycles == 234)
+        assert(abs(charging.macWatts! - 14.706) < 0.001 && abs(charging.batteryWatts! - 2.24264) < 0.001)
+        assert(charging.power == "The Mac is using 14.7 W · charging at 2.2 W from a 100 W adapter", charging.power ?? "nil")
+        assert(charging.status(ac(100)) == "100% · Charging, full in about \(batteryTimeLeft(40))")
+        assert(charging.cycleCount == "234 cycles" && charging.health == nil)
+        // System Information's JSON, trimmed to what the card reads
+        let profiler = Data(#"{"SPPowerDataType":[{"_name":"spbattery_information","sppower_battery_charge_info":{"sppower_battery_state_of_charge":100},"sppower_battery_health_info":{"sppower_battery_cycle_count":234,"sppower_battery_health":"Good","sppower_battery_health_maximum_capacity":"95%"}},{"_name":"sppower_ac_charger_information"}]}"#.utf8)
+        charging.addHealth(profilerJSON: profiler)
+        assert(charging.maxCapacity == 95 && charging.condition == "Normal" && charging.health == "Maximum Capacity 95% · Normal")
+        var worn = BatteryDetails()
+        worn.addHealth(profilerJSON: Data(#"{"SPPowerDataType":[{"sppower_battery_health_info":{"sppower_battery_health":"Service Recommended","sppower_battery_cycle_count":1}}]}"#.utf8))
+        assert(worn.health == "Condition: Service Recommended" && worn.cycleCount == "1 cycle")
+        worn.addHealth(profilerJSON: Data("not json".utf8))   // unreadable output changes nothing
+        assert(worn.condition == "Service Recommended")
+        // still estimating (-1), then full (0): no time to full
+        assert(BatteryDetails.parse(source: ["Is Charging": true, "Time to Full Charge": -1], registry: [:], adapter: nil).minutesToFull == nil)
+        let full = BatteryDetails.parse(source: ["Is Charging": false, "Time to Full Charge": 0], registry: registry, adapter: ["Watts": 100])
+        assert(full.minutesToFull == nil && full.status(ac(100)) == "100% · Plugged in, fully charged" && full.status(ac(80)) == "80% · Plugged in, not charging")
+        assert(full.power == "The Mac is using 14.7 W from a 100 W adapter")
+        // on battery, with no telemetry: the battery's own discharge is the Mac's draw, and no adapter
+        let draining = BatteryDetails.parse(source: ["Is Charging": false], registry: ["Voltage": 12500, "Amperage": -640], adapter: nil)
+        assert(abs(draining.macWatts! - 8.0) < 0.001 && draining.power == "The Mac is using 8.0 W", draining.power ?? "nil")
+        assert(draining.status(BatteryReading(percent: 64, onAC: false, minutesLeft: 180)) == "64% · On battery, about \(batteryTimeLeft(180)) left")
+        assert(draining.status(on(64)) == "64% · On battery" && BatteryDetails().power == nil)
+        assert(BatteryReading.simulated("8")!.summary == "8% (simulated)" && ac(50).summary == "50%, plugged in")
+
         // this Mac's own battery, if it has one
         if let r = BatteryMonitor.internalBattery() {
             assert((0...100).contains(r.percent) && (r.minutesLeft ?? 1) > 0)
             assert(!r.onAC || r.minutesLeft == nil)
+            let d = BatteryDetails.read()
+            assert(d != nil && (d!.cycles ?? 0) > 0)
+            var withHealth = d!
+            if let json = BatteryDetails.profilerJSON() { withHealth.addHealth(profilerJSON: json); assert(withHealth.maxCapacity != nil) }
         }
         print("battery checks passed")
     }

@@ -253,16 +253,49 @@ struct BatteryRing: View {
                     .foregroundStyle(level == .critical ? Color.red : Color.primary)
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Battery")
-        .accessibilityAddTraits(.isImage)   // without a role, VoiceOver may skip it
-        .accessibilityValue(summary)
-        .help(summary)
     }
+}
 
-    private var summary: String {
-        "\(reading.percent)%" + (reading.onAC ? ", plugged in" : reading.minutesLeft.map { ", about \(batteryTimeLeft($0)) left" } ?? "")
-            + (reading.simulated ? " (simulated)" : "")
+/// The battery ring's card: the charge and its state, where the power goes, and the battery's health. The health is read
+/// once per opening (it starts System Information's tool); the rest every 5 s while the card is open.
+struct BatteryCard: View {
+    let reading: BatteryReading
+    var tailEdge: Edge = .trailing
+    var tailAt: CGFloat? = nil
+    @State private var details: BatteryDetails?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: reading.onAC ? "bolt.fill" : "battery.75percent").font(.system(size: 15, weight: .semibold))
+                Text("Battery").font(.headline)
+                Spacer()
+            }
+            .foregroundStyle(Color.primary)
+            Text((details ?? BatteryDetails()).status(reading)).font(.subheadline).foregroundStyle(Color.primary)
+            let lines = [details?.power, details?.health, details?.cycleCount,
+                         details?.lowPowerMode == true ? "Low Power Mode is on" : nil].compactMap { $0 }
+            if !lines.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(lines, id: \.self) { Text($0) }
+                }
+                .font(.caption).foregroundStyle(PulsePalette.secondary)
+                .fixedSize(horizontal: false, vertical: true)   // wraps rather than cutting off the power line
+            }
+        }
+        .padding(16)
+        .padding(Edge.Set(tailEdge), BubbleShape.tailWidth)
+        .frame(width: tailEdge == .trailing || tailEdge == .leading ? 320 + BubbleShape.tailWidth : 320)
+        .pulseSurface(in: BubbleShape(edge: tailEdge, at: tailAt))
+        .task {
+            let json = await Task.detached { BatteryDetails.profilerJSON() }.value
+            while !Task.isCancelled {
+                var next = BatteryDetails.read()
+                if let json { next?.addHealth(profilerJSON: json) }
+                if next != details { details = next }
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
     }
 }
 
@@ -716,6 +749,7 @@ struct OverlayView: View {
 
     private var expanded: Bool { !state.tuckedAway && (state.hoveringOverlay || state.cardVisible || state.petVisible) }
     @State private var itemFrames: [String: CGRect] = [:]   // the pet and each ring, so a card's tail points at its own
+    @State private var batteryCard = false   // the open card is the battery's, not the selected account's
     @State private var cardFrame = CGRect.zero
     @State private var railFrame = CGRect.zero
 
@@ -807,7 +841,7 @@ struct OverlayView: View {
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onHintFrame?($0) }
                     .onDisappear { onHintFrame?(.zero) }
             }
-            let shift = cardShift(state.petVisible ? "pet" : ringKey(state.selected, pool: state.selectedPool))
+            let shift = cardShift(state.petVisible ? "pet" : batteryCard ? "battery" : ringKey(state.selected, pool: state.selectedPool))
             usageOrPetCard(tail: tail)
                 .offset(x: state.dock.isVertical ? 0 : shift, y: state.dock.isVertical ? shift : 0)
         }
@@ -819,6 +853,11 @@ struct OverlayView: View {
         if state.petVisible {
             PetCard(tailEdge: tail, tailAt: tailAt("pet"), showUsage: state.persisted.enabled.contains(.codex) ? { toggleCard(.codex) } : nil)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
+        } else if state.cardVisible, batteryCard {
+            if let reading = battery.reading {
+                BatteryCard(reading: reading, tailEdge: tail, tailAt: tailAt("battery"))
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
+            }
         } else if state.cardVisible, state.persisted.enabled.contains(state.selected) {
             let snapshot = state.snapshots[state.selected] ?? .checking(state.selected)
             let pools = snapshot.shownWindows().pools
@@ -888,8 +927,16 @@ struct OverlayView: View {
             }
             // last: the bottom of a vertical rail, the right end of a horizontal one
             if state.persisted.battery.showInRail, let reading = battery.reading {
-                BatteryRing(reading: reading, level: state.persisted.battery.level(reading.percent),
-                            size: expanded ? 52 : 28, showPercent: expanded, beside: beside)
+                Button(action: toggleBattery) {
+                    BatteryRing(reading: reading, level: state.persisted.battery.level(reading.percent),
+                                size: expanded ? 52 : 28, showPercent: expanded, beside: beside)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { itemFrames["battery"] = $0 }
+                .accessibilityLabel("Battery")
+                .accessibilityValue(reading.summary)
+                .help(reading.summary)
             }
         }
         .focusEffectDisabled()   // the panel can be key now (pet composer); no focus ring on the rail
@@ -979,11 +1026,23 @@ struct OverlayView: View {
     private func toggleCard(_ id: AccountID, pool: Int = 0) {
         guard !state.dragging else { return }
         state.petVisible = false
-        if state.cardVisible, state.selected == id, state.selectedPool == pool {
+        if state.cardVisible, !batteryCard, state.selected == id, state.selectedPool == pool {
             state.cardVisible = false
         } else {
+            batteryCard = false
             state.selected = id
             state.selectedPool = pool
+            state.cardVisible = true
+        }
+    }
+
+    private func toggleBattery() {
+        guard !state.dragging else { return }
+        state.petVisible = false
+        if state.cardVisible, batteryCard {
+            state.cardVisible = false
+        } else {
+            batteryCard = true
             state.cardVisible = true
         }
     }

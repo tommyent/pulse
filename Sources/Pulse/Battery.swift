@@ -1,4 +1,5 @@
 import Foundation
+import IOKit
 import IOKit.ps
 import SwiftUI
 
@@ -113,6 +114,132 @@ final class BatteryMonitor: ObservableObject {
 /// "1 hr, 5 min" left.
 func batteryTimeLeft(_ minutes: Int) -> String {
     Duration.seconds(minutes * 60).formatted(.units(allowed: [.hours, .minutes], width: .abbreviated))
+}
+
+extension BatteryReading {
+    /// The ring's tooltip and what VoiceOver reads for it.
+    var summary: String {
+        "\(percent)%" + (onAC ? ", plugged in" : minutesLeft.map { ", about \(batteryTimeLeft($0)) left" } ?? "")
+            + (simulated ? " (simulated)" : "")
+    }
+}
+
+/// The battery card's lines beyond the charge, from public sources only: the power-source API, the battery's
+/// registry entry, and System Information's data for what System Settings calls Maximum Capacity.
+struct BatteryDetails: Equatable {
+    var charging = false
+    var minutesToFull: Int?     // while charging, once macOS has an estimate
+    var macWatts: Double?       // what the whole Mac draws, from the adapter or the battery
+    var batteryWatts: Double?   // into the battery while charging, out of it (negative) on battery
+    var adapterWatts: Int?
+    var maxCapacity: Int?       // percent, System Settings' Maximum Capacity
+    var condition: String?
+    var cycles: Int?
+    var lowPowerMode = false
+
+    /// The power-source description, the battery's registry properties and the adapter's details, as macOS gives them.
+    static func parse(source: [String: Any], registry: [String: Any], adapter: [String: Any]?) -> BatteryDetails {
+        func number(_ any: Any?) -> Int64? { (any as? NSNumber)?.int64Value }   // amperage is signed
+        var d = BatteryDetails()
+        d.charging = source[kIOPSIsChargingKey] as? Bool ?? false
+        d.minutesToFull = (source[kIOPSTimeToFullChargeKey] as? Int).flatMap { $0 > 0 ? $0 : nil }   // -1 while estimating, 0 when full
+        if let mV = number(registry["Voltage"]), let mA = number(registry["Amperage"]) {
+            d.batteryWatts = Double(mV * mA) / 1_000_000
+        }
+        // SystemLoad is what the Mac uses while the adapter also charges the battery (seen on AC: adapter in = load + charging).
+        // shortcut: on battery it falls back to the battery's own discharge; SystemLoad there wasn't seen, check it on a Mac on battery.
+        if let load = number((registry["PowerTelemetryData"] as? [String: Any])?["SystemLoad"]), load > 0 {
+            d.macWatts = Double(load) / 1000
+        } else if let out = d.batteryWatts, out < 0 {
+            d.macWatts = -out
+        }
+        d.adapterWatts = (adapter?[kIOPSPowerAdapterWattsKey] as? Int).flatMap { $0 > 0 ? $0 : nil }
+        d.cycles = number(registry["CycleCount"]).map(Int.init)
+        return d
+    }
+
+    /// Maximum Capacity and condition from `system_profiler SPPowerDataType -json`. Its JSON says "Good" where System
+    /// Settings and its own text output say "Normal" (seen 2026-11-07), so that one is translated.
+    mutating func addHealth(profilerJSON data: Data) {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let items = root["SPPowerDataType"] as? [[String: Any]],
+              let health = items.lazy.compactMap({ $0["sppower_battery_health_info"] as? [String: Any] }).first else { return }
+        maxCapacity = (health["sppower_battery_health_maximum_capacity"] as? String)
+            .flatMap { Int($0.trimmingCharacters(in: CharacterSet(charactersIn: "% "))) }
+        condition = (health["sppower_battery_health"] as? String).map { $0 == "Good" ? "Normal" : $0 }
+        if cycles == nil { cycles = health["sppower_battery_cycle_count"] as? Int }
+    }
+
+    /// "100% · Charging, full in about 40 min", or "64% · On battery, about 3 hr left".
+    func status(_ reading: BatteryReading) -> String {
+        let state = if !reading.onAC {
+            "On battery" + (reading.minutesLeft.map { ", about \(batteryTimeLeft($0)) left" } ?? "")
+        } else if charging {
+            "Charging" + (minutesToFull.map { ", full in about \(batteryTimeLeft($0))" } ?? "")
+        } else {
+            reading.percent >= 100 ? "Plugged in, fully charged" : "Plugged in, not charging"
+        }
+        return "\(reading.percent)% · \(state)" + (reading.simulated ? " (simulated)" : "")
+    }
+
+    /// "The Mac is using 14.7 W · charging at 2.2 W from a 100 W adapter".
+    var power: String? {
+        guard let macWatts else { return nil }
+        func watts(_ w: Double) -> String { "\(w.formatted(.number.precision(.fractionLength(1)))) W" }
+        var line = "The Mac is using \(watts(macWatts))"
+        if charging, let into = batteryWatts, into >= 0.1 { line += " · charging at \(watts(into))" }
+        if let adapterWatts { line += " from a \(adapterWatts) W adapter" }
+        return line
+    }
+
+    /// "Maximum Capacity 95% · Normal".
+    var health: String? {
+        switch (maxCapacity, condition) {
+        case let (capacity?, condition?): "Maximum Capacity \(capacity)% · \(condition)"
+        case let (capacity?, nil): "Maximum Capacity \(capacity)%"
+        case let (nil, condition?): "Condition: \(condition)"
+        case (nil, nil): nil
+        }
+    }
+
+    var cycleCount: String? { cycles.map { $0 == 1 ? "1 cycle" : "\($0) cycles" } }
+
+    /// Everything but the health: IOKit calls only, quick enough for the main thread. nil on a Mac without a battery.
+    static func read() -> BatteryDetails? {
+        guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let list = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef],
+              let source = list.lazy.compactMap({ IOPSGetPowerSourceDescription(info, $0)?.takeUnretainedValue() as? [String: Any] })
+                .first(where: { $0[kIOPSTypeKey] as? String == kIOPSInternalBatteryType }) else { return nil }
+        var registry: [String: Any] = [:]
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
+        if service != 0 {
+            defer { IOObjectRelease(service) }
+            var props: Unmanaged<CFMutableDictionary>?
+            if IORegistryEntryCreateCFProperties(service, &props, kCFAllocatorDefault, 0) == KERN_SUCCESS {
+                registry = props?.takeRetainedValue() as? [String: Any] ?? [:]
+            }
+        }
+        var d = parse(source: source, registry: registry,
+                      adapter: IOPSCopyExternalPowerAdapterDetails()?.takeRetainedValue() as? [String: Any])
+        d.lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+        return d
+    }
+
+    /// System Information's power data, about 60 ms; killed after 5 s so a stuck run can't hold the card's task.
+    static func profilerJSON() -> Data? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
+        p.arguments = ["SPPowerDataType", "-json"]
+        let out = Pipe()
+        p.standardOutput = out; p.standardError = FileHandle.nullDevice; p.standardInput = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return nil }
+        let stop = DispatchWorkItem { if p.isRunning { p.terminate() } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: stop)
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        stop.cancel()
+        return p.terminationStatus == 0 ? data : nil
+    }
 }
 
 /// Pushover's message API, with the keys from `~/.config/pushover.env` (PUSHOVER_USER, PUSHOVER_TOKEN, optional
