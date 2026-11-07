@@ -30,8 +30,8 @@
   --night: #0f0d16; --night-2: #1a1630; --text: #f2f0f7; --muted: #b7b1c8; --faint: #8d86a3;
   --glow: #6e52cf; --bar: #a993ff; --on-bar: #150d33;
   /* from the app's source (Models.swift, Appearance.swift, Battery.swift, Breaks.swift) */
-  --p-surface: #090909; --p-track: #252527;
-  --p-coat: radial-gradient(ellipse 85% 85% at 16% -8%, rgba(255,255,255,.19), rgba(255,255,255,.06) 45%, transparent), #090909;   /* PulseSurface */
+  --p-surface: #121214; --p-track: #252527;   /* PulseSurface, Solid */
+  --p-light: radial-gradient(ellipse 85% 85% at 16% -8%, rgba(255,255,255,.17), rgba(255,255,255,.05) 45%, transparent);   /* PulseLight: over the content */
   --p-rim: linear-gradient(to bottom right, rgba(255,255,255,.42), #252527 50%, #1c1c1c);   /* PulseRim */
   --p-label: rgba(255, 255, 255, 0.85);   /* SwiftUI .primary in dark mode is labelColor, white at 85% */
   --p-claude: #ff5700; --p-codex: #216dff; --p-grok: #ffb400; --p-agy: #a358ff; --p-agy2: #22baff;
@@ -90,10 +90,13 @@ h1 em { font-style: normal; color: var(--bar); }
    their percentages. Pushed into its edge (.tucked) only a 7 pt sliver stays on screen, with a tick per ring. */
 .rail { position: fixed; z-index: 12; right: 12px; top: 50%; transform: translateY(-50%); touch-action: none; cursor: grab;
   display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px 8px; border-radius: 999px;
-  background: var(--p-coat); box-shadow: 0 10px 30px rgba(0,0,0,.45);
+  background: var(--p-surface); box-shadow: 0 10px 30px rgba(0,0,0,.45);
   transition: gap .28s, padding .28s, translate .35s cubic-bezier(.25,.1,.25,1); }
-.rail.open { gap: 18px; padding: 22px 12px; }
+.rail.open { gap: 12px; padding: 16px 12px; }
 /* A 1 pt rim that follows the light, which a box-shadow can't do */
+/* The light goes over the content, as in the app (over a surface that brightened, an empty ring's track would vanish); the rim over both */
+.rail::after, .hint::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: var(--p-light); pointer-events: none; z-index: 1; }
+.rail::before, .hint::before { z-index: 2; }
 .rail::before, .hint::before { content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; background: var(--p-rim); pointer-events: none;
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
 .rail .ring, .rail .pet { zoom: .5385; transition: zoom .28s; }   /* 28 / 52 */
@@ -110,7 +113,7 @@ h1 em { font-style: normal; color: var(--bar); }
 .rail.tucked .sliver { display: block; }
 /* below the resting rail (6 items x 28 + 5 gaps x 10 + 28 padding = 246 pt), clear of the section's screenshots */
 .hint { position: fixed; z-index: 11; right: 12px; top: calc(50% + 135px); max-width: 11rem; padding: .7rem .9rem;
-  border-radius: 14px; background: var(--p-coat); box-shadow: 0 10px 30px rgba(0,0,0,.45);
+  border-radius: 14px; background: var(--p-surface); box-shadow: 0 10px 30px rgba(0,0,0,.45);
   font-size: .92rem; line-height: 1.4; color: var(--text); opacity: 0; transition: opacity .3s; pointer-events: none; }
 .hint.on { opacity: 1; }
 .rail.open ~ .hint { opacity: 0; }
@@ -145,7 +148,8 @@ h1 em { font-style: normal; color: var(--bar); }
 .chip.on { transform: translateY(-50%) scale(1); opacity: 1; pointer-events: auto; }
 .rail.open ~ .chip { right: calc(12px + 76px + 10px); }
 .rail.tucked ~ .chip { opacity: 0; pointer-events: none; }
-.chip .shape { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.chip .shape, .chip .light { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.chip .light { pointer-events: none; }   /* the light and rim, over the countdown as in the app */
 .chip .start { position: relative; display: flex; align-items: center; gap: 9px; background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; border-radius: 19px; }
 .chip .cd { width: 38px; height: 38px; position: relative; }
 .chip .cd svg { position: absolute; inset: 0; transform: rotate(-90deg); overflow: visible; }
@@ -170,11 +174,11 @@ kbd { font: 600 .92em Geist; padding: .05em .4em; border-radius: 6px; background
 .shot-nologo { display: none; }
 [data-logos="off"] .shot-logo { display: none; }
 [data-logos="off"] .shot-nologo { display: block; }
-.views { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2rem; margin-top: 4rem; }
-.views figure { margin: 0; min-width: 0; }
+/* one above the other: a horizontal rail is long and short, and side by side its rings would be too small to read */
+.views { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 2rem; margin-top: 4rem; }
+.views figure { margin: 0; min-width: 0; width: min(100%, 581px); }
 .views img { width: 100%; height: auto; }
 .views figcaption { margin-top: .8rem; color: var(--muted); text-align: center; }
-@media (max-width: 760px) { .views { grid-template-columns: minmax(0, 1fr); } }
 
 /* the break: the season's film, or the break screen */
 .break { position: relative; margin-top: 18vh; padding: 14vh calc(130px + 4vw) 14vh 7vw; isolation: isolate;
@@ -267,24 +271,24 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
         <li><strong>98%, 99%, 100%.</strong> The ring gets a red badge and an alert stays in the middle of the screen until you dismiss it.</li>
         <li><strong>Per-model caps</strong> fill the gray disc behind the logo as they're used.</li>
         <li><strong>A ring per pool.</strong> Antigravity's Gemini models and its Claude and GPT models have separate limits, so each gets a ring. A switch in Settings hides the second.</li>
-        <li><strong>Small until you need it.</strong> The rings sit at a screen edge, small and without numbers until the pointer is over them; then they grow and show their percentages.</li>
+        <li><strong>Small until you need it.</strong> The rings sit at a screen edge, small and without numbers until the pointer is over them; then they grow and show their percentages. At the top or bottom of the screen each number sits beside its ring, so the rail stays slim.</li>
         <li><strong>Flick it, tuck it.</strong> Drag the rail to any edge or flick it toward one, and it glides there. Push it into its own edge and it tucks away to a thin sliver, with a tick for each ring. Click the sliver to bring it back.</li>
       </ul>
     </div>
     <div>
-      <img class="shot shot-logo" src="assets/usage-card.png" width="891" height="1421" loading="lazy" alt="Pulse with sample numbers and Show what's left on: the rail with the Codex pet, Claude, Codex, Grok, Antigravity's violet and sky blue rings and the battery, and the Claude card open with current session, all models and Fable">
-      <img class="shot shot-nologo" src="assets/usage-card-nologo.png" width="891" height="1421" loading="lazy" alt="The rail of usage rings with sample numbers and Show what's left on, and a usage card open: current session, all models and one model's limit">
+      <img class="shot shot-logo" src="assets/usage-card.png" width="855" height="1289" loading="lazy" alt="Pulse with sample numbers and Show what's left on: the rail with the Codex pet, Claude, Codex, Grok, Antigravity's violet and sky blue rings and the battery, and the Claude card open with current session, all models and Fable">
+      <img class="shot shot-nologo" src="assets/usage-card-nologo.png" width="855" height="1289" loading="lazy" alt="The rail of usage rings with sample numbers and Show what's left on, and a usage card open: current session, all models and one model's limit">
     </div>
   </div>
   <div class="views">
     <figure>
-      <img class="shot-logo" src="assets/rail-used.png" width="752" height="202" loading="lazy" alt="The same rings showing what's used: 34%, 26%, 38%, 12% and 20%">
-      <img class="shot-nologo" src="assets/rail-used-nologo.png" width="752" height="202" loading="lazy" alt="The same rings showing what's used: 34%, 26%, 38%, 12% and 20%">
+      <img class="shot-logo" src="assets/rail-used.png" width="1162" height="156" loading="lazy" alt="The same rings showing what's used: 34%, 26%, 38%, 12% and 20%">
+      <img class="shot-nologo" src="assets/rail-used-nologo.png" width="1162" height="156" loading="lazy" alt="The same rings showing what's used: 34%, 26%, 38%, 12% and 20%">
       <figcaption>What you've used</figcaption>
     </figure>
     <figure>
-      <img class="shot-logo" src="assets/rail-left.png" width="752" height="202" loading="lazy" alt="The same rings showing what's left: 66%, 74%, 62%, 88% and 80%">
-      <img class="shot-nologo" src="assets/rail-left-nologo.png" width="752" height="202" loading="lazy" alt="The same rings showing what's left: 66%, 74%, 62%, 88% and 80%">
+      <img class="shot-logo" src="assets/rail-left.png" width="1162" height="156" loading="lazy" alt="The same rings showing what's left: 66%, 74%, 62%, 88% and 80%">
+      <img class="shot-nologo" src="assets/rail-left-nologo.png" width="1162" height="156" loading="lazy" alt="The same rings showing what's left: 66%, 74%, 62%, 88% and 80%">
       <figcaption>What's left</figcaption>
     </figure>
   </div>
@@ -329,7 +333,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
 
 <section class="facts" id="battery" aria-label="More">
   <dl>
-    <div><dt>Battery alerts you can't miss.</dt><dd>The last ring is the battery. At the low and critical levels Pulse shows an alert in the middle of the screen until you dismiss it or plug in.</dd></div>
+    <div><dt>Battery alerts you can't miss.</dt><dd>The last ring is the battery. At the low and critical levels Pulse shows an alert in the middle of the screen until you dismiss it or plug in. Click the ring to see what the Mac is drawing, the battery's Maximum Capacity and its cycle count.</dd></div>
     <div><dt>Your own sign-ins.</dt><dd>No API keys, no accounts with Pulse, and no backend of its own. Usage requests go straight to each provider.</dd></div>
     <div><dt>Signed and notarized.</dt><dd>Built with a Developer ID and checked by Apple. Free, with the source on GitHub under the MIT licence.</dd></div>
   </dl>
@@ -372,6 +376,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
   <svg class="shape" aria-hidden="true"></svg>
   <button class="start" type="button" aria-label="Go to breaks"><span class="cd"><svg viewBox="0 0 38 38"><circle cx="19" cy="19" r="19" fill="none" stroke="var(--p-track)" stroke-width="4"/><circle class="cd-arc" cx="19" cy="19" r="19" fill="none" stroke="var(--p-break-bar)" stroke-width="4" stroke-linecap="round"/></svg><b>30</b></span><span class="len">20-sec break</span></button>
   <button class="x" type="button" aria-label="Hide the countdown"><svg viewBox="0 0 10 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1.5 1.5l7 7m0-7-7 7"/></svg></button>
+  <svg class="light" aria-hidden="true"></svg>
 </div>
 
 <script>
@@ -465,7 +470,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
   });
 
   // the countdown grows out of the rail, as BreakPill does; a click goes to the break, the x hides it
-  const chip = document.querySelector(".chip"), shape = chip.querySelector(".shape"), arc = chip.querySelector(".cd-arc"), num = chip.querySelector(".cd b");
+  const chip = document.querySelector(".chip"), shape = chip.querySelector(".shape"), light = chip.querySelector(".light"), arc = chip.querySelector(".cd-arc"), num = chip.querySelector(".cd b");
   const phone = matchMedia("(max-width: 760px)");
   const drawShape = () => {   // PillShape: a capsule with a 7 pt tail pointing at the rail, a 1 pt rim inside
     const w = chip.offsetWidth, h = chip.offsetHeight, t = 7;
@@ -475,7 +480,9 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
     } else { const bw = w - t, r = h / 2, m = h / 2;
       d = `M${r},0H${bw - r}A${r},${r} 0 0 1 ${bw - 4},${m - 8}L${w},${m}L${bw - 4},${m + 8}A${r},${r} 0 0 1 ${bw - r},${h}H${r}A${r},${r} 0 0 1 ${r},0Z`; }
     shape.setAttribute("viewBox", `0 0 ${w} ${h}`);
-    shape.innerHTML = `<defs><clipPath id="pill"><path d="${d}"/></clipPath><radialGradient id="coat" cx=".16" cy="-.08" r=".85"><stop offset="0" stop-color="#fff" stop-opacity=".19"/><stop offset=".45" stop-color="#fff" stop-opacity=".06"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient><linearGradient id="rim" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".42"/><stop offset=".5" stop-color="#252527"/><stop offset="1" stop-color="#1c1c1c"/></linearGradient></defs><path d="${d}" fill="var(--p-surface)"/><path d="${d}" fill="url(#coat)"/><path d="${d}" fill="none" stroke="url(#rim)" stroke-width="2" clip-path="url(#pill)"/>`;
+    light.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    shape.innerHTML = `<path d="${d}" fill="var(--p-surface)"/>`;
+    light.innerHTML = `<defs><clipPath id="pill"><path d="${d}"/></clipPath><radialGradient id="coat" cx=".16" cy="-.08" r=".85"><stop offset="0" stop-color="#fff" stop-opacity=".17"/><stop offset=".45" stop-color="#fff" stop-opacity=".05"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient><linearGradient id="rim" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".42"/><stop offset=".5" stop-color="#252527"/><stop offset="1" stop-color="#1c1c1c"/></linearGradient></defs><path d="${d}" fill="url(#coat)"/><path d="${d}" fill="none" stroke="url(#rim)" stroke-width="2" clip-path="url(#pill)"/>`;
     chip.style.padding = phone.matches ? "0 12px 7px 7px" : "0 19px 0 7px";
   };
   const total = 30; let left = total, timer = null;
