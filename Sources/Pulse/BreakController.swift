@@ -14,7 +14,7 @@ extension UserDefaults {
     @objc dynamic var simulatedBreak: String? { string(forKey: "simulatedBreak") }
     /// Shows this text as every break's idea, for testing and screenshots: `defaults write io.github.tommyent.pulse simulatedIdea "…"`.
     var simulatedIdea: String? { string(forKey: "simulatedIdea") }
-    /// Dresses every break as this holiday, for testing on any day: `defaults write io.github.tommyent.pulse simulatedHoliday halloween`.
+    /// Dresses every break as this holiday, for testing on any day: `defaults write io.github.tommyent.pulse simulatedHoliday thanksgiving`.
     var simulatedHoliday: String? { string(forKey: "simulatedHoliday") }
 }
 

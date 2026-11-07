@@ -808,7 +808,7 @@ struct BreakSettingsSection: View {
             .disabled(!settings.showAgents)
             Toggle(isOn: $settings.holidays) {
                 Text("Holiday surprises")
-                Text("A short film behind the countdown on Halloween and Thanksgiving; in Party mode, holiday hats all that week and in December")
+                Text("A short film behind the countdown on Thanksgiving; in Party mode, holiday hats the weeks of Halloween and Thanksgiving and in December")
             }
             .accessibilityLabel("Holiday surprises")
         }
