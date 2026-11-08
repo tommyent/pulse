@@ -1,0 +1,9 @@
+Pause breaks from the rail, a smoother rail that stays where you put it, and a forecast on usage cards.
+
+- **Pause breaks from a cup.** The hint that popped up beside the rail on every hover is gone. The open rail now ends in a cup (at the bottom of a side rail, the right end of a top or bottom one): click it to pause breaks for 30 minutes, 1 hour or 2 hours. While they're paused the cup has a pause badge, and its menu says when they come back and offers **Resume breaks**. **Break settings…** in the same menu opens Settings at Breaks. The countdown before a break is unchanged.
+- **A smoother rail.** Hovering grows the rail in a short animation instead of a jump, out of its own spot: both ways along the edge, or only away from a corner. The percentages fade in as the rings finish growing.
+- **Corners stay corners.** A rail dropped in a corner stays there: it no longer moves out of the corner after a hover. A throw that pushes it into a corner docks it there instead of minimizing it.
+- **A forecast on usage cards.** When your pace over the last 24 hours would reach a limit before it resets, its row adds one line, such as "At this rate you hit the limit Sat 3 PM", in the card, the menu bar menu and VoiceOver. It's an estimate from your recent use: after a quiet stretch it can still count yesterday's use. Rings, badges and alerts don't use it.
+- **Fixes.** A throw that left the rail off the screen could leave it invisible until Pulse restarted; it now always lands. A rail minimized to the top or bottom edge now shows its sliver. After a restart the rail stays exactly where you left it, instead of shifting along its edge. The pet's model menu shows one arrow, not two. The menu bar menu scrolls its accounts on a short screen instead of pushing Refresh, Settings and Quit off the bottom.
+
+For Apple silicon Macs on macOS 26 or later. To check the download, run `shasum -a 256 -c Pulse-0.4.3.dmg.sha256` in the folder that holds both files.

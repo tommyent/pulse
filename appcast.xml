@@ -3,15 +3,15 @@
     <channel>
         <title>Pulse</title>
         <item>
-            <title>0.4.2</title>
-            <pubDate>Sat, 07 Nov 2026 13:39:21 -0500</pubDate>
+            <title>0.4.3</title>
+            <pubDate>Sat, 07 Nov 2026 19:37:35 -0500</pubDate>
             <link>https://tommyent.github.io/pulse/</link>
-            <sparkle:version>7</sparkle:version>
-            <sparkle:shortVersionString>0.4.2</sparkle:shortVersionString>
+            <sparkle:version>8</sparkle:version>
+            <sparkle:shortVersionString>0.4.3</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <sparkle:releaseNotesLink>https://tommyent.github.io/pulse/notes/Pulse-0.4.2.md</sparkle:releaseNotesLink>
-            <enclosure url="https://github.com/tommyent/pulse/releases/download/v0.4.2/Pulse-0.4.2.dmg" length="15073938" type="application/octet-stream" sparkle:edSignature="+hTvmOWQV1HZTPaU0PvppA9ltvO+U89C4hKYNWT26lCewHIt5a79LjnYmqe0L8EN2DmPRxPwiTCAuFHrhi03BA=="/>
+            <sparkle:releaseNotesLink>https://tommyent.github.io/pulse/notes/Pulse-0.4.3.md</sparkle:releaseNotesLink>
+            <enclosure url="https://github.com/tommyent/pulse/releases/download/v0.4.3/Pulse-0.4.3.dmg" length="15110153" type="application/octet-stream" sparkle:edSignature="2MYq9ayLdDoHr+J0aivTqU8rmcJ2jkHpPSd+UmUCxjxvCu5W49zzH8P3e/s/Z4lWM+cLY/kBRCfSGCK6irdZDw=="/>
         </item>
     </channel>
 </rss>
