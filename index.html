@@ -101,8 +101,12 @@ h1 em { font-style: normal; color: var(--bar); }
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
 .rail .ring, .rail .pet { zoom: .5385; transition: zoom .28s; }   /* 28 / 52 */
 .rail.open .ring, .rail.open .pet { zoom: 1; }
-@media (max-height: 800px) and (min-width: 761px) { .rail.open { gap: 6px; padding: 14px 12px; } .rail.open .ring, .rail.open .pet { zoom: .86; } }
-.rail:not(.open) .pct, .rail:not(.open) .wave { display: none; }
+@media (max-height: 800px) and (min-width: 761px) { .rail.open { gap: 6px; padding: 14px 12px; } .rail.open .ring, .rail.open .pet, .rail.open .cup { zoom: .86; } }
+.rail:not(.open) .pct, .rail:not(.open) .wave, .rail:not(.open) .cup { display: none; }
+/* The open rail's last item, as in the app: a cup without a ring, which pauses breaks (here it goes to the breaks) */
+.rail .cup { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 22px; color: var(--p-label); }
+.rail .cup svg { width: 34px; height: 34px; }   /* the cup itself about 22 pt wide, as the app's symbol */
+.rail .cup:hover { background: rgba(255,255,255,.09); }
 .rail:not(.open) .pet:not(.waving) .sprite { animation: none; }   /* as in the app, the small pet holds still */
 .rail.tucked { translate: 49px 0; }   /* 12 pt margin + 44 pt rail - the 7 pt sliver */
 .rail.dragging { transition: none; cursor: grabbing; }
@@ -326,7 +330,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
     <button class="sound" type="button" aria-pressed="false"><svg class="muted-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9zM17 9l4 6m0-6-4 6"/></svg><span>Sound off</span></button>
   </div>
   <div class="break-copy">
-    <p>Breaks keep to their times: by default a 20-second micro break every 20 minutes and a 5-minute break every hour. Thirty seconds before, a countdown grows out of the rail. The break covers every display, waits during calls, and time away counts as a break. On holidays a short film plays behind the countdown. Coming soon: make your own from a prompt.</p>
+    <p>Breaks keep to their times: by default a 20-second micro break every 20 minutes and a 5-minute break every hour. Thirty seconds before, a countdown grows out of the rail; the cup at the end of the open rail pauses breaks for 30 minutes, an hour or two. The break covers every display, waits during calls, and time away counts as a break. On holidays a short film plays behind the countdown. Coming soon: make your own from a prompt.</p>
     <a class="download" href="https://github.com/tommyent/pulse/releases/download/v0.4.2/Pulse-0.4.2.dmg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg>Download for Mac <small>v0.4.2</small></a>
   </div>
 </section>
@@ -368,6 +372,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
   <a class="item" href="#rings" data-ring="antigravity" data-label="Antigravity, Gemini" data-used="12" data-week="30" data-cap="45"></a>
   <a class="item" href="#rings" data-ring="antigravity" data-label="Antigravity, Claude and GPT" data-pool="1" data-used="20" data-week="9"></a>
   <a class="item" href="#battery" data-battery="100"></a>
+  <a class="cup" href="#breaks" aria-label="Breaks: pause them for 30 minutes, 1 hour or 2 hours" title="Pause breaks"><svg viewBox="0 3 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 9.5h11v3.5a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5z"/><path d="M16 10.5h1.4a2.4 2.4 0 0 1 0 4.8H16"/><ellipse cx="10.5" cy="19.6" rx="8" ry="1.7"/></svg></a>
 </aside>
 
 <p class="hint" aria-hidden="true">Push the rail into the edge to tuck it away.</p>
