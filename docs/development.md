@@ -21,7 +21,7 @@ Development builds are signed ad-hoc by default, so no certificate is needed, an
 ./scripts/check.sh
 ```
 
-Offline, no sign-ins or audio capture; needs Node.js 18 or later. Covers overlay geometry, reset labels, battery levels, alerts and the Pushover request, the battery card's readings and wording, the pet sprite sheet, credential writes, redirect and cache policy, the voice shortcut, each provider's usage reply, the Antigravity report and its version guard, which limit each part of a ring shows and what VoiceOver reads for it, Codex startup, timeouts and broken pipes, the native voice protocol and lifecycle, voice sounds, a denied microphone, Codex Stop, refused messages, the pet's consent and questions, conversation recovery and the work-model choice, the break schedule (due-based spacing, the countdown, pause, snooze, voice calls, locks and both time-away modes), restoring it after a restart, the break history, picking ideas, Rex's status and events, stale rings' numbers, the forecast line's pace, history and wording, that a stuck provider can't hold up a refresh, that settings saved by an older Pulse load unchanged, and that a value or file Pulse can't read is kept in a copy.
+Offline, no sign-ins or audio capture; needs Node.js 18 or later. Covers overlay geometry, reset labels, battery levels, alerts and the Pushover request, the battery card's readings and wording, the pet sprite sheet, credential writes, redirect and cache policy, the voice shortcut, each provider's usage reply, the Antigravity report and its version guard, which limit each part of a ring shows and what VoiceOver reads for it, Codex startup, timeouts and broken pipes, the native voice protocol and lifecycle, voice sounds, a denied microphone, Codex Stop, refused messages, the pet's consent and questions, conversation recovery and the work-model choice, the break schedule (due-based spacing, the countdown, pause, snooze, voice calls, locks and both time-away modes), restoring it after a restart, the break history, picking ideas, Rex's status and events, the agents ring's order, count, bubbles, quiet rules and alerts, stale rings' numbers, the forecast line's pace, history and wording, that a stuck provider can't hold up a refresh, that settings saved by an older Pulse load unchanged, and that a value or file Pulse can't read is kept in a copy.
 
 Live checks that use your accounts: `./scripts/grok-check.sh` may refresh Grok credentials, and `./scripts/codex-chat-check.sh` opens a temporary conversation with the app's settings, sends one prompt and negotiates a voice session. Provider endpoints and the experimental realtime protocol can change without notice.
 
@@ -41,7 +41,10 @@ Live checks that use your accounts: `./scripts/grok-check.sh` may refresh Grok c
 | `BreakController.swift` | the break clock, idle and lock detection, the overlay windows |
 | `BreakViews.swift` | the countdown, the break screen, its agents and Settings → Breaks |
 | `BreakIdeas.swift` | loads the idea list, `Resources/break-ideas.json` |
-| `RexAgents.swift` | which agents Rex reports as working |
+| `RexAgents.swift` | the agents Rex reports and their states, its event stream, showing a pane |
+| `Agents.swift` | the agents ring's settings, what the ring and its card show, the quiet rules and when the sound and alert fire |
+| `AgentsMonitor.swift` | the agents ring's state through the day, its sound and alert |
+| `AgentViews.swift` | the agents ring, its card and alert, Settings → Agents |
 | `PulseApp.swift` | app entry, overlay panel, shortcut binding |
 | `AppState.swift` | persisted settings, refresh loop, snapshots |
 | `Models.swift` | account IDs, usage windows and which part of a ring each one takes, snapshots and their health, a limit's pace and forecast |
