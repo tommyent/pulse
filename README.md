@@ -28,7 +28,7 @@ Click a picture to see it full size.
   </tr>
   <tr>
     <td valign="top"><a href="docs/screenshots/break-countdown.png"><img src="docs/screenshots/thumbs/break-countdown.jpg" width="100%" alt="A break countdown beside the rail"></a><br><b>Break countdown</b> before each reminder</td>
-    <td valign="top"><a href="docs/screenshots/break-agents.png"><img src="docs/screenshots/thumbs/break-agents.jpg" width="100%" alt="Break screen with stand-in Claude Code, Codex, Antigravity and Grok agents"></a><br><b>Break screen</b> with ideas and your Rex agents (Claude Code, Codex, Antigravity, Grok)</td>
+    <td valign="top"><a href="docs/screenshots/break-agents.png"><img src="docs/screenshots/thumbs/break-agents.jpg" width="100%" alt="Break screen with stand-in Claude Code, Codex, Antigravity and Grok agents"></a><br><b>Break screen</b> with ideas and the Codex pet. Claude Code, Codex, Antigravity and Grok agents need <a href="https://www.superlogical.com/rex">Rex</a> (Superlogical's terminal, in beta for Mac); without Rex, only the pet walks out.</td>
     <td valign="top"><a href="docs/screenshots/break-history.png"><img src="docs/screenshots/thumbs/break-history.jpg" width="100%" alt="Break history with daily and weekly totals"></a><br><b>Break history</b> tracks time away and rests</td>
   </tr>
 </table>
