@@ -105,17 +105,27 @@ enum AgentChecks {
         assert(working("b").keepingWait(of: first).since == nil)
         assert(waiting("b", since: 7).keepingWait(of: working("b")).since == at(7), "it ran in between: a new wait")
 
-        // showing a pane: the Rex app on this Mac among a server's clients
-        let clients = json(#"{"clients":[{"client_id":"client:other","info":{"kind":"app","label":"Studio Mac"},"principal":{"kind":"tailscale","transport":"tailscale"}},{"client_id":"client:here","info":{"kind":"app","label":"Desk Mac"},"principal":{"kind":"peer","transport":"unix"}},{"client_id":"client:socket","principal":{"kind":"peer","transport":"unix"}},{"client_id":"client:cli","info":{"kind":"cli"},"principal":{"transport":"unix"}}]}"#)
-        assert(RexAgents.appClient(fromList: clients, thisMac: "Unknown") == "client:here", "on this Mac's server: the app on the local socket")
-        let remote = json(#"{"clients":[{"client_id":"client:theirs","info":{"kind":"app","label":"Studio Mac"},"principal":{"transport":"unix"}},{"client_id":"client:mine","info":{"kind":"app","label":"Desk Mac"},"principal":{"transport":"tailscale"}}]}"#)
-        assert(RexAgents.appClient(fromList: remote, thisMac: "Studio Mac") == "client:theirs")
-        let far = json(#"{"clients":[{"client_id":"client:a","info":{"kind":"app","label":"Studio Mac"},"principal":{"transport":"tailscale"}},{"client_id":"client:b","info":{"kind":"app","label":"Desk Mac"},"principal":{"transport":"tailscale"}}]}"#)
-        assert(RexAgents.appClient(fromList: far, thisMac: "Desk Mac") == "client:b", "on another host's server: the app labelled as this Mac")
-        assert(RexAgents.appClient(fromList: far, thisMac: "Unknown") == nil, "two apps and no way to tell: none is asked")
-        let single = json(#"{"clients":[{"client_id":"client:only","info":{"kind":"app","label":"x"},"principal":{"transport":"tailscale"}},{"client_id":"client:cli","info":{"kind":"cli"}}]}"#)
-        assert(RexAgents.appClient(fromList: single, thisMac: "Unknown") == "client:only")
-        assert(RexAgents.appClient(fromList: json("not json"), thisMac: "x") == nil)
+        // showing a pane: it is always this Mac's Rex app that is asked. The two lists have the shape `rex client ls
+        // --json` gave on two Macs on 2026-11-12, with made-up names: each server lists its own Mac's app on the local
+        // socket and the other Mac's as a network client.
+        let here = json(#"{"clients":[{"client_id":"client:studio-app","info":{"kind":"app","label":"Studio Mac"},"principal":{"kind":"tailscale","transport":"tailscale"}},{"client_id":"client:desk-app","info":{"kind":"app","label":"Desk Mac"},"principal":{"kind":"peer","transport":"unix"}},{"client_id":"client:socket","principal":{"kind":"peer","transport":"unix"}},{"client_id":"client:cli","info":{"kind":"cli"},"principal":{"transport":"unix"}}]}"#)
+        let mine = RexAgents.localApp(fromList: here)
+        assert(mine?.id == "client:desk-app" && mine?.label == "Desk Mac", "on this Mac's server: the app on the local socket")
+        let there = json(#"{"clients":[{"client_id":"client:studio-own","info":{"kind":"app","label":"Studio Mac"},"principal":{"kind":"peer","transport":"unix"}},{"client_id":"client:desk-visiting","info":{"kind":"app","label":"Desk Mac"},"principal":{"kind":"tailscale","transport":"tailscale"}},{"client_id":"client:cli","info":{"kind":"cli"},"principal":{"transport":"unix"}}]}"#)
+        assert(RexAgents.remoteApp(fromList: there, label: "Desk Mac") == "client:desk-visiting",
+               "on the other Mac's server: this Mac's app, a network client there, not that Mac's own app on its socket")
+        // the other Mac's own app is never asked, even when the labels can't settle it
+        assert(RexAgents.remoteApp(fromList: there, label: "Studio Mac") == "client:desk-visiting")
+        assert(RexAgents.remoteApp(fromList: there, label: "Unknown") == "client:desk-visiting" && RexAgents.remoteApp(fromList: there, label: "") == "client:desk-visiting")
+        let onlyTheirs = json(#"{"clients":[{"client_id":"client:studio-own","info":{"kind":"app","label":"Studio Mac"},"principal":{"transport":"unix"}}]}"#)
+        assert(RexAgents.remoteApp(fromList: onlyTheirs, label: "Studio Mac") == nil, "this Mac's app isn't connected there: nobody is asked")
+        let three = json(#"{"clients":[{"client_id":"client:own","info":{"kind":"app","label":"Studio Mac"},"principal":{"transport":"unix"}},{"client_id":"client:a","info":{"kind":"app","label":"Travel Mac"},"principal":{"transport":"tailscale"}},{"client_id":"client:b","info":{"kind":"app","label":"Desk Mac"},"principal":{"transport":"tailscale"}}]}"#)
+        assert(RexAgents.remoteApp(fromList: three, label: "Desk Mac") == "client:b", "among several network apps: the one with this Mac's label")
+        assert(RexAgents.remoteApp(fromList: three, label: "Unknown") == nil, "several network apps and no way to tell: none is asked")
+        assert(RexAgents.localApp(fromList: there)?.id == "client:studio-own" && RexAgents.localApp(fromList: three)?.label == "Studio Mac")
+        let noApp = json(#"{"clients":[{"client_id":"client:cli","info":{"kind":"cli"},"principal":{"transport":"unix"}}]}"#)
+        assert(RexAgents.localApp(fromList: noApp) == nil && RexAgents.remoteApp(fromList: noApp, label: "Desk Mac") == nil)
+        assert(RexAgents.localApp(fromList: json("not json")) == nil && RexAgents.remoteApp(fromList: json("not json"), label: "x") == nil)
         var placed = waiting("block:1", since: 0); placed.session = "session:s1"; placed.window = "window:w1"
         assert(RexAgents.selectArguments(placed) == ["do", "session.select", "session_id=session:s1", "window_id=window:w1"])
         placed.window = ""

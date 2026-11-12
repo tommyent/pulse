@@ -319,8 +319,12 @@ final class RexAgents: ObservableObject {
     nonisolated static func show(_ agent: BreakAgent, rex: URL, thisMac: String) {
         guard !agent.session.isEmpty else { return }
         _ = run(rex, ["block", "focus", "-s", agent.session, agent.id], on: agent.host)
-        guard let list = run(rex, ["client", "ls", "--json"], on: agent.host),
-              let client = appClient(fromList: list, thisMac: thisMac) else { return }
+        let here = run(rex, ["client", "ls", "--json"]).flatMap(localApp(fromList:))
+        // a pane on another host is shown by this Mac's app too: it's asked through that host's server, where it is
+        // one of the network clients
+        let client = agent.host.isEmpty ? here?.id
+            : run(rex, ["client", "ls", "--json"], on: agent.host).flatMap { remoteApp(fromList: $0, label: here?.label ?? thisMac) }
+        guard let client else { return }
         _ = run(rex, ["-C", client] + selectArguments(agent), on: agent.host)
     }
 
@@ -329,15 +333,28 @@ final class RexAgents: ObservableObject {
         ["do", "session.select", "session_id=\(agent.session)"] + (agent.window.isEmpty ? [] : ["window_id=\(agent.window)"])
     }
 
-    /// `rex client ls --json`: the Rex app on this Mac among a server's clients. On this Mac's own server it's the app
-    /// on the local socket; on another host's, the app labelled as this Mac, or the only app there is.
-    nonisolated static func appClient(fromList data: Data, thisMac: String) -> String? {
+    /// The Rex apps in `rex client ls --json`: each one's id, its label, and whether it's on that server's own Mac
+    /// (connected over the local socket).
+    nonisolated private static func apps(fromList data: Data) -> [(id: String, label: String, onServersMac: Bool)] {
         let clients = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["clients"] as? [[String: Any]] ?? []
-        let apps = clients.filter { ($0["info"] as? [String: Any])?["kind"] as? String == "app" }
-        let mine = apps.first { ($0["principal"] as? [String: Any])?["transport"] as? String == "unix" }
-            ?? apps.first { ($0["info"] as? [String: Any])?["label"] as? String == thisMac }
-            ?? (apps.count == 1 ? apps[0] : nil)
-        return mine?["client_id"] as? String
+        return clients.compactMap { client in
+            guard let info = client["info"] as? [String: Any], info["kind"] as? String == "app",
+                  let id = client["client_id"] as? String else { return nil }
+            return (id, info["label"] as? String ?? "", (client["principal"] as? [String: Any])?["transport"] as? String == "unix")
+        }
+    }
+
+    /// This Mac's Rex app in the client list of this Mac's own server: the app on the local socket.
+    nonisolated static func localApp(fromList data: Data) -> (id: String, label: String)? {
+        apps(fromList: data).first { $0.onServersMac }.map { ($0.id, $0.label) }
+    }
+
+    /// This Mac's Rex app in the client list of another host's server. There it's a network client: the app on that
+    /// server's local socket is the host's own and is never asked. `label` is the one this Mac's app has on its own
+    /// server (or this Mac's name); with no app under it, the only network app there is, and with several, none.
+    nonisolated static func remoteApp(fromList data: Data, label: String) -> String? {
+        let network = apps(fromList: data).filter { !$0.onServersMac }
+        return (network.first { !label.isEmpty && $0.label == label } ?? (network.count == 1 ? network[0] : nil))?.id
     }
 
     nonisolated private static func target(_ server: String) -> [String] { server.isEmpty ? [] : ["-S", server] }
