@@ -876,7 +876,8 @@ struct OverlayView: View {
             }
         } else if state.cardVisible, sideCard == "agents" {
             if showsAgents {
-                AgentsCard(agents: agents.agents, dismissed: agents.dismissed, hold: agents.hold, show: agents.show, clear: agents.clear,
+                AgentsCard(agents: agents.agents, dismissed: agents.dismissed, hold: agents.hold, contexts: agents.contexts,
+                           show: agents.show, clear: agents.clear, refresh: agents.readContexts,
                            tailEdge: tail, tailAt: tailAt("agents"))
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
             }
@@ -1329,7 +1330,7 @@ struct SettingsView: View {
                         .help("Ask again for future command and folder-access requests. Current task grants expire when that task ends.")
                 }
             }
-            tab("Agents", "person.2", height: 690) {
+            tab("Agents", "person.2", height: 710) {
                 AgentSettingsSection(settings: $state.persisted.agents, rexFound: agents.rexFound)
             }
             tab("Breaks", "cup.and.saucer", height: 720) {

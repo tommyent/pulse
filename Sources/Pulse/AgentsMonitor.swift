@@ -22,7 +22,11 @@ final class AgentsMonitor: ObservableObject {
     @Published private(set) var hold: AgentHold?
     /// Whether Pulse found the `rex` command on this Mac. Stand-in agents count, so the ring can be tried without Rex.
     @Published private(set) var rexFound = false
+    /// Idle agents' context, by block, where their session data could be found (`AgentContext`).
+    @Published private(set) var contexts: [String: AgentContext] = [:]
 
+    private var contextRead: [String: Date] = [:]   // block → the idle spell (when it began) its context was read for
+    private var readingContexts = false
     private weak var state: AppState?
     private var settings = AgentSettings()
     private var notifier = AgentNotifier()
@@ -144,6 +148,32 @@ final class AgentsMonitor: ObservableObject {
         panel = nil
         alertShows = []
         alertAfter = nil
+    }
+
+    // MARK: idle agents' context
+
+    /// The open card asks for this every half minute. Each idle agent on this Mac is read once for its idle spell: at
+    /// rest its context doesn't move. One that couldn't be read is tried again. Off the main thread, since it opens
+    /// the agents' session files.
+    func readContexts() {
+        let idle = board.rows.filter { $0.state == .idle }.map(\.agent)
+        let current = contexts.filter { id, _ in idle.contains { $0.id == id && $0.since == contextRead[id] } }
+        if current != contexts { contexts = current }   // an agent that ran again has a new context to read
+        contextRead = contextRead.filter { current[$0.key] != nil }
+        let wanted = idle.filter { $0.host.isEmpty && $0.pid != nil && $0.since != nil && current[$0.id] == nil }
+        guard !wanted.isEmpty, !readingContexts else { return }
+        readingContexts = true
+        Task.detached(priority: .utility) {
+            let read = wanted.map { ($0, AgentContext.read($0)) }
+            await MainActor.run {
+                for (agent, context) in read {
+                    guard let context else { continue }
+                    self.contexts[agent.id] = context
+                    self.contextRead[agent.id] = agent.since
+                }
+                self.readingContexts = false
+            }
+        }
     }
 
     // MARK: actions from the card and the alert

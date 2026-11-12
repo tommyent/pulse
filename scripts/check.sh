@@ -21,7 +21,7 @@ swiftc Sources/Pulse/CodexPetSprite.swift Checks/CodexPetChecks.swift -o "$OUT/p
 "$OUT/pet"
 swiftc Sources/Pulse/Breaks.swift Sources/Pulse/BreakTricks.swift Sources/Pulse/RexAgents.swift Checks/BreakChecks.swift -o "$OUT/break"
 "$OUT/break"
-swiftc Sources/Pulse/Breaks.swift Sources/Pulse/RexAgents.swift Sources/Pulse/Agents.swift Checks/AgentChecks.swift -o "$OUT/agents"
+swiftc Sources/Pulse/Breaks.swift Sources/Pulse/RexAgents.swift Sources/Pulse/Agents.swift Sources/Pulse/AgentContext.swift Checks/AgentChecks.swift -o "$OUT/agents"
 "$OUT/agents"
 swiftc Sources/Pulse/BreakHats.swift Sources/Pulse/BreakTricks.swift Sources/Pulse/CodexPetSprite.swift Checks/BreakHatChecks.swift -o "$OUT/hats"
 "$OUT/hats"

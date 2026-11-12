@@ -1,4 +1,4 @@
-// Run from the project: swiftc Sources/Pulse/Breaks.swift Sources/Pulse/RexAgents.swift Sources/Pulse/Agents.swift Checks/AgentChecks.swift -o /tmp/pulse-agent-check && /tmp/pulse-agent-check
+// Run from the project: swiftc Sources/Pulse/Breaks.swift Sources/Pulse/RexAgents.swift Sources/Pulse/Agents.swift Sources/Pulse/AgentContext.swift Checks/AgentChecks.swift -o /tmp/pulse-agent-check && /tmp/pulse-agent-check
 import Foundation
 
 @main
@@ -24,10 +24,11 @@ enum AgentChecks {
         board()
         quietRules()
         reader()
+        context()
         notifier()
         settingsAndRex()
         print("Agent checks passed: Rex's error state and kind, closed panes, waits kept across reports, the card's order and counts, "
-              + "the bubbles, the quiet rules and a break on screen, one alert for each wait, which Rex app is asked and what a row click sends, off by default, and the ring only with Rex")
+              + "the bubbles, idle agents and their context, the quiet rules and a break on screen, one alert for each wait, which Rex app is asked and what a row click sends, off by default, and the ring only with Rex")
     }
 
     static func parsing() {
@@ -142,13 +143,15 @@ enum AgentChecks {
         let agents = [working("w2", .claude), finished("d1", since: 9), failed("f1", since: 11), waiting("b2", .codex, since: 16, kind: .question),
                       idle, working("w1"), waiting("b1", since: 8, kind: .permission), finished("d2", .antigravity, since: 17), stale]
         let board = AgentBoard(agents, now: at(20))
-        // the order: waiting for you (the longest wait on top), failed, just finished (the latest first), working
-        assert(board.rows.map(\.id) == ["b1", "b2", "f1", "d2", "d1", "w1", "w2"], "\(board.rows.map(\.id))")
-        assert(board.rows.map(\.state) == [.waiting, .waiting, .failed, .finished, .finished, .working, .working])
+        // the order: waiting for you (the longest wait on top), failed, just finished (the latest first), working,
+        // then the idle ones
+        assert(board.rows.map(\.id) == ["b1", "b2", "f1", "d2", "d1", "w1", "w2", "stale", "idle"], "\(board.rows.map(\.id))")
+        assert(board.rows.map(\.state) == [.waiting, .waiting, .failed, .finished, .finished, .working, .working, .idle, .idle])
+        assert(board.active.map(\.id) == ["b1", "b2", "f1", "d2", "d1", "w1", "w2"])
         // the count: waiting plus failed; finished, working and idle agents aren't in it
         assert(board.needsYou == 3 && board.needing.map(\.id) == ["b1", "b2", "f1"])
         assert(board.tone == .failed && board.justFinished && board.summary == "3 need you · 2 working")
-        assert(board.spoken == "2 waiting for you, 1 failed, 2 just finished, 2 working")
+        assert(board.spoken == "2 waiting for you, 1 failed, 2 just finished, 2 working, 2 idle")
         // more than four: three bubbles, those who need you first, and how many more
         assert(board.bubbles.apps == [.claude, .codex, .grok] && board.bubbles.more == 4)
         assert(board.rows[0].stateText(at(20)) == "Asks permission · 12 min" && board.rows[1].stateText(at(20)) == "Asks a question · 4 min")
@@ -167,15 +170,37 @@ enum AgentChecks {
         // finished: a tick for 15 minutes, never counted
         let later = AgentBoard([finished("d1", since: 9)], now: at(23.9))
         assert(later.justFinished && later.needsYou == 0 && later.tone == .quiet && later.summary == "1 finished")
-        assert(AgentBoard([finished("d1", since: 9)], now: at(24)).rows.isEmpty)
+        let unseen = AgentBoard([finished("d1", since: 9)], now: at(24))   // after that it's one of the idle
+        assert(unseen.rows.map(\.state) == [.idle] && !unseen.justFinished && unseen.active.isEmpty)
         // waiting clears by itself: an agent Rex reports working again is only working
         let answered = AgentBoard([working("b1", .claude), waiting("b2", since: 16)], now: at(20))
         assert(answered.needsYou == 1 && answered.tone == .waiting && answered.summary == "1 needs you · 1 working")
         let quiet = AgentBoard([working("w1"), working("w2", .claude)], now: at(20))
         assert(quiet.tone == .quiet && quiet.needsYou == 0 && !quiet.justFinished && quiet.summary == "2 working" && quiet.tick == 0)
         assert(quiet.bubbles.apps == [.codex, .claude] && quiet.bubbles.more == 0)
-        let empty = AgentBoard([idle, stale], now: at(20))
-        assert(empty.rows.isEmpty && empty.summary.isEmpty && empty.spoken == "No active agents" && empty.bubbles.apps.isEmpty)
+        // idle agents are listed and nothing more: no bubble, no number, no colour, no tick on the sliver
+        let resting = AgentBoard([idle, stale], now: at(20))
+        assert(resting.rows.map(\.id) == ["stale", "idle"] && resting.active.isEmpty && resting.bubbles.apps.isEmpty && resting.bubbles.more == 0)
+        assert(resting.needsYou == 0 && resting.needing.isEmpty && resting.tone == .quiet && !resting.justFinished && resting.tick == 0)
+        assert(resting.summary == "2 idle" && resting.spoken == "No active agents, 2 idle")
+        assert(AgentBoard([working("w1"), idle], now: at(20)).summary == "1 working", "the header names the idle only when nobody else is there")
+        // the longest idle first, by the time Rex gives for the idle or finished state; one with no time last
+        func rested(_ id: String, since: Double?) -> BreakAgent {
+            BreakAgent(id: id, app: .claude, blocked: false, idle: true, since: since.map(at))
+        }
+        let idlers = AgentBoard([rested("m", since: 100), rested("a-unknown", since: nil), rested("z", since: 0), finished("old-finish", since: 40),
+                                 rested("y", since: 0)], now: at(200))
+        assert(idlers.rows.map(\.id) == ["y", "z", "old-finish", "m", "a-unknown"], "\(idlers.rows.map(\.id))")
+        assert(idlers.rows.map { $0.stateText(at(200)) } == ["Idle · 3 hr 20 min", "Idle · 3 hr 20 min", "Idle · 2 hr 40 min", "Idle · 1 hr 40 min", "Idle"])
+        func idleText(_ minutes: Double) -> String { AgentBoard.Row(agent: rested("x", since: 0), state: .idle).stateText(at(minutes)) }
+        assert(idleText(0.5) == "Idle" && idleText(41) == "Idle · 41 min" && idleText(120) == "Idle · 2 hr" && idleText(134) == "Idle · 2 hr 14 min")
+        // past a day it's days and hours: the stale ones stand out by that alone
+        assert(idleText(24 * 60) == "Idle · 1 day" && idleText(28 * 60 + 5) == "Idle · 1 day 4 hr" && idleText(51 * 60 + 12) == "Idle · 2 days 3 hr")
+        // the time comes from Rex's record, for an idle state as for a finished one
+        let stamp = "2026-10-26T01:35:14.24817-04:00", began = RexAgents.date(stamp)!
+        let reported = RexAgents.agent(fromRecord: ["app": "codex", "state": "idle", "updated_at": stamp, "owner": ["pid": 4242, "name": "codex"]], block: "b")
+        assert(reported?.idle == true && reported?.since == began && reported?.pid == 4242)
+        assert(AgentBoard([reported!], now: began + 134 * 60).rows[0].stateText(began + 134 * 60) == "Idle · 2 hr 14 min")
         assert(AgentBoard() == AgentBoard([], now: at(0)))
         let four = AgentBoard([working("a"), working("b"), working("c"), waiting("d", .grok, since: 0)], now: at(1))
         assert(four.bubbles.apps == [.grok, .codex, .codex, .codex] && four.bubbles.more == 0, "four fit; the one who needs you is in front")
@@ -394,6 +419,116 @@ enum AgentChecks {
         // with no sound chosen, a held wait owes none
         n = AgentNotifier()
         assert(n.step([a], now: at(0), settings: noAlert, hold: .call) == R() && n.step([a], now: at(1), settings: noAlert, hold: nil) == R())
+    }
+
+    /// An idle agent's context, from made-up session data in a scratch home folder.
+    static func context() {
+        // what the card says
+        assert(AgentContext(tokens: 73_060, window: 258_400).text == "Context 28%" && AgentContext(tokens: 184_187, window: 256_000).text == "Context 71%")
+        assert(AgentContext(tokens: 300_000, window: 256_000).text == "Context 100%")
+        assert(AgentContext(tokens: 113_400, window: nil).text == "Context 113k tokens" && AgentContext(tokens: 1_250_000, window: nil).text == "Context 1.2M tokens")
+        assert(AgentContext(tokens: 900, window: nil).text == "Context 900 tokens" && AgentContext(tokens: 5, window: 0).text == "Context 5 tokens")
+
+        let fm = FileManager.default, home = fm.temporaryDirectory.appending(path: "pulse-context-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: home) }
+        func write(_ text: String, _ path: String) -> URL {
+            let url = home.appending(path: path)
+            try! fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try! Data(text.utf8).write(to: url)
+            return url
+        }
+        func idle(_ app: BreakAgent.App, pid: Int32? = 4242, since: Double? = 10, host: String = "") -> BreakAgent {
+            BreakAgent(id: "b", app: app, blocked: false, idle: true, host: host, since: since.map(at), pid: pid)
+        }
+        var open: [String] = []
+        let running = AgentContext.Processes(started: { _ in at(0) }, openFiles: { _ in open })
+        func read(_ agent: BreakAgent, _ processes: AgentContext.Processes? = nil) -> AgentContext? {
+            AgentContext.read(agent, home: home, processes: processes ?? running)
+        }
+
+        // Claude Code: the process's own session record, then the end of that session's transcript
+        let session = "0f0e0d0c-1111-2222-3333-444455556666"
+        let record = write(#"{"pid":4242,"sessionId":"\#(session)","cwd":"/Users/example/code/app","status":"idle"}"#, ".claude/sessions/4242.json")
+        let transcript = [
+            #"{"type":"user","message":{"role":"user","content":"hello"}}"#,
+            #"{"type":"assistant","isSidechain":false,"message":{"usage":{"input_tokens":9,"cache_read_input_tokens":1000,"cache_creation_input_tokens":0,"output_tokens":5}}}"#,
+            #"{"type":"assistant","isSidechain":false,"message":{"usage":{"input_tokens":12,"cache_read_input_tokens":80000,"cache_creation_input_tokens":3000,"output_tokens":988}}}"#,
+            #"{"type":"assistant","isSidechain":true,"message":{"usage":{"input_tokens":5,"cache_read_input_tokens":999999,"cache_creation_input_tokens":0,"output_tokens":1}}}"#,
+            #"{"type":"assistant","isSidechain":false,"message":{"usage":{"input_tokens":0,"output_tokens":0}}}"#,
+            #"{"type":"system","subtype":"turn_duration"}"#,
+        ].joined(separator: "\n") + "\n"
+        let named = write(transcript, ".claude/projects/-Users-example-code-app/\(session).jsonl")
+        // the last reply of the main conversation: not a helper's, not a notice without tokens
+        assert(read(idle(.claude)) == AgentContext(tokens: 84_000, window: nil))
+        assert(AgentContext.claudeContext(Data("not json\n".utf8)) == nil && AgentContext.claudeContext(Data()) == nil)
+        // no certain match, nothing shown: the process gone; its number reused by something started after the status;
+        // a pane on another Mac; no process or no time in the status; a record that is another process's
+        assert(read(idle(.claude), .init(started: { _ in nil }, openFiles: { _ in [] })) == nil)
+        assert(read(idle(.claude), .init(started: { _ in at(10.5) }, openFiles: { _ in [] })) == nil)
+        assert(read(idle(.claude, host: "studio")) == nil && read(idle(.claude, pid: nil)) == nil && read(idle(.claude, since: nil)) == nil)
+        assert(read(idle(.claude, pid: 4243)) == nil, "no record for that process")
+        _ = write(#"{"pid":9999,"sessionId":"\#(session)"}"#, ".claude/sessions/4243.json")
+        assert(read(idle(.claude, pid: 4243)) == nil, "the record names another process")
+        assert(AgentContext.claudeSession(fromRecord: Data(#"{"pid":7,"sessionId":"../../etc/x"}"#.utf8), pid: 7) == nil, "a session id is a file name, never a path")
+        // the transcript is found by its session's name when its folder isn't named after the working folder,
+        // and not at all when it's in two folders or in none
+        try! fm.moveItem(at: named, to: write("", ".claude/projects/renamed/placeholder").deletingLastPathComponent().appending(path: "\(session).jsonl"))
+        assert(read(idle(.claude)) == AgentContext(tokens: 84_000, window: nil))
+        _ = write(transcript, ".claude/projects/elsewhere/\(session).jsonl")
+        assert(read(idle(.claude)) == nil, "two transcripts with one name")
+        try! fm.removeItem(at: home.appending(path: ".claude/projects"))
+        assert(read(idle(.claude)) == nil)
+        _ = record
+
+        // Codex: the session file the process holds open that is the conversation itself, not a helper's thread
+        let own = write(#"{"type":"session_meta","payload":{"id":"t1","cwd":"/Users/example/code/app","source":"cli"}}"# + "\n"
+            + #"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":50000},"model_context_window":258400}}}"# + "\n"
+            + #"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":67285554},"last_token_usage":{"input_tokens":72863,"total_tokens":73060},"model_context_window":258400}}}"# + "\n"
+            + #"{"type":"event_msg","payload":{"type":"task_complete","time_to_first_token_ms":7862}}"# + "\n",
+            ".codex/sessions/2026/11/12/rollout-a.jsonl").path
+        let helper = write(#"{"type":"session_meta","payload":{"id":"t2","parent_thread_id":"t1","source":{"subagent":{}}}}"# + "\n"
+            + #"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":999},"model_context_window":258400}}}"# + "\n",
+            ".codex/sessions/2026/11/12/rollout-b.jsonl").path
+        open = [home.appending(path: ".codex/logs.sqlite").path, helper, own]
+        assert(read(idle(.codex)) == AgentContext(tokens: 73_060, window: 258_400))
+        let second = write(#"{"type":"session_meta","payload":{"id":"t3","source":"cli"}}"# + "\n", ".codex/sessions/2026/11/12/rollout-c.jsonl").path
+        open = [own, second]
+        assert(read(idle(.codex)) == nil, "two conversations open in one process: which is the pane's can't be told")
+        open = [helper]
+        assert(read(idle(.codex)) == nil)
+        open = []
+        assert(read(idle(.codex)) == nil)
+        assert(AgentContext.codexContext(Data(#"{"type":"event_msg","payload":{"type":"token_count","info":null}}"#.utf8)) == nil)
+
+        // Grok: signals.json beside the event log the process holds open
+        let events = write("{}\n", ".grok/sessions/%2FUsers%2Fexample%2Fcode%2Fapp/s1/events.jsonl").path
+        _ = write(#"{"turnCount":7,"contextWindowUsage":71,"contextTokensUsed":184187,"contextWindowTokens":256000}"#, ".grok/sessions/%2FUsers%2Fexample%2Fcode%2Fapp/s1/signals.json")
+        open = [home.appending(path: ".grok/logs/unified.jsonl").path, events]
+        assert(read(idle(.grok)) == AgentContext(tokens: 184_187, window: 256_000) && read(idle(.grok))?.text == "Context 71%")
+        open = [events, write("{}\n", ".grok/sessions/other/s2/events.jsonl").path]
+        assert(read(idle(.grok)) == nil, "two sessions open")
+        open = [write("{}\n", ".grok/sessions/other/s3/events.jsonl").path]
+        assert(read(idle(.grok)) == nil, "no signals file")
+        // Antigravity: nothing known to read
+        open = [own, events]
+        assert(read(idle(.antigravity)) == nil)
+
+        // reading the end of a long file starts at a whole line
+        let long = write("first line\nsecond line\nthird line\n", "long.txt")
+        assert(AgentContext.tail(long, 15).map { String(decoding: $0, as: UTF8.self) } == "third line\n")
+        assert(AgentContext.tail(long, 1000).map { String(decoding: $0, as: UTF8.self) } == "first line\nsecond line\nthird line\n")
+        assert(AgentContext.firstLine(long).map { String(decoding: $0, as: UTF8.self) } == "first line" && AgentContext.tail(home.appending(path: "none"), 10) == nil)
+
+        // what macOS says about a process: this check's own
+        let me = getpid(), mine = fm.temporaryDirectory.appending(path: "pulse-open-\(UUID().uuidString).txt")
+        try! Data("x".utf8).write(to: mine)
+        defer { try? fm.removeItem(at: mine) }
+        let handle = try! FileHandle(forReadingFrom: mine)
+        defer { try? handle.close() }
+        let launched = AgentContext.started(me)
+        assert(launched != nil && launched! <= Date() && Date().timeIntervalSince(launched!) < 600, "\(String(describing: launched))")
+        assert(AgentContext.openFiles(me).contains { $0.hasSuffix(mine.lastPathComponent) }, "the file this check holds open")
+        assert(AgentContext.started(Int32.max) == nil && AgentContext.openFiles(Int32.max).isEmpty, "no such process")
     }
 
     static func settingsAndRex() {

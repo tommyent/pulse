@@ -105,13 +105,15 @@ struct AgentsCard: View {
     let agents: [BreakAgent]
     var dismissed: [String: Date] = [:]
     var hold: AgentHold? = nil   // the quiet rule holding the sound and the alert
+    var contexts: [String: AgentContext] = [:]   // idle agents' context, by block, where it could be read
     let show: (BreakAgent) -> Void
     let clear: (BreakAgent) -> Void
+    var refresh: () -> Void = {}   // asks for the idle agents' context to be read; called while the card is open
     var tailEdge: Edge = .trailing
     var tailAt: CGFloat? = nil
 
     var body: some View {
-        // every half minute: waits count up, and a finished agent leaves after its 15 minutes
+        // every half minute: waits and idle times count up, and a finished agent joins the idle ones after 15 minutes
         TimelineView(.periodic(from: .now, by: 30)) { context in
             let board = AgentBoard(agents, dismissed: dismissed, now: context.date)
             VStack(alignment: .leading, spacing: 10) {
@@ -123,9 +125,9 @@ struct AgentsCard: View {
                 }
                 .foregroundStyle(Color.primary)
                 if board.rows.isEmpty {
-                    Text("No active agents in Rex.").font(.caption).foregroundStyle(PulsePalette.secondary)
+                    Text("No agents are open in Rex.").font(.caption).foregroundStyle(PulsePalette.secondary)
                 } else {
-                    let rows = AgentRows(rows: board.rows, now: context.date, show: show, clear: clear)
+                    let rows = AgentRows(rows: board.rows, now: context.date, contexts: contexts, show: show, clear: clear)
                     Group {
                         // more than fit a small screen: they scroll
                         if board.rows.count > Self.most { ScrollView { rows }.frame(height: 400) } else { rows }
@@ -136,8 +138,6 @@ struct AgentsCard: View {
                         Label(line, systemImage: "bell.slash.fill")
                             .font(.caption).foregroundStyle(PulsePalette.secondary)
                             .fixedSize(horizontal: false, vertical: true)
-                    } else {
-                        Text("Idle agents are left out.").font(.caption).foregroundStyle(PulsePalette.secondary)
                     }
                 }
             }
@@ -146,25 +146,41 @@ struct AgentsCard: View {
         .padding(Edge.Set(tailEdge), BubbleShape.tailWidth)
         .frame(width: tailEdge == .trailing || tailEdge == .leading ? 320 + BubbleShape.tailWidth : 320)
         .pulseSurface(in: BubbleShape(edge: tailEdge, at: tailAt))
+        .task {
+            // while the card is open: an idle agent's context is read once, and again only if it couldn't be found
+            while !Task.isCancelled {
+                refresh()
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
     }
 }
 
-/// The card's and the alert's rows, with a line between those who need you and the rest.
+/// The card's and the alert's rows: a line between those who need you and the rest, and the idle ones under their own
+/// heading.
 struct AgentRows: View {
     let rows: [AgentBoard.Row]
     let now: Date
+    var contexts: [String: AgentContext] = [:]
     let show: (BreakAgent) -> Void
     var clear: ((BreakAgent) -> Void)? = nil   // the × on a failed row; the alert has none
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(rows.enumerated()), id: \.element.id) { i, row in
-                if i > 0, rows[i - 1].agent.needsYou, !row.agent.needsYou {
+                let idleStarts = row.state == .idle && (i == 0 || rows[i - 1].state != .idle)
+                if i > 0, idleStarts || (rows[i - 1].agent.needsYou && !row.agent.needsYou) {
                     Rectangle().fill(Color.white.opacity(0.12)).frame(height: 1)
                         .padding(.horizontal, 8).padding(.vertical, 1)
                         .accessibilityHidden(true)
                 }
-                AgentRow(row: row, now: now, show: show, clear: clear)
+                if idleStarts, i > 0 {   // with nobody else in the card, its header already says how many are idle
+                    Text("Idle · \(rows.count - i)")
+                        .font(.caption.weight(.semibold)).foregroundStyle(PulsePalette.secondary)
+                        .padding(.horizontal, 8).padding(.top, 6).padding(.bottom, 2)
+                        .accessibilityAddTraits(.isHeader)
+                }
+                AgentRow(row: row, now: now, context: contexts[row.id], show: show, clear: clear)
             }
         }
         .padding(.vertical, -5)   // the rows' own padding is their highlight's
@@ -174,12 +190,14 @@ struct AgentRows: View {
 private struct AgentRow: View {
     let row: AgentBoard.Row
     let now: Date
+    var context: AgentContext? = nil   // an idle agent's, where it could be read
     let show: (BreakAgent) -> Void
     let clear: ((BreakAgent) -> Void)?
     @State private var hovering = false
 
     var body: some View {
         let agent = row.agent, state = row.stateText(now), clears = row.state == .failed && clear != nil
+        let context = row.state == .idle ? context?.text ?? "" : ""
         Button { show(agent) } label: {
             HStack(alignment: .top, spacing: 8) {
                 BrandIcon(account: agent.app.account, size: 17).padding(.top, 1)
@@ -191,16 +209,21 @@ private struct AgentRow: View {
                         Text(state).font(.caption).lineLimit(1).fixedSize()
                             .foregroundStyle(row.state == .waiting ? Color.orange : row.state == .failed ? Color.red : PulsePalette.secondary)
                     }
-                    // the agent's own line, as plain text; a failed row keeps the line for its ×
-                    if !agent.msg.isEmpty || clears {
-                        Text(verbatim: agent.msg.isEmpty ? " " : agent.msg)
-                            .font(.caption).foregroundStyle(PulsePalette.secondary.opacity(0.82))
-                            .lineLimit(1).padding(.trailing, clears ? 21 : 0)
+                    // the agent's own line, as plain text; a failed row keeps the line for its ×; an idle one's context
+                    // sits at its end, under the idle time
+                    if !agent.msg.isEmpty || clears || !context.isEmpty {
+                        HStack(spacing: 8) {
+                            Text(verbatim: agent.msg.isEmpty ? " " : agent.msg)
+                                .lineLimit(1).padding(.trailing, clears ? 21 : 0)
+                            Spacer(minLength: 0)
+                            if !context.isEmpty { Text(context).lineLimit(1).fixedSize() }
+                        }
+                        .font(.caption).foregroundStyle(PulsePalette.secondary.opacity(0.82))
                     }
                 }
             }
             .foregroundStyle(Color.primary)
-            .opacity(row.state == .working ? 0.78 : 1)
+            .opacity(row.state == .working || row.state == .idle ? 0.78 : 1)
             .padding(.vertical, 5).padding(.horizontal, 8)
             .background(Color.white.opacity(hovering ? 0.1 : 0), in: RoundedRectangle(cornerRadius: 9))
             .contentShape(Rectangle())
@@ -208,7 +231,7 @@ private struct AgentRow: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help("Show in Rex")
-        .accessibilityLabel([row.place, state, agent.msg].filter { !$0.isEmpty }.joined(separator: ", "))
+        .accessibilityLabel([row.place, state, agent.msg, context].filter { !$0.isEmpty }.joined(separator: ", "))
         .accessibilityHint("Shows this pane in Rex")
         // beside the row's button, not inside it: a button in a button never fires
         .overlay(alignment: .bottomTrailing) {
@@ -297,7 +320,7 @@ struct AgentSettingsSection: View {
                     Text("Needs Rex, which Pulse didn't find on this Mac. [Get Rex…](https://www.superlogical.com/rex)")
                 }
             }
-            Text("While this is on, Pulse reads each pane's label and status line through the rex command all day. It never starts a Rex server and saves nothing to disk. A click on an agent shows its pane in Rex; nothing is answered from Pulse. Rex has its own tab marks, Dock badge, sounds and notifications: Pulse sends no notifications, and holds its own sound and alert while Rex is in front.")
+            Text("While this is on, Pulse reads each pane's label and status line through the rex command all day. It never starts a Rex server and saves nothing to disk. For idle agents on this Mac, the card also reads how full their context is from their own session files. A click on an agent shows its pane in Rex; nothing is answered from Pulse. Rex has its own tab marks, Dock badge, sounds and notifications: Pulse sends no notifications, and holds its own sound and alert while Rex is in front.")
                 .font(.caption).foregroundStyle(PulsePalette.secondary)
         }
         Group {

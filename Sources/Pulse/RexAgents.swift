@@ -21,7 +21,8 @@ struct BreakAgent: Equatable, Identifiable {
     var host = ""        // the Rex host its pane is on, as `-S` takes it; "" is this Mac
     var session = ""     // its pane's Rex session and tab, for showing the pane
     var window = ""
-    var since: Date?     // when it began waiting, failed or finished
+    var since: Date?     // when it began waiting, failed, finished or went idle
+    var pid: Int32?      // the process that reported the status; a finished or failed one may have exited since
 
     /// Waiting for you, or failed: the two states that count on the rail.
     var needsYou: Bool { blocked || failed }
@@ -465,18 +466,22 @@ final class RexAgents: ObservableObject {
               let app = BreakAgent.App(rex: name) else { return nil }
         let msg = plain(record["msg"] as? String ?? "")
         let at = (record["updated_at"] as? String).flatMap(date)   // an event without one has just happened
+        var agent: BreakAgent
         switch record["state"] as? String {
-        case "working": return BreakAgent(id: block, app: app, blocked: false, msg: msg)
+        case "working": agent = BreakAgent(id: block, app: app, blocked: false, msg: msg)
         case "blocked":
-            return BreakAgent(id: block, app: app, blocked: true, msg: msg,
-                              kind: (record["kind"] as? String).flatMap(BreakAgent.Kind.init(rawValue:)), since: at ?? now)
-        case "error": return BreakAgent(id: block, app: app, blocked: false, msg: msg, failed: true, since: at ?? now)
-        case "idle": return BreakAgent(id: block, app: app, blocked: false, idle: true)
+            agent = BreakAgent(id: block, app: app, blocked: true, msg: msg,
+                               kind: (record["kind"] as? String).flatMap(BreakAgent.Kind.init(rawValue:)), since: at ?? now)
+        case "error": agent = BreakAgent(id: block, app: app, blocked: false, msg: msg, failed: true, since: at ?? now)
+        case "idle": agent = BreakAgent(id: block, app: app, blocked: false, idle: true, since: at ?? now)
         case "done":
-            return BreakAgent(id: block, app: app, blocked: false, idle: true, msg: msg,
-                              done: at.map { now.timeIntervalSince($0) < BreakAgent.celebration } ?? true, since: at ?? now)
+            agent = BreakAgent(id: block, app: app, blocked: false, idle: true, msg: msg,
+                               done: at.map { now.timeIntervalSince($0) < BreakAgent.celebration } ?? true, since: at ?? now)
         default: return nil   // states Rex adds later
         }
+        // the process that reported the status, which the idle rows' context is found through
+        agent.pid = ((record["owner"] as? [String: Any])?["pid"] as? Int).flatMap(Int32.init(exactly:))
+        return agent
     }
 
     /// A status line is untrusted text from whatever runs in the pane. Pulse shows it as plain text, without the

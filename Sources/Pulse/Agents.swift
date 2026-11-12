@@ -34,11 +34,12 @@ struct AgentSettings: Codable, Equatable {
     }
 }
 
-/// What the agents ring and its card show at a moment: the active agents in the card's order. Idle agents, finished
-/// ones past their 15 minutes and failed ones whose mark was cleared are left out.
+/// What the agents ring and its card show at a moment: the agents in the card's order. The active ones (waiting,
+/// failed, just finished, working) are the ring's; idle ones, and finished ones past their 15 minutes, are listed in
+/// the card only. Failed ones whose mark was cleared are left out.
 struct AgentBoard: Equatable {
-    /// In the card's order: waiting for you, failed, just finished, working.
-    enum State: Int { case waiting, failed, finished, working }
+    /// In the card's order: waiting for you, failed, just finished, working, idle.
+    enum State: Int { case waiting, failed, finished, working, idle }
     enum Tone { case quiet, waiting, failed }
 
     struct Row: Equatable, Identifiable {
@@ -46,11 +47,16 @@ struct AgentBoard: Equatable {
         let state: State
         var id: String { agent.id }
 
-        /// "Asks permission · 12 min", "Failed · 9 min ago", "Finished · just now", "Working".
+        /// "Asks permission · 12 min", "Failed · 9 min ago", "Finished · just now", "Working", "Idle · 2 days 3 hr".
         func stateText(_ now: Date) -> String {
             let minutes = max(0, Int(now.timeIntervalSince(agent.since ?? now) / 60))
-            let time = minutes < 60 ? "\(minutes) min" : minutes % 60 == 0 ? "\(minutes / 60) hr" : "\(minutes / 60) hr \(minutes % 60) min"
+            let hours = minutes / 60, days = hours / 24
+            // past a day the minutes go: "1 day 4 hr" is the point for an agent that has sat that long
+            let time = minutes < 60 ? "\(minutes) min"
+                : days < 1 ? (minutes % 60 == 0 ? "\(hours) hr" : "\(hours) hr \(minutes % 60) min")
+                : "\(days) day\(days == 1 ? "" : "s")" + (hours % 24 == 0 ? "" : " \(hours % 24) hr")
             switch state {
+            case .idle: return agent.since == nil || minutes < 1 ? "Idle" : "Idle · \(time)"
             case .waiting:
                 let asks = switch agent.kind {
                 case .permission: "Asks permission"
@@ -76,19 +82,29 @@ struct AgentBoard: Equatable {
         let listed: [Row] = agents.compactMap { a in
             if a.blocked { return Row(agent: a, state: .waiting) }
             if a.failed { return a.since != nil && dismissed[a.id] == a.since ? nil : Row(agent: a, state: .failed) }
-            if a.done { return now.timeIntervalSince(a.since ?? now) < BreakAgent.celebration ? Row(agent: a, state: .finished) : nil }
-            return a.idle ? nil : Row(agent: a, state: .working)
+            if a.done, now.timeIntervalSince(a.since ?? now) < BreakAgent.celebration { return Row(agent: a, state: .finished) }
+            return Row(agent: a, state: a.idle ? .idle : .working)   // a finish nobody looked at for 15 minutes is idle
         }
-        // the longest wait on top; the latest failure and the latest finish first; working ones in a steady order
+        // the longest wait on top; the latest failure and the latest finish first; working ones in a steady order; the
+        // longest idle first, one whose time isn't known last
         rows = listed.sorted { a, b in
             if a.state != b.state { return a.state.rawValue < b.state.rawValue }
-            let (x, y) = (a.agent.since ?? .distantPast, b.agent.since ?? .distantPast)
-            if a.state != .working, x != y { return a.state == .waiting ? x < y : x > y }
+            switch a.state {
+            case .waiting, .idle:
+                let (x, y) = (a.agent.since ?? .distantFuture, b.agent.since ?? .distantFuture)
+                if x != y { return x < y }
+            case .failed, .finished:
+                let (x, y) = (a.agent.since ?? .distantPast, b.agent.since ?? .distantPast)
+                if x != y { return x > y }
+            case .working: break
+            }
             return a.id < b.id
         }
     }
 
     func count(_ state: State) -> Int { rows.filter { $0.state == state }.count }
+    /// The rows without the idle ones: who the ring's bubbles stand for.
+    var active: [Row] { rows.filter { $0.state != .idle } }
     /// Waiting or failed: the number under the ring.
     var needsYou: Int { count(.waiting) + count(.failed) }
     var needing: [BreakAgent] { rows.filter { $0.state == .waiting || $0.state == .failed }.map(\.agent) }
@@ -98,24 +114,25 @@ struct AgentBoard: Equatable {
 
     /// The ring's bubbles: up to four agents' apps, those who need you first; with more than four, three and how many more.
     var bubbles: (apps: [BreakAgent.App], more: Int) {
-        let apps = rows.map(\.agent.app)
+        let apps = active.map(\.agent.app)
         return apps.count > 4 ? (Array(apps.prefix(3)), apps.count - 3) : (apps, 0)
     }
 
-    /// The card's header: "3 need you · 2 working"; only finished agents, "2 finished".
+    /// The card's header: "3 need you · 2 working"; only finished agents, "2 finished"; only idle ones, "4 idle".
     var summary: String {
-        let need = needsYou, working = count(.working), finished = count(.finished)
+        let need = needsYou, working = count(.working), finished = count(.finished), idle = count(.idle)
         var parts = [need == 1 ? "1 needs you" : need > 1 ? "\(need) need you" : "", working > 0 ? "\(working) working" : ""].filter { !$0.isEmpty }
         if parts.isEmpty, finished > 0 { parts = ["\(finished) finished"] }
+        if parts.isEmpty, idle > 0 { parts = ["\(idle) idle"] }
         return parts.joined(separator: " · ")
     }
 
     /// What VoiceOver reads for the ring.
     var spoken: String {
-        let waiting = count(.waiting), failed = count(.failed), finished = count(.finished), working = count(.working)
+        let waiting = count(.waiting), failed = count(.failed), finished = count(.finished), working = count(.working), idle = count(.idle)
         let parts = [waiting > 0 ? "\(waiting) waiting for you" : "", failed > 0 ? "\(failed) failed" : "",
                      finished > 0 ? "\(finished) just finished" : "", working > 0 ? "\(working) working" : ""].filter { !$0.isEmpty }
-        return parts.isEmpty ? "No active agents" : parts.joined(separator: ", ")
+        return (parts.isEmpty ? ["No active agents"] : parts).joined(separator: ", ") + (idle > 0 ? ", \(idle) idle" : "")
     }
 
     /// The tick on the minimized rail: 4 pt for each agent that needs you, up to the rings' longest tick; none at 0.
