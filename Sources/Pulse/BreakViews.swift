@@ -379,7 +379,7 @@ struct ClaudeCrab: View {
 /// The pet and the agents Rex reports, around the edges of the break screen: the pet, the Claude crabs and small
 /// Codex pets along the bottom in staggered sizes; other apps (no sprite of their own), and the agents the floor
 /// has no room for, float as rings. A blocked
-/// agent stands still with a "!", an idle one dimmed, asleep until the break's last seconds.
+/// agent stands still with a "!" (red when it failed), an idle one dimmed, asleep until the break's last seconds.
 struct BreakAgentsLayer: View {
     @ObservedObject var rex: RexAgents
     @ObservedObject private var pet = CodexPetSession.shared
@@ -412,7 +412,7 @@ struct BreakAgentsLayer: View {
                              roll: BreakOutfit.roll(id: $0.id, seed: seed))
         }
         let rings = Array(shown.floaters.enumerated())
-        let moving = rings.filter { !$0.element.blocked && !$0.element.idle && !still }
+        let moving = rings.filter { !$0.element.needsYou && !$0.element.idle && !still }
         ZStack(alignment: .topLeading) {
             // rings that stand still are drawn once, outside the frame-by-frame redraw
             ForEach(rings.filter { r in !moving.contains { $0.offset == r.offset } }, id: \.element.id) { i, agent in
@@ -488,7 +488,7 @@ struct BreakAgentsLayer: View {
                                   height: codex ? w * 208 / 192 : w * 17 / 24,
                                   footMargin: codex ? CodexPetSprite.footMargin(.idle) : 1.0 / 17,   // the crab's legs end 1/17 up
                                   // a finished agent celebrates instead of sleeping
-                                  phase: Double(lane) * 3.1, still: still || (agent.idle && !agent.done) || agent.blocked,
+                                  phase: Double(lane) * 3.1, still: still || (agent.idle && !agent.done) || agent.needsYou,
                                   idle: agent.idle && !agent.done))
         }
         return out
@@ -559,7 +559,7 @@ struct BreakAgentsLayer: View {
     /// stands with a "!", idle ones sleep dimmed and get up as the break ends.
     private func walkerView(_ agent: BreakAgent, _ a: TrickActor, _ p: TrickPose, t: Double, outfit: BreakOutfit) -> some View {
         let codex = agent.app == .codex, local = t + a.phase
-        let margin = codex ? CodexPetSprite.footMargin(Self.petState(p.move, blocked: agent.blocked).state) : a.footMargin
+        let margin = codex ? CodexPetSprite.footMargin(Self.petState(p.move, blocked: agent.needsYou).state) : a.footMargin
         let crabFrame: Int = switch p.move {
         case let .walk(_, fast): Int(t * (fast ? 16 : 8)) % 4
         case .jump: 1
@@ -575,11 +575,11 @@ struct BreakAgentsLayer: View {
         let beat = local.truncatingRemainder(dividingBy: 1), worn = dressed ? Self.worn(outfit, p) : outfit
         // where ClaudeCrab draws its body's top and its right claw's tip this frame
         let bob: CGFloat = crabFrame % 2 == 1 ? -0.5 : 0, swing: CGFloat = crabFrame % 4 == 1 ? -0.6 : crabFrame % 4 == 3 ? 0.6 : 0
-        let frame = codex ? petFrame(p.move, t: local, blocked: agent.blocked) : nil
+        let frame = codex ? petFrame(p.move, t: local, blocked: agent.needsYou) : nil
         return Group {
-            if codex { petImage(p.move, t: local, blocked: agent.blocked) }
+            if codex { petImage(p.move, t: local, blocked: agent.needsYou) }
             else {
-                ClaudeCrab(frame: crabFrame, blink: p.move == .stand && !agent.blocked && beat > 0.45 && beat < 0.6,
+                ClaudeCrab(frame: crabFrame, blink: p.move == .stand && !agent.needsYou && beat > 0.45 && beat < 0.6,
                            sleepy: p.move == .sleep, raise: arms)
             }
         }
@@ -591,7 +591,7 @@ struct BreakAgentsLayer: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            if agent.blocked { BlockedBadge(size: 1.3 * u).offset(x: (codex ? 0.2 : 0.4) * u, y: (codex ? 0.2 : -0.6) * u) }
+            if agent.needsYou { BlockedBadge(size: 1.3 * u, failed: agent.failed).offset(x: (codex ? 0.2 : 0.4) * u, y: (codex ? 0.2 : -0.6) * u) }
         }
         .scaleEffect(x: 1 + p.squash, y: 1 - p.squash, anchor: .bottom)
         .rotationEffect(.radians(p.turn))
@@ -662,13 +662,8 @@ struct BreakAgentsLayer: View {
     }
 
     private func floaterView(_ agent: BreakAgent, at spot: CGPoint, slot: Int, t: Double) -> some View {
-        let account: AccountID = switch agent.app {
-        case .claude: .claude
-        case .codex: .codex
-        case .antigravity: .antigravity
-        case .grok: .grok
-        }
-        let at = floatPosition(spot, slot: slot, t: t, moving: !agent.blocked && !agent.idle && !still)
+        let account = agent.app.account
+        let at = floatPosition(spot, slot: slot, t: t, moving: !agent.needsYou && !agent.idle && !still)
         let d = ring * Self.stagger(slot)   // never more than the spot allows
         return ZStack {
             Circle().fill(Color(white: 0.03))
@@ -677,7 +672,7 @@ struct BreakAgentsLayer: View {
         }
         .frame(width: d, height: d)
         .shadow(color: .black.opacity(0.6), radius: 0.6 * unit, y: 0.25 * unit)   // inside floatSpots' allowance
-        .overlay(alignment: .topTrailing) { if agent.blocked { BlockedBadge(size: 1.3 * unit) } }
+        .overlay(alignment: .topTrailing) { if agent.needsYou { BlockedBadge(size: 1.3 * unit, failed: agent.failed) } }
         .opacity(agent.idle ? 0.45 : 1)
         .position(at)
         .allowsHitTesting(!overControl(at, d))
@@ -708,7 +703,8 @@ struct BreakAgentsLayer: View {
     }
 
     private static func tip(_ agent: BreakAgent) -> String {
-        [agent.label.isEmpty ? agent.app.rawValue : agent.label, agent.blocked ? "waiting for you" : agent.done ? "finished" : agent.idle ? "idle" : nil,
+        [(agent.label.isEmpty ? agent.app.rawValue : agent.label) + (agent.host.isEmpty ? "" : " on \(agent.host)"),
+         agent.blocked ? "waiting for you" : agent.failed ? "failed" : agent.done ? "finished" : agent.idle ? "idle" : nil,
          agent.msg.isEmpty ? nil : agent.msg]
             .compactMap { $0 }.joined(separator: " · ")
     }
@@ -716,13 +712,14 @@ struct BreakAgentsLayer: View {
 
 private struct BlockedBadge: View {
     let size: CGFloat
+    var failed = false   // red: it failed and stopped
     var body: some View {
         Image(systemName: "exclamationmark")
             .font(.system(size: size * 0.62, weight: .heavy))
             .foregroundStyle(.white)
             .frame(width: size, height: size)
-            .background(.orange, in: Circle())
-            .accessibilityLabel("Waiting for you")
+            .background(failed ? Color.red : Color.orange, in: Circle())
+            .accessibilityLabel(failed ? "Failed" : "Waiting for you")
     }
 }
 
@@ -732,6 +729,7 @@ private struct BlockedBadge: View {
 struct BreakSettingsSection: View {
     @Binding var settings: BreakSettings
     @ObservedObject private var controller = BreakController.shared
+    @ObservedObject private var agents = AgentsMonitor.shared
     @State private var sounds: [String] = []
 
     var body: some View {
@@ -795,11 +793,18 @@ struct BreakSettingsSection: View {
             LabeledContent("Sound at start") { SoundChoice(title: "Sound at start", sound: soundBinding(\.startSound), sounds: sounds) }
             LabeledContent("Sound at end") { SoundChoice(title: "Sound at end", sound: soundBinding(\.endSound), sounds: sounds) }
                 .onAppear { sounds = BatterySounds.all().map(\.name) }
-            Toggle(isOn: $settings.showAgents) {
+            // the caption is outside the switch, so its link to Rex can be clicked
+            LabeledContent {
+                Toggle("Show agents", isOn: $settings.showAgents).labelsHidden().toggleStyle(.switch)
+                    .accessibilityLabel("Show agents")
+            } label: {
                 Text("Show agents")
-                Text("The Codex pet, and the agents open in Rex on this Mac and the Macs it connects to: working, waiting for you, just finished, or asleep")
+                if agents.rexFound {
+                    Text("The Codex pet. With Rex, also the agents open in it on this Mac and the Macs it connects to: working, waiting for you, failed, just finished, or asleep")
+                } else {
+                    Text("The Codex pet. Other agents need Rex, which Pulse didn't find on this Mac. [Get Rex…](https://www.superlogical.com/rex)")
+                }
             }
-            .accessibilityLabel("Show agents")
             Toggle(isOn: $settings.partyMode) {
                 Text("Party mode")
                 Text("Hats, costumes and props on the agents")

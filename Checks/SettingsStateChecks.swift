@@ -24,6 +24,7 @@ enum SettingsStateChecks {
         assert(p.limitAlerts?["claude.session_5h"] == Date(timeIntervalSinceReferenceDate: 782000000))
         assert(p.battery.lowPercent == 30 && p.battery.criticalPercent == 15 && !p.battery.showInRail && p.battery.criticalSound == nil)
         assert(p.breakSettings == nil && p.breaks == BreakSettings())
+        assert(p.agentSettings == nil && p.agents == AgentSettings() && !p.agents.showOnRail, "a state from before the agents ring leaves it off")
         assert(p.hiddenPools == nil, "a state from before pool switches shows every pool")
         var switched = AppState.Persisted()
         switched.hiddenPools = ["antigravity.Claude and GPT"]
@@ -60,9 +61,14 @@ enum SettingsStateChecks {
         changed.breaks.ownIdeas = "Hum a tune"
         changed.tucked = true
         changed.tuckPeek = true
+        changed.agents.showOnRail = true
+        changed.agents.waitMinutes = 10
         let back = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(changed))
         assert(back.breaks.enabled && back.breaks.ownIdeas == "Hum a tune" && back.battery == p.battery && back.dock == .bottom)
         assert(back.tucked == true && back.tuckPeek == true, "a tucked rail stays tucked across launches")
+        assert(back.agents.showOnRail && back.agents.waitMinutes == 10 && back.agents.holdDuringCalls, "the agents ring stays on across launches")
+        let newerAgents = try! JSONDecoder().decode(AppState.Persisted.self, from: Data(#"{"enabled":["claude"],"agentSettings":{"showOnRail":true,"waitMinutes":"soon","sound":"Glass"}}"#.utf8))
+        assert(newerAgents.agents.showOnRail && newerAgents.agents.sound == "Glass" && newerAgents.agents.waitMinutes == 5, "one unreadable agents value costs only itself")
 
         // the oldest form: only the keys Pulse has always written
         let oldest = try! JSONDecoder().decode(AppState.Persisted.self, from: Data(#"{"enabled":["claude"],"order":["claude"],"alwaysOnTop":true,"showOverlay":true}"#.utf8))

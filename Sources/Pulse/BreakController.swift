@@ -63,6 +63,8 @@ final class BreakController: ObservableObject {
 
     var settings: BreakSettings { schedule.settings }
     var pausedUntil: Date? { schedule.pausedUntil }
+    /// The screen is locked or the Mac asleep: nobody is looking.
+    var away: Bool { lockedAt != nil || sleptAt != nil }
     func remaining(_ now: Date) -> (left: TimeInterval, total: TimeInterval) { schedule.remaining(now) ?? (0, 1) }
     var kind: BreakKind? {
         switch phase {
@@ -336,7 +338,7 @@ final class BreakController: ObservableObject {
     }
 
     /// Whether any app is recording from a microphone, as on a call. Reading it needs no microphone permission.
-    private static func microphoneInUse() -> Bool {
+    static func microphoneInUse() -> Bool {
         let system = AudioObjectID(kAudioObjectSystemObject)
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyProcessObjectList,
                                                  mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
@@ -408,7 +410,7 @@ final class BreakController: ObservableObject {
         let s = schedule.settings
         let main = NSScreen.main ?? NSScreen.screens.first
         let agents = s.showAgents
-        if agents { rex.start() }
+        rex.want(agents, for: "break")
         let petOnRight = state.dock != .left
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         holiday = s.holidays ? BreakHoliday.on(.now, simulated: UserDefaults.standard.simulatedHoliday) : nil
@@ -504,7 +506,7 @@ final class BreakController: ObservableObject {
     }
 
     private func hideOverlay() {
-        rex.stop()
+        rex.want(false, for: "break")
         stopHoliday()
         guard !panels.isEmpty else { return }
         let closing = panels

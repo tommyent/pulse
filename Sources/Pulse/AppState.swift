@@ -34,6 +34,12 @@ final class AppState: ObservableObject {
             set { breakSettings = newValue }
         }
 
+        var agentSettings: AgentSettings?   // nil = defaults
+        var agents: AgentSettings {
+            get { agentSettings ?? AgentSettings() }
+            set { agentSettings = newValue }
+        }
+
         init() {}
 
         private enum LegacyKeys: String, CodingKey { case glassTint }
@@ -64,6 +70,7 @@ final class AppState: ObservableObject {
             limitAlerts = c.lenient([String: Date].self, forKey: .limitAlerts, in: decoder)
             batterySettings = c.lenient(BatterySettings.self, forKey: .batterySettings, in: decoder)
             breakSettings = c.lenient(BreakSettings.self, forKey: .breakSettings, in: decoder)
+            agentSettings = c.lenient(AgentSettings.self, forKey: .agentSettings, in: decoder)
         }
 
         /// The settings at `url`, and whether a save may replace that file. Anything Pulse couldn't read first gets a copy

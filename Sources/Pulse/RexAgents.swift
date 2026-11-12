@@ -1,25 +1,44 @@
 import Foundation
 
-/// An agent another app runs, as Rex reports it: working, blocked (waiting for you) or idle (idle or done).
+/// An agent another app runs, as Rex reports it: working, blocked (waiting for you), failed, or idle (idle or done).
 struct BreakAgent: Equatable, Identifiable {
     enum App: String, CaseIterable {
         case claude = "claude-code", codex, antigravity, grok
         /// The name Rex reports: Grok Build runs as "grok-build".
         init?(rex name: String) { self.init(rawValue: name == "grok-build" ? "grok" : name) }
     }
+    /// What a blocked agent waits for: approval, a typed answer, or a sign-in.
+    enum Kind: String { case permission, question, auth }
     let id: String   // Rex's block id
     let app: App
     let blocked: Bool
     var idle = false
-    var label = ""
+    var label = ""   // its pane's label
     var msg = ""
     var done = false   // finished in the last `celebration`, and not looked at yet (Rex's "done"); idle too
+    var failed = false   // Rex's "error": it failed and stopped
+    var kind: Kind?      // only while blocked
+    var host = ""        // the Rex host its pane is on, as `-S` takes it; "" is this Mac
+    var session = ""     // its pane's Rex session and tab, for showing the pane
+    var window = ""
+    var since: Date?     // when it began waiting, failed or finished
+
+    /// Waiting for you, or failed: the two states that count on the rail.
+    var needsYou: Bool { blocked || failed }
 
     /// How long a finished agent celebrates. Rex keeps "done" until the pane is looked at, hours later sometimes;
     /// after this it sleeps like any idle agent.
     static let celebration: TimeInterval = 15 * 60
-    /// Who gets a place first on the break screen: blocked, then working, then idle.
-    var rank: Int { blocked ? 0 : idle ? 2 : 1 }
+    /// Who gets a place first on the break screen: those who need you, then working, then idle.
+    var rank: Int { needsYou ? 0 : idle ? 2 : 1 }
+
+    /// A report that repeats a wait or a failure (a new message, a snapshot read again) keeps the time it began.
+    func keepingWait(of old: BreakAgent?) -> BreakAgent {
+        guard let old, needsYou, old.blocked == blocked, old.failed == failed, old.kind == kind, let began = old.since else { return self }
+        var kept = self
+        kept.since = min(began, since ?? began)
+        return kept
+    }
 
     /// Fills `spots` floating places with agents, then the pet's `helpers`; when some don't fit, the last place says
     /// how many (`more`), so it holds no agent. With no places at all, everyone not walking counts as `more`.
@@ -57,16 +76,21 @@ struct BreakAgent: Equatable, Identifiable {
 
 extension UserDefaults {
     /// Stand-in agents for testing without Rex: `defaults write io.github.tommyent.pulse simulatedAgents "claude-code working,
-    /// claude-code blocked, codex working"`. Also works as `--args -simulatedAgents "…"`.
+    /// claude-code blocked permission 12, codex error"`. Each is an app and a state, then if wanted what a blocked one waits for
+    /// (permission, question, auth) and how many minutes ago its state began. Also works as `--args -simulatedAgents "…"`.
     @objc dynamic var simulatedAgents: String? { string(forKey: "simulatedAgents") }
 }
 
-/// Reads the agents Rex reports (https://www.superlogical.com/rex), only while a break is on screen: one
-/// snapshot of every pane and Rex's event stream from just before it, until `stop()`. Every call passes `--autostart=false`, so Pulse
-/// never starts a Rex server; when Rex is missing or not running, `agents` stays empty. This Mac's server and each host
-/// Rex connects to (`rex hosts`) are read on their own, so a host that's off doesn't hold up or reset the others.
+/// Reads the agents Rex reports (https://www.superlogical.com/rex) while someone wants them: the rail's agents ring all
+/// day, a break while it's on screen. One snapshot of every pane and Rex's event stream from just before it, until nobody
+/// does. Every call passes `--autostart=false`, so Pulse never starts a Rex server; when Rex is missing or not running,
+/// `agents` stays empty. This Mac's server and each host Rex connects to (`rex hosts`) are read on their own, so a host
+/// that's off doesn't hold up or reset the others.
 @MainActor
 final class RexAgents: ObservableObject {
+    /// Where a pane is: its label, its session and its tab, from the snapshot.
+    struct Place: Equatable { var label = "", session = "", window = "" }
+
     @Published private(set) var agents: [BreakAgent] = []
     /// Each server's agents, by its `-S` value ("" is this Mac's).
     private var found: [String: [BreakAgent]] = [:] {
@@ -76,26 +100,60 @@ final class RexAgents: ObservableObject {
         }
     }
     private var streams: [String: Process] = [:]
-    private var labels: [String: String] = [:]   // block id → pane label, from the snapshot
+    private var places: [String: Place] = [:]   // by block id
     private var pending: [String: [(String, BreakAgent?)]] = [:] // events that arrive while a server's snapshot runs, applied after it
     private var reading: [String: Int] = [:]   // each server's latest snapshot: an older one still running is dropped when it ends
     private var generation = 0
+    private var users: Set<String> = []   // who wants the agents read
+    private var rex: URL?
+    private var asked: Set<String> = []   // panes the snapshot didn't have, each read for once
+    private var simulation: NSKeyValueObservation?
 
-    func start() {
+    /// Reads while anyone wants it, and stops with the last one.
+    func want(_ on: Bool, for user: String) {
+        let was = !users.isEmpty
+        if on { users.insert(user) } else { users.remove(user) }
+        if users.isEmpty, was { stop() } else if !users.isEmpty, !was { start() }
+    }
+
+    private func start() {
         stop()
+        if simulation == nil {
+            // KVO also sees `defaults write` from another process: the stand-ins can change while the ring is on
+            simulation = UserDefaults.standard.observe(\.simulatedAgents) { [weak self] _, _ in
+                Task { @MainActor in
+                    if let self, !self.users.isEmpty { self.start() }
+                }
+            }
+        }
         if let simulated = UserDefaults.standard.simulatedAgents {
             agents = Self.simulated(simulated)
             return
         }
         guard let rex = Self.executable() else { return }
+        self.rex = rex
         generation += 1
         let mine = generation
         watch(rex, "", mine)
+        watchHosts(rex, mine)
+        // shortcut: a full read every 10 minutes picks up a renamed pane and anything the stream missed; follow Rex's
+        // layout events instead if that ever proves too slow
+        Task { @MainActor in
+            while generation == mine {
+                try? await Task.sleep(for: .seconds(600))
+                guard generation == mine else { return }
+                for server in streams.keys { read(rex, server, mine, again: false) }
+            }
+        }
+    }
+
+    /// The hosts Rex connects to, read again whenever this Mac's stream starts over: one added since is watched too.
+    private func watchHosts(_ rex: URL, _ mine: Int) {
         Task.detached(priority: .utility) {
             let hosts = Self.run(rex, ["hosts", "list", "--json"]).map(Self.hosts(fromList:)) ?? []
             await MainActor.run {
                 guard self.generation == mine else { return }
-                for host in hosts { self.watch(rex, host, mine) }
+                for host in hosts where self.streams[host] == nil { self.watch(rex, host, mine) }
             }
         }
     }
@@ -113,11 +171,16 @@ final class RexAgents: ObservableObject {
         let read = reading[server]
         pending[server] = []   // what an older snapshot had buffered is in this newer one
         Task.detached(priority: .utility) {
-            let (agents, labels) = Self.snapshot(rex, server)
+            let snapshot = Self.snapshot(rex, server)
             await MainActor.run {
                 guard self.generation == mine, self.reading[server] == read else { return }
-                self.labels.merge(labels) { _, new in new }
-                self.found[server] = agents
+                if let (agents, places) = snapshot {
+                    self.places.merge(places) { _, new in new }
+                    let before = self.found[server] ?? []
+                    self.found[server] = agents.map { agent in agent.keepingWait(of: before.first { $0.id == agent.id }) }
+                } else if self.streams[server]?.isRunning != true {
+                    self.found[server] = []   // the server is gone; with its stream still up, one failed read changes nothing
+                }
                 let later = self.pending.removeValue(forKey: server) ?? []
                 for (block, agent) in later { self.apply(server, block, agent) }
                 guard again else { return }
@@ -135,12 +198,15 @@ final class RexAgents: ObservableObject {
         streams = [:]
         pending = [:]
         found = [:]
+        asked = []
     }
 
     // MARK: the event stream
 
-    /// `restarts`: how many more times the stream may be started again if it ends on its own during a break.
-    private func follow(_ rex: URL, _ server: String, restarts: Int = 3) {
+    /// A stream that ends on its own while it's wanted starts again: after `retry` seconds, twice as long each time up
+    /// to a minute, and from 2 s again once one has run for a minute. With Rex not running that's one short `rex` call
+    /// a minute.
+    private func follow(_ rex: URL, _ server: String, retry: Double = 2) {
         let p = Process()
         p.executableURL = rex
         p.arguments = ["--autostart=false"] + Self.target(server) + ["events", "--all", "--json"]
@@ -149,24 +215,28 @@ final class RexAgents: ObservableObject {
         p.standardError = FileHandle.nullDevice
         guard (try? p.run()) != nil else { return }
         streams[server] = p
-        let mine = generation
+        let mine = generation, began = Date()
         // ends when stop() terminates the process and its pipe closes
         Task.detached(priority: .utility) { [self] in
             do {
                 for try await line in out.fileHandleForReading.bytes.lines {
-                    guard let update = Self.update(fromEvent: Data(line.utf8)) else { continue }
+                    // the stream carries every server event: only the few about a program's status or a closed pane are parsed
+                    guard line.contains("program_status") || line.contains("block_closed"),
+                          let update = Self.update(fromEvent: Data(line.utf8)) else { continue }
                     await MainActor.run {
                         guard generation == mine else { return }
                         apply(server, update.0, update.1)
                     }
                 }
             } catch {}   // the pipe closed: the stream is over
-            // it ended on its own while the break is still on: start it again and read again, so nothing freezes
-            try? await Task.sleep(for: .seconds(2))
+            // it ended on its own while it's still wanted: start it again and read again, so nothing freezes
+            let lived = Date().timeIntervalSince(began)
+            try? await Task.sleep(for: .seconds(retry))
             await MainActor.run {
-                guard generation == mine, restarts > 0 else { return }
-                follow(rex, server, restarts: restarts - 1)
+                guard generation == mine else { return }
+                follow(rex, server, retry: lived > 60 ? 2 : min(retry * 2, 60))
                 read(rex, server, mine, again: true)   // a second read once the new stream has surely subscribed
+                if server.isEmpty { watchHosts(rex, mine) }
             }
         }
     }
@@ -174,12 +244,28 @@ final class RexAgents: ObservableObject {
     private func apply(_ server: String, _ block: String, _ agent: BreakAgent?) {
         if pending[server] != nil { pending[server]?.append((block, agent)); return }
         var list = found[server] ?? []
+        let old = list.first { $0.id == block }
         list.removeAll { $0.id == block }
         if var agent {
-            agent.label = labels[block] ?? ""
-            list.append(agent)
+            let place = places[block]
+            agent.label = place?.label ?? ""
+            agent.host = server
+            if agent.session.isEmpty { agent.session = place?.session ?? "" }
+            agent.window = place?.window ?? ""
+            list.append(agent.keepingWait(of: old))
+            if place == nil { readSoon(server, for: block) }
         }
         found[server] = list
+    }
+
+    /// A pane opened since the snapshot has no label yet: one more read 2 s on, once for each such pane.
+    private func readSoon(_ server: String, for block: String) {
+        guard let rex, asked.insert(block).inserted else { return }
+        let mine = generation
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            if generation == mine { read(rex, server, mine, again: false) }
+        }
     }
 
     // MARK: finding and calling rex
@@ -196,13 +282,14 @@ final class RexAgents: ObservableObject {
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
-    /// Every session's terminal panes on `server` and the agent status each reports. Empty when that server isn't
-    /// running or can't be reached. A host's panes are labelled with its name: "fix-tests on mini".
-    nonisolated static func snapshot(_ rex: URL, _ server: String) -> ([BreakAgent], [String: String]) {
+    /// Every session's terminal panes on `server` and the agent status each reports. nil when that server isn't
+    /// running or can't be reached. A host's panes carry its name in `host`, apart from their label: "fix-tests" on
+    /// "studio".
+    nonisolated static func snapshot(_ rex: URL, _ server: String) -> ([BreakAgent], [String: Place])? {
         guard let list = run(rex, ["api", "call", "session.list"], on: server),
               let sessions = (try? JSONSerialization.jsonObject(with: list) as? [String: Any])?["sessions"] as? [[String: Any]]
-        else { return ([], [:]) }
-        var found: [BreakAgent] = [], labels: [String: String] = [:]
+        else { return nil }
+        var found: [BreakAgent] = [], places: [String: Place] = [:]
         for session in sessions.compactMap({ $0["session_id"] as? String }) {
             guard let ls = run(rex, ["block", "ls", "-s", session, "--json"], on: server),
                   let blocks = (try? JSONSerialization.jsonObject(with: ls) as? [String: Any])?["blocks"] as? [[String: Any]]
@@ -210,14 +297,47 @@ final class RexAgents: ObservableObject {
             for block in blocks {
                 guard let id = block["block_id"] as? String,
                       (block["flavor"] as? String)?.hasPrefix("com.superlogical.terminal") == true else { continue }
-                labels[id] = [block["label"] as? String ?? "", server].filter { !$0.isEmpty }.joined(separator: " on ")
+                let place = Place(label: block["label"] as? String ?? "", session: session, window: block["window_id"] as? String ?? "")
+                places[id] = place
                 guard let status = run(rex, ["block", "call", "-s", session, "-b", id, "program_status"], on: server),
                       var agent = agent(fromStatus: status, block: id) else { continue }
-                agent.label = labels[id] ?? ""
+                agent.label = place.label
+                agent.host = server
+                agent.session = session
+                agent.window = place.window
                 found.append(agent)
             }
         }
-        return (found, labels)
+        return (found, places)
+    }
+
+    // MARK: showing a pane
+
+    /// Brings an agent's pane forward as far as the `rex` command can: the pane gets the focus in its session, and the
+    /// Rex app on this Mac is asked to go to that session and tab. The app does that only with its Remote Control
+    /// setting on. The caller then brings Rex to the front.
+    nonisolated static func show(_ agent: BreakAgent, rex: URL, thisMac: String) {
+        guard !agent.session.isEmpty else { return }
+        _ = run(rex, ["block", "focus", "-s", agent.session, agent.id], on: agent.host)
+        guard let list = run(rex, ["client", "ls", "--json"], on: agent.host),
+              let client = appClient(fromList: list, thisMac: thisMac) else { return }
+        _ = run(rex, ["-C", client] + selectArguments(agent), on: agent.host)
+    }
+
+    /// The Rex app's own action for going to a session, and to the pane's tab when the snapshot knew it.
+    nonisolated static func selectArguments(_ agent: BreakAgent) -> [String] {
+        ["do", "session.select", "session_id=\(agent.session)"] + (agent.window.isEmpty ? [] : ["window_id=\(agent.window)"])
+    }
+
+    /// `rex client ls --json`: the Rex app on this Mac among a server's clients. On this Mac's own server it's the app
+    /// on the local socket; on another host's, the app labelled as this Mac, or the only app there is.
+    nonisolated static func appClient(fromList data: Data, thisMac: String) -> String? {
+        let clients = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["clients"] as? [[String: Any]] ?? []
+        let apps = clients.filter { ($0["info"] as? [String: Any])?["kind"] as? String == "app" }
+        let mine = apps.first { ($0["principal"] as? [String: Any])?["transport"] as? String == "unix" }
+            ?? apps.first { ($0["info"] as? [String: Any])?["label"] as? String == thisMac }
+            ?? (apps.count == 1 ? apps[0] : nil)
+        return mine?["client_id"] as? String
     }
 
     nonisolated private static func target(_ server: String) -> [String] { server.isEmpty ? [] : ["-S", server] }
@@ -257,16 +377,28 @@ final class RexAgents: ObservableObject {
     nonisolated static func agent(fromRecord record: [String: Any], block: String, now: Date = .now) -> BreakAgent? {
         guard let name = record["app"] as? String ?? record["effective_app"] as? String,
               let app = BreakAgent.App(rex: name) else { return nil }
+        let msg = plain(record["msg"] as? String ?? "")
+        let at = (record["updated_at"] as? String).flatMap(date)   // an event without one has just happened
         switch record["state"] as? String {
-        case "working": return BreakAgent(id: block, app: app, blocked: false, msg: record["msg"] as? String ?? "")
-        case "blocked": return BreakAgent(id: block, app: app, blocked: true, msg: record["msg"] as? String ?? "")
+        case "working": return BreakAgent(id: block, app: app, blocked: false, msg: msg)
+        case "blocked":
+            return BreakAgent(id: block, app: app, blocked: true, msg: msg,
+                              kind: (record["kind"] as? String).flatMap(BreakAgent.Kind.init(rawValue:)), since: at ?? now)
+        case "error": return BreakAgent(id: block, app: app, blocked: false, msg: msg, failed: true, since: at ?? now)
         case "idle": return BreakAgent(id: block, app: app, blocked: false, idle: true)
         case "done":
-            let at = (record["updated_at"] as? String).flatMap(date)   // an event without one has just happened
-            return BreakAgent(id: block, app: app, blocked: false, idle: true,
-                              done: at.map { now.timeIntervalSince($0) < BreakAgent.celebration } ?? true)
-        default: return nil   // error and states Rex adds later
+            return BreakAgent(id: block, app: app, blocked: false, idle: true, msg: msg,
+                              done: at.map { now.timeIntervalSince($0) < BreakAgent.celebration } ?? true, since: at ?? now)
+        default: return nil   // states Rex adds later
         }
+    }
+
+    /// A status line is untrusted text from whatever runs in the pane. Pulse shows it as plain text, without the
+    /// invisible formatting characters (direction overrides and the like) that could reorder the words around it.
+    nonisolated static func plain(_ text: String) -> String {
+        String(String.UnicodeScalarView(text.unicodeScalars.filter {
+            $0.properties.generalCategory != .format && $0.properties.generalCategory != .control
+        }))
     }
 
     /// Rex's times, such as "2026-10-26T01:35:14.24817-04:00".
@@ -276,20 +408,23 @@ final class RexAgents: ObservableObject {
         return f.date(from: text) ?? ISO8601DateFormatter().date(from: text)
     }
 
-    /// A line of `rex events --all --json`: (block, its agent now, or nil when its program stopped reporting). nil for every
-    /// other event.
+    /// A line of `rex events --all --json`: (block, its agent now, or nil when its program stopped reporting or its pane
+    /// closed). nil for every other event.
     nonisolated static func update(fromEvent line: Data) -> (String, BreakAgent?)? {
         guard let top = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
               top["type"] as? String == "session_event",
-              let event = (top["payload"] as? [String: Any])?["event"] as? [String: Any],
-              event["type"] as? String == "block_event",
+              let session = top["payload"] as? [String: Any],
+              let event = session["event"] as? [String: Any],
               let blockEvent = event["payload"] as? [String: Any],
-              let block = blockEvent["block_id"] as? String,
-              let payload = blockEvent["payload"] as? [String: Any] else { return nil }
+              let block = blockEvent["block_id"] as? String else { return nil }
+        if event["type"] as? String == "block_closed" { return (block, nil) }
+        guard event["type"] as? String == "block_event", let payload = blockEvent["payload"] as? [String: Any] else { return nil }
         switch blockEvent["name"] as? String {
         case "program_status_changed":
             guard (payload["id"] as? String ?? "").isEmpty, let record = payload["record"] as? [String: Any] else { return nil }
-            return (block, agent(fromRecord: record, block: block))
+            var agent = agent(fromRecord: record, block: block)
+            agent?.session = session["session_id"] as? String ?? ""
+            return (block, agent)
         case "program_status_removed":
             guard (payload["ids"] as? [String])?.contains("") ?? true else { return nil }
             return (block, nil)
@@ -298,13 +433,17 @@ final class RexAgents: ObservableObject {
         }
     }
 
-    /// "claude-code working, codex blocked" → stand-in agents labelled with their position.
-    nonisolated static func simulated(_ text: String) -> [BreakAgent] {
+    /// "claude-code working, codex blocked permission 12" → stand-in agents labelled with their position. After the
+    /// app and the state come, in either order, what a blocked one waits for and how many minutes ago its state began.
+    nonisolated static func simulated(_ text: String, now: Date = .now) -> [BreakAgent] {
         text.split(separator: ",").enumerated().compactMap { i, item in
             let parts = item.split(separator: " ").map(String.init)
             guard parts.count >= 1 else { return nil }
-            return agent(fromRecord: ["app": parts[0], "state": parts.count > 1 ? parts[1] : "working",
-                                      "msg": "Stand-in agent \(i + 1)"], block: "simulated-\(i)")
+            var record = ["app": parts[0], "state": parts.count > 1 ? parts[1] : "working", "msg": "Stand-in agent \(i + 1)"]
+            let extras = parts.dropFirst(2)
+            if let kind = extras.first(where: { BreakAgent.Kind(rawValue: $0) != nil }) { record["kind"] = kind }
+            let minutesAgo = extras.compactMap { Double($0) }.first ?? 0
+            return agent(fromRecord: record, block: "simulated-\(i)", now: now.addingTimeInterval(-minutesAgo * 60))
                 .map { var a = $0; a.label = "\(parts[0]) \(i + 1)"; return a }
         }
     }

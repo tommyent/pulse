@@ -638,10 +638,12 @@ enum BreakChecks {
         let status = json(#"{"records":[{"app":"claude-code","state":"working","msg":"Reading","updated_at":"x"},{"id":"build","state":"blocked","updated_at":"x"}]}"#)
         assert(RexAgents.agent(fromStatus: status, block: "b1") == BreakAgent(id: "b1", app: .claude, blocked: false, msg: "Reading"))
         assert(RexAgents.agent(fromStatus: json(#"{"records":[{"app":"codex","state":"blocked","kind":"permission","updated_at":"x"}]}"#), block: "b2")?.blocked == true)
-        assert(RexAgents.agent(fromStatus: json(#"{"records":[{"app":"claude-code","state":"done","updated_at":"x"}]}"#), block: "b")
-               == BreakAgent(id: "b", app: .claude, blocked: false, idle: true, done: true))
+        let done = RexAgents.agent(fromStatus: json(#"{"records":[{"app":"claude-code","state":"done","updated_at":"x"}]}"#), block: "b")
+        assert(done?.idle == true && done?.done == true && done?.blocked == false && done?.since != nil)
         assert(RexAgents.agent(fromStatus: json(#"{"records":[{"app":"codex","state":"idle","updated_at":"x"}]}"#), block: "b")?.idle == true)
-        assert(RexAgents.agent(fromStatus: json(#"{"records":[{"app":"codex","state":"error","updated_at":"x"}]}"#), block: "b") == nil)
+        // a failed agent stays on the break screen, as one that needs you (AgentChecks covers the rest)
+        let failed = RexAgents.agent(fromStatus: json(#"{"records":[{"app":"codex","state":"error","updated_at":"x"}]}"#), block: "b")
+        assert(failed?.failed == true && failed?.blocked == false && failed?.idle == false && failed?.rank == 0)
         // Grok Build reports itself as grok-build (seen in Rex 2026-10-25)
         assert(RexAgents.agent(fromStatus: json(#"{"records":[{"app":"grok-build","effective_app":"grok-build","state":"working","updated_at":"x"}]}"#), block: "b")?.app == .grok)
         assert(BreakAgent.App(rex: "grok") == .grok && BreakAgent.App(rex: "codex") == .codex && BreakAgent.App(rex: "cargo") == nil)
@@ -674,7 +676,7 @@ enum BreakChecks {
         let stamp = "2026-10-26T01:35:14.24817-04:00", finished = RexAgents.date(stamp)!
         let record: [String: Any] = ["app": "claude-code", "state": "done", "updated_at": stamp]
         assert(RexAgents.agent(fromRecord: record, block: "b", now: finished + 60)?.done == true)
-        assert(RexAgents.agent(fromRecord: record, block: "b", now: finished + 16 * 60) == BreakAgent(id: "b", app: .claude, blocked: false, idle: true))
+        assert(RexAgents.agent(fromRecord: record, block: "b", now: finished + 16 * 60) == BreakAgent(id: "b", app: .claude, blocked: false, idle: true, since: finished))
         assert(abs(finished.timeIntervalSince(RexAgents.date("2026-10-26T05:35:14Z")!) - 0.24817) < 0.001)
         assert(RexAgents.agent(fromStatus: json(#"{"records":[{"app":"codex","state":"idle","updated_at":"x"}]}"#), block: "b")?.done == false)
 
@@ -723,7 +725,7 @@ enum BreakChecks {
         assert(BreakAgent.onScreen([], lanes: 5, slots: 6).hidden.isEmpty)
         assert(RexAgents.update(fromEvent: json(#"{"type":"client_connected","payload":{}}"#)) == nil)
         // the other Macs' Rex servers, as `rex hosts list --json` gives them
-        assert(RexAgents.hosts(fromList: json(#"{"home":{"label":"","endpoint":"unix:///x/server.sock","this_machine":true,"reached":true},"hosts":[{"host":{"id":"host:01a15f25-c30c-719a-b220-65bca927b363","label":"mini","endpoints":["https://mini.example.ts.net"],"added_from":"MacBook-Air.local","updated_at":"2026-10-21T15:47:52.716941Z"},"from":"home","held":false},{"host":{"label":""}}],"warnings":[]}"#)) == ["mini"])
+        assert(RexAgents.hosts(fromList: json(#"{"home":{"label":"","endpoint":"unix:///x/server.sock","this_machine":true,"reached":true},"hosts":[{"host":{"id":"host:01a15f25-c30c-719a-b220-65bca927b363","label":"studio","endpoints":["https://studio.example.ts.net"],"added_from":"MacBook-Air.local","updated_at":"2026-10-21T15:47:52.716941Z"},"from":"home","held":false},{"host":{"label":""}}],"warnings":[]}"#)) == ["studio"])
         assert(RexAgents.hosts(fromList: json(#"{"hosts":[]}"#)).isEmpty && RexAgents.hosts(fromList: json("not json")).isEmpty)
 
         let fake = RexAgents.simulated("claude-code working, claude-code blocked,codex, grok idle, nope working")

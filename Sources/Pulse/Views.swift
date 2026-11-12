@@ -135,13 +135,13 @@ private struct CapDisc: View {
 
 /// A rail item: its ring with the percentage (or the pet's voice button) under it, or to its right on a horizontal rail.
 /// 9 pt beside, because a ring's stroke reaches 3 pt past its frame.
-private func ringItemLayout(beside: Bool) -> AnyLayout {
+func ringItemLayout(beside: Bool) -> AnyLayout {
     beside ? AnyLayout(HStackLayout(spacing: 9)) : AnyLayout(VStackLayout(spacing: 6))
 }
 
 /// A ring's percentage. Beside its ring it keeps room for two digits, so the rings after it don't shift as a value
 /// crosses from 9% to 10%.
-private struct PercentText: View {
+struct PercentText: View {
     let text: String
     let beside: Bool
 
@@ -340,7 +340,7 @@ struct WindowRow: View {
 }
 
 /// Rounded card plus a tail (pointing at the rail) as one shape, so the glass renders as a single piece.
-private struct BubbleShape: Shape {
+struct BubbleShape: Shape {
     static let tailWidth: CGFloat = 13
     var edge: Edge = .trailing
     var at: CGFloat? = nil   // where the tail sits along its edge; nil = the middle
@@ -757,14 +757,17 @@ struct OverlayView: View {
     var morph = MorphPlacement()   // the controller's: set while a hover grows or shrinks the rail
     @ObservedObject private var battery = BatteryMonitor.shared
     @ObservedObject private var breaks = BreakController.shared
+    @ObservedObject private var agents = AgentsMonitor.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openSettings) private var openSettings
     @State private var exitWatch: Task<Void, Never>?
     @State private var cupFrame = CGRect.zero
 
     private var expanded: Bool { !state.tuckedAway && (state.hoveringOverlay || state.cardVisible || state.petVisible) }
+    /// The agents ring is on the rail: switched on, and Rex is on this Mac.
+    private var showsAgents: Bool { state.persisted.agents.onRail(rexFound: agents.rexFound) }
     @State private var itemFrames: [String: CGRect] = [:]   // the pet and each ring, so a card's tail points at its own
-    @State private var batteryCard = false   // the open card is the battery's, not the selected account's
+    @State private var sideCard: String?   // "battery" or "agents": the open card is that ring's, not the selected account's
     @State private var cardFrame = CGRect.zero
     @State private var railFrame = CGRect.zero
 
@@ -854,7 +857,7 @@ struct OverlayView: View {
             : AnyLayout(HStackLayout(alignment: tail == .top ? .top : .bottom, spacing: 10))
         beside {
             BreakPill(controller: breaks, tail: tail, onFrame: onPillFrame)
-            let shift = cardShift(state.petVisible ? "pet" : batteryCard ? "battery" : ringKey(state.selected, pool: state.selectedPool))
+            let shift = cardShift(state.petVisible ? "pet" : sideCard ?? ringKey(state.selected, pool: state.selectedPool))
             usageOrPetCard(tail: tail)
                 .offset(x: state.dock.isVertical ? 0 : shift, y: state.dock.isVertical ? shift : 0)
         }
@@ -866,9 +869,15 @@ struct OverlayView: View {
         if state.petVisible {
             PetCard(tailEdge: tail, tailAt: tailAt("pet"), showUsage: state.persisted.enabled.contains(.codex) ? { toggleCard(.codex) } : nil)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
-        } else if state.cardVisible, batteryCard {
+        } else if state.cardVisible, sideCard == "battery" {
             if let reading = battery.reading {
                 BatteryCard(reading: reading, tailEdge: tail, tailAt: tailAt("battery"))
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
+            }
+        } else if state.cardVisible, sideCard == "agents" {
+            if showsAgents {
+                AgentsCard(agents: agents.agents, dismissed: agents.dismissed, hold: agents.hold, show: agents.show, clear: agents.clear,
+                           tailEdge: tail, tailAt: tailAt("agents"))
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
             }
         } else if state.cardVisible, state.persisted.enabled.contains(state.selected) {
@@ -890,6 +899,29 @@ struct OverlayView: View {
         return layout {
             if state.showsPet {
                 PetRailItem(expanded: expanded, beside: beside, onFrame: { itemFrames["pet"] = $0 }, toggle: togglePet)
+            }
+            // under the pet: the agents Rex reports, all day
+            if showsAgents {
+                let board = agents.board
+                Button { toggleSide("agents") } label: {
+                    AgentsRing(board: board, size: expanded ? 52 : 28, showCount: expanded, beside: beside, held: agents.hold != nil)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { itemFrames["agents"] = $0 }
+                // on the minimized rail: a tick only while someone needs you, longer for each one, red once one has failed
+                .overlay(alignment: tuckBand.alignment) {
+                    Capsule().fill(board.tone == .failed ? Color.red : Color.orange)
+                        .frame(width: vertical ? 3 : board.tick, height: vertical ? board.tick : 3)
+                        .offset(tuckBand.offset)
+                        .opacity(state.tuckedAway && board.needsYou > 0 ? 1 : 0)
+                        .animation(state.tuckedAway ? .easeOut(duration: 0.16).delay(0.18) : .easeOut(duration: 0.1), value: state.tuckedAway)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+                .accessibilityLabel("Agents")
+                .accessibilityValue(board.spoken + (agents.hold != nil ? "; sounds and alerts are waiting" : ""))
+                .accessibilityHint("Shows the agents open in Rex")
             }
             ForEach(state.enabledAccounts) { id in
                 let stale = state.snapshots[id]?.health == .stale
@@ -940,7 +972,7 @@ struct OverlayView: View {
             }
             // last: the bottom of a vertical rail, the right end of a horizontal one
             if state.persisted.battery.showInRail, let reading = battery.reading {
-                Button(action: toggleBattery) {
+                Button { toggleSide("battery") } label: {
                     BatteryRing(reading: reading, level: state.persisted.battery.level(reading.percent),
                                 size: expanded ? 52 : 28, showPercent: expanded, beside: beside)
                         .contentShape(Rectangle())
@@ -1060,23 +1092,24 @@ struct OverlayView: View {
     private func toggleCard(_ id: AccountID, pool: Int = 0) {
         guard !state.dragging else { return }
         state.petVisible = false
-        if state.cardVisible, !batteryCard, state.selected == id, state.selectedPool == pool {
+        if state.cardVisible, sideCard == nil, state.selected == id, state.selectedPool == pool {
             state.cardVisible = false
         } else {
-            batteryCard = false
+            sideCard = nil
             state.selected = id
             state.selectedPool = pool
             state.cardVisible = true
         }
     }
 
-    private func toggleBattery() {
+    /// The battery's card or the agents': a second click on the same ring closes it.
+    private func toggleSide(_ card: String) {
         guard !state.dragging else { return }
         state.petVisible = false
-        if state.cardVisible, batteryCard {
+        if state.cardVisible, sideCard == card {
             state.cardVisible = false
         } else {
-            batteryCard = true
+            sideCard = card
             state.cardVisible = true
         }
     }
@@ -1168,6 +1201,7 @@ struct MenuBarPopover: View {
 
 struct SettingsView: View {
     @ObservedObject var state: AppState
+    @ObservedObject private var agents = AgentsMonitor.shared
     // owned by macOS, not state.json, so a change in System Settings → Login Items shows here too
     @State private var loginItem = SMAppService.mainApp.status
 
@@ -1295,11 +1329,17 @@ struct SettingsView: View {
                         .help("Ask again for future command and folder-access requests. Current task grants expire when that task ends.")
                 }
             }
+            tab("Agents", "person.2", height: 670) {
+                AgentSettingsSection(settings: $state.persisted.agents, rexFound: agents.rexFound)
+            }
             tab("Breaks", "cup.and.saucer", height: 720) {
                 BreakSettingsSection(settings: $state.persisted.breaks)
             }
         }
-        .onAppear { loginItem = SMAppService.mainApp.status }
+        .onAppear {
+            loginItem = SMAppService.mainApp.status
+            agents.findRex()   // a Rex installed since launch
+        }
     }
 
     private func tab<Content: View>(_ title: String, _ symbol: String, height: CGFloat,
