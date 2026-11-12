@@ -157,13 +157,24 @@ final class AgentsMonitor: ObservableObject {
     func show(_ agent: BreakAgent) {
         state?.collapseOverlay()
         closeAlert()
-        // in front first: the Rex app may not act on a request while it's in the background
-        if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.rexApp) {
-            NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
+        let rex = RexAgents.executable()
+        Task { @MainActor in
+            // in front first, and asked only then: Rex's guide says its app may not act on a request in the background
+            await Self.bringRexForward()
+            guard let rex else { return }
+            Task.detached(priority: .userInitiated) {
+                RexAgents.show(agent, rex: rex, thisMac: Host.current().localizedName ?? "")
+            }
         }
-        guard let rex = RexAgents.executable() else { return }
-        Task.detached(priority: .userInitiated) {
-            RexAgents.show(agent, rex: rex, thisMac: Host.current().localizedName ?? "")
+    }
+
+    /// Opens or activates Rex, then waits until it's the app in front: 3 s at most, after which it's asked anyway.
+    private static func bringRexForward() async {
+        guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: rexApp) else { return }
+        _ = try? await NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
+        for _ in 0..<30 {
+            if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == rexApp { return }
+            try? await Task.sleep(for: .milliseconds(100))
         }
     }
 }
