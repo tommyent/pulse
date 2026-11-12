@@ -1,7 +1,7 @@
 # Codex pet
 
 <p align="center">
-  <a href="screenshots/pet-card.png"><img src="screenshots/pet-card.png" width="371" alt="The Codex pet card with work model, message field and voice button"></a>
+  <a href="screenshots/pet-card.png"><img src="screenshots/pet-card.png" width="469" alt="The Codex pet card with a short chat, message field and voice button"></a>
 </p>
 
 

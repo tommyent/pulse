@@ -5,13 +5,13 @@
 Usage refreshes every 2 minutes.
 
 <p align="center">
-  <a href="screenshots/usage-card.png"><img src="screenshots/usage-card.png" width="428" alt="Claude usage card beside the rail, showing sample limits and reset times"></a>
+  <a href="screenshots/usage-card.png"><img src="screenshots/usage-card.png" width="600" alt="Claude usage card beside the rail, showing live limits, reset times and two forecast lines"></a>
 </p>
 
 <p align="center">
-  <img src="screenshots/rail-used.png" width="581" alt="Usage rings showing percentages used">
-  <br>
-  <img src="screenshots/rail-left.png" width="581" alt="The same rings showing percentages left">
+  <a href="screenshots/rail-collapsed.png"><img src="screenshots/rail-collapsed.png" width="84" alt="Collapsed vertical rail with the provider and battery rings"></a>
+  &nbsp;
+  <a href="screenshots/rail-expanded.png"><img src="screenshots/rail-expanded.png" width="116" alt="Expanded vertical rail showing percentages left below each ring"></a>
 </p>
 
 Click the menu bar icon for Settings, which has a tab for each part of Pulse: General, Accounts, Rings, Battery, Codex pet and Breaks. **Settings → General → Launch at login** starts Pulse when you log in. Pulse always uses a dark appearance, including its Settings and menu bar popover. **Settings → General → Appearance** chooses **Glass**, untinted dark Liquid Glass, or **Solid**, an opaque dark surface. Both are lit softly from the top left, except on the break screen and in Settings. The chosen look applies to the rail, cards, countdown, alerts, menu and Settings. Click a ring for that account's windows and reset times; the card slides along the rail so its tail points at the ring.
@@ -20,11 +20,13 @@ The rings sit in a rail at a screen edge, small and without numbers until the po
 
 Each ring's outer arc is the account's shortest limit, usually the 5-hour session, and the inner arc the next, usually the weekly limit. A per-model cap, such as Claude's weekly limit for one model or an Antigravity model's own limit, fills the gray disc behind the logo, rising as it's used. With only one general limit, the cap takes the inner arc instead and the disc is left for a second cap. When there are more caps than places, the ring shows the fullest. Models that share limits of their own get a ring of their own: Antigravity's Gemini pool is violet, and its Claude and GPT pool is sky blue, with a switch in **Settings → Accounts** to hide it. Grok has one limit, its credits, so its ring has one arc and the card lists what each product used. When a window reaches 98%, the ring gets a red badge and Pulse shows an alert in the middle of the screen with the account, the window and when it resets. It comes again at 99% and at 100%, each once per reset period, and stays until you click **Dismiss**, so it can't slip by unseen; while it's open, a newer step just updates its numbers. **Show what's left** in Settings turns the rings, bars and percentages around: they show what's left and empty as you use them, and the disc falls instead of rising. Grok's products are shares of its credits rather than limits of their own, so the card always shows what they used.
 
-<p align="center"><a href="screenshots/antigravity-rings.png"><img src="screenshots/antigravity-rings.png" width="160" alt="Sample Antigravity Gemini and Claude/GPT pool rings at 88% and 80% left"></a></p>
+<p align="center"><a href="screenshots/antigravity-rings.png"><img src="screenshots/antigravity-rings.png" width="116" alt="Antigravity's Gemini and Claude/GPT pool rings, each showing 100% left"></a></p>
 
 When the recent pace would use up a limit before it resets, its row on the card and in the menu bar popover adds a line such as "At this rate you hit the limit Sat 3 PM", and VoiceOver reads it. That's what the current rate works out to, not a prediction, so it goes away when use slows, and its time is rounded down. The pace is the rise in the used percent over the last 24 hours, or since Pulse first saw this limit period if that's more recent. The line waits for 10% used and 20 minutes of readings, and shows only from a live reading under 10 minutes old. Pulse starts the pace over when the reset time moves by 15 minutes or more, when the used percent falls by more than 5 points, and after a day without a reading. Rings, badges and alerts don't use it.
 
 When a refresh fails, the ring dims and keeps its last numbers, and its card says when they're from and why. By the next refresh after a window's reset time, its old number is gone: the ring shows a dash and the card says "Reset since the last update", until a refresh succeeds. A window with no reset time keeps its last number. A provider that doesn't answer within 2 minutes counts as a failed refresh, so it can't hold up the others.
+
+<p align="center"><a href="screenshots/all-accounts.png"><img src="screenshots/all-accounts.png" width="300" alt="Menu bar usage panel with Claude, Codex, Grok and Antigravity limits and forecast lines"></a></p>
 
 ## Battery
 
@@ -33,7 +35,7 @@ On a Mac with a battery, the last ring on the rail is the battery: at the bottom
 Click it for its card: the charge and whether it's charging, with the time until full or the time left; what the whole Mac is drawing, how much of it goes into the battery and the adapter's wattage; the battery's Maximum Capacity and condition as System Settings shows them; its cycle count; and whether Low Power Mode is on. It reads the numbers when it opens and the power every few seconds while it stays open.
 
 <p align="center">
-  <img src="screenshots/battery-card.png" width="428" alt="The battery card beside the rail, with sample numbers: 84%, charging, full in about 35 min; the Mac is using 9.6 W; charging at 21.3 W from a 70 W adapter; Maximum Capacity 95%, Normal; 234 cycles">
+  <img src="screenshots/battery-card.png" width="448" alt="Battery card beside the rail showing 70% charge, time left, power draw, maximum capacity and cycles">
 </p>
 
 When the charge reaches either level, Pulse shows its own alert in the middle of the screen with the percentage and, when macOS has an estimate, the time left. It never uses Notification Center. The alert doesn't take the keyboard, ignores clicks for its first second, and stays until you click **Dismiss** or plug in; plugging in also stops its sound. Each level alerts once per discharge.
@@ -74,7 +76,7 @@ The break covers every display: a dark screen with a coloured glow at its edges,
 <p align="center">
   <img src="screenshots/settings-breaks.png" width="400" alt="Settings, Breaks tab: the reminder switch, micro break every 20 min for 20 s, long break every 60 min for 5 min, time away counting when locked, asleep or idle for 5 minutes, Wait during calls, the colour presets with violet chosen, Blow as the sound at start, Glass at the end, and the Show agents switch">
   &nbsp;
-  <img src="screenshots/break-history.png" width="400" alt="Settings, Breaks, History: today 2 taken, 1 ended early, 1 snoozed, 1 skipped, 2 away, and the latest breaks with their times and how each ended">
+  <img src="screenshots/break-history.png" width="460" alt="Settings, Breaks, History with today's and this week's totals and the latest breaks">
 </p>
 
 To try it without waiting, turn breaks on and run `defaults write io.github.tommyent.pulse simulatedBreak micro` (or `long`): each run is one countdown, and a simulated break leaves the schedule alone. `defaults write io.github.tommyent.pulse simulatedAgents "claude-code working, codex blocked"` shows stand-in agents instead of Rex's, and `defaults write io.github.tommyent.pulse simulatedIdea "…"` shows that text as every break's idea; `defaults delete io.github.tommyent.pulse simulatedAgents` (or `simulatedIdea`) undoes either. Pulse logs what breaks do, from each countdown to how it ended and what counted as time away: `log stream --predicate 'subsystem == "io.github.tommyent.pulse" AND category == "breaks"'`.

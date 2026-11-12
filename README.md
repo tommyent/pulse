@@ -14,7 +14,7 @@
   <a href="docs/"><strong>Docs</strong></a>
 </p>
 
-<p align="center"><a href="docs/screenshots/break-screen.png"><img src="docs/screenshots/break-screen.png" width="100%" alt="Pulse's violet break screen with countdown, break idea and agents"></a></p>
+<p align="center"><a href="docs/screenshots/usage-card.png"><img src="docs/screenshots/usage-card.png" width="100%" alt="Claude usage card with live percentages and forecast lines beside the rail"></a></p>
 
 ## Features
 
@@ -22,8 +22,8 @@ Click a picture to see it full size.
 
 <table>
   <tr>
-    <td width="33%" valign="top"><a href="docs/screenshots/usage-card.png"><img src="docs/screenshots/thumbs/usage-card.jpg" width="100%" alt="Claude usage card beside the rail with sample limits"></a><br><b>Usage rings</b> show limits and reset times</td>
-    <td width="33%" valign="top"><a href="docs/screenshots/pet-card.png"><img src="docs/screenshots/thumbs/pet-card.jpg" width="100%" alt="Codex pet card with message field and voice button"></a><br><b>Codex pet</b> for text and live voice</td>
+    <td width="33%" valign="top"><a href="docs/screenshots/usage-card.png"><img src="docs/screenshots/thumbs/usage-card.jpg" width="100%" alt="Claude usage card with forecast lines beside the rail"></a><br><b>Usage rings</b> show limits and reset times</td>
+    <td width="33%" valign="top"><a href="docs/screenshots/pet-card.png"><img src="docs/screenshots/thumbs/pet-card.jpg" width="100%" alt="Codex pet card with a short chat and voice button"></a><br><b>Codex pet</b> for text and live voice</td>
     <td width="33%" valign="top"><a href="docs/screenshots/battery-card.png"><img src="docs/screenshots/thumbs/battery-card.jpg" width="100%" alt="Battery card with charge, power draw and health"></a><br><b>Battery card</b> and low-charge alerts</td>
   </tr>
   <tr>
