@@ -65,6 +65,9 @@ final class BreakController: ObservableObject {
     var pausedUntil: Date? { schedule.pausedUntil }
     /// The screen is locked or the Mac asleep: nobody is looking.
     var away: Bool { lockedAt != nil || sleptAt != nil }
+    /// A break covers every screen right now, above Pulse's alerts; and when the last one stopped doing so.
+    var onScreen: Bool { !panels.isEmpty }
+    private(set) var breakEnded = Date.distantPast
     func remaining(_ now: Date) -> (left: TimeInterval, total: TimeInterval) { schedule.remaining(now) ?? (0, 1) }
     var kind: BreakKind? {
         switch phase {
@@ -511,6 +514,7 @@ final class BreakController: ObservableObject {
         guard !panels.isEmpty else { return }
         let closing = panels
         panels = []
+        breakEnded = .now
         closing.forEach { $0.close() }
         if NSApp.isActive { NSApp.deactivate() }   // hand the keyboard back to whatever was in use
     }

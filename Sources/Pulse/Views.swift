@@ -1329,7 +1329,7 @@ struct SettingsView: View {
                         .help("Ask again for future command and folder-access requests. Current task grants expire when that task ends.")
                 }
             }
-            tab("Agents", "person.2", height: 670) {
+            tab("Agents", "person.2", height: 690) {
                 AgentSettingsSection(settings: $state.persisted.agents, rexFound: agents.rexFound)
             }
             tab("Breaks", "cup.and.saucer", height: 720) {

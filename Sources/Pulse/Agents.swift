@@ -136,22 +136,30 @@ struct AgentBoard: Equatable {
 
 /// A quiet rule that is holding Pulse's own sound and alert for agents right now.
 enum AgentHold: Equatable {
-    case locked, voiceCall, paused(until: Date), call, rexInFront
+    case locked, onBreak, voiceCall, paused(until: Date), call, rexInFront
 
-    /// The rule in force. `microphone` is read only when no rule before it holds: reading it costs a couple of
-    /// milliseconds. Rex in front holds last and with no switch: you're already there, and Rex shows its own marks.
-    static func current(_ s: AgentSettings, now: Date, locked: Bool, voiceCall: Bool, pausedUntil: Date?, rexInFront: Bool,
-                        microphone: () -> Bool) -> AgentHold? {
+    /// The rule in force. Two hold always, with no switch: a break on screen, which covers the alert and makes Pulse
+    /// the app in front, and Rex in front, where you're already there and Rex shows its own marks. `microphone` is
+    /// read only when no rule before it holds: reading it costs a couple of milliseconds.
+    static func current(_ s: AgentSettings, now: Date, locked: Bool, onBreak: Bool, voiceCall: Bool, pausedUntil: Date?,
+                        rexInFront: Bool, microphone: () -> Bool) -> AgentHold? {
         if s.holdWhileLocked, locked { return .locked }
+        if onBreak { return .onBreak }
         if s.holdDuringCalls, voiceCall { return .voiceCall }
         if s.holdWhilePaused, let until = pausedUntil, until > now { return .paused(until: until) }
         if s.holdDuringCalls, microphone() { return .call }
         return rexInFront ? .rexInFront : nil
     }
 
+    /// A break holds while it's on screen and for 3 s after it: Pulse was the app in front for it, and what was in
+    /// front before (Rex, perhaps) needs a moment to come back.
+    static func breakHolds(onScreen: Bool, ended: Date, now: Date) -> Bool {
+        onScreen || now.timeIntervalSince(ended) < 3
+    }
+
     /// Whether the ring carries the bell with a stroke and the card says why: not for Rex in front, which is most of
-    /// the day, and not for a lock, when there's nothing to see.
-    var shown: Bool { self != .rexInFront && self != .locked }
+    /// the day, and not for a lock or a break, when the rail can't be seen.
+    var shown: Bool { self != .rexInFront && self != .locked && self != .onBreak }
 
     /// The card's last line while the rule holds. `time` writes the pause's end as a time of day.
     func line(_ time: (Date) -> String) -> String? {
@@ -159,7 +167,7 @@ enum AgentHold: Equatable {
         case let .paused(until): "Sounds and alerts wait until breaks resume at \(time(until))"
         case .call: "Sounds and alerts wait for your call to end"
         case .voiceCall: "Sounds and alerts wait for your voice call to end"
-        case .locked, .rexInFront: nil
+        case .locked, .onBreak, .rexInFront: nil
         }
     }
 
@@ -170,6 +178,7 @@ enum AgentHold: Equatable {
         case .call: "During your call"
         case .voiceCall: "During your voice call"
         case .locked: "While the screen was locked"
+        case .onBreak: "During your break"
         case .rexInFront: nil
         }
     }

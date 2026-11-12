@@ -26,7 +26,7 @@ enum AgentChecks {
         notifier()
         settingsAndRex()
         print("Agent checks passed: Rex's error state and kind, closed panes, waits kept across reports, the card's order and counts, "
-              + "the bubbles, the quiet rules, one alert for each wait, off by default, and the ring only with Rex")
+              + "the bubbles, the quiet rules and a break on screen, one alert for each wait, which Rex app is asked, off by default, and the ring only with Rex")
     }
 
     static func parsing() {
@@ -198,25 +198,35 @@ enum AgentChecks {
 
     static func quietRules() {
         let s = AgentSettings(), until = at(90)
-        func hold(_ s: AgentSettings = s, locked: Bool = false, voice: Bool = false, paused: Date? = nil, rex: Bool = false, mic: Bool = false) -> AgentHold? {
-            AgentHold.current(s, now: at(0), locked: locked, voiceCall: voice, pausedUntil: paused, rexInFront: rex, microphone: { mic })
+        func hold(_ s: AgentSettings = s, locked: Bool = false, onBreak: Bool = false, voice: Bool = false, paused: Date? = nil, rex: Bool = false,
+                  mic: Bool = false) -> AgentHold? {
+            AgentHold.current(s, now: at(0), locked: locked, onBreak: onBreak, voiceCall: voice, pausedUntil: paused, rexInFront: rex, microphone: { mic })
         }
         assert(hold() == nil)
-        assert(hold(locked: true, voice: true, paused: until, rex: true, mic: true) == .locked)
+        assert(hold(locked: true, onBreak: true, voice: true, paused: until, rex: true, mic: true) == .locked)
+        assert(hold(onBreak: true, voice: true, paused: until, rex: true, mic: true) == .onBreak)
         assert(hold(voice: true, paused: until, rex: true, mic: true) == .voiceCall)
         assert(hold(paused: until, rex: true, mic: true) == .paused(until: until))
         assert(hold(rex: true, mic: true) == .call && hold(rex: true) == .rexInFront)
         assert(hold(paused: at(-1)) == nil, "a pause that has run out holds nothing")
-        // each switch turns its own rule off; Rex in front has none
+        // each switch turns its own rule off; a break on screen and Rex in front have none
         var off = s; off.holdWhileLocked = false; off.holdDuringCalls = false; off.holdWhilePaused = false
         assert(hold(off, locked: true, voice: true, paused: until, mic: true) == nil && hold(off, rex: true) == .rexInFront)
+        assert(hold(off, locked: true, onBreak: true, rex: true) == .onBreak)
+        // a break makes Pulse the app in front, so Rex no longer is: the break holds in its place, and for 3 s after
+        // it, until the app that was in front is back
+        assert(hold(onBreak: true, rex: false) == .onBreak)
+        assert(AgentHold.breakHolds(onScreen: true, ended: .distantPast, now: at(0)))
+        assert(AgentHold.breakHolds(onScreen: false, ended: at(0), now: at(0.04)) && !AgentHold.breakHolds(onScreen: false, ended: at(0), now: at(0.06)))
+        assert(!AgentHold.breakHolds(onScreen: false, ended: .distantPast, now: at(0)))
         var calls = s; calls.holdDuringCalls = false
         assert(hold(calls, voice: true, mic: true) == nil && hold(calls, locked: true) == .locked)
         // the microphone is only read when no rule before it holds
         var reads = 0
-        _ = AgentHold.current(s, now: at(0), locked: true, voiceCall: false, pausedUntil: nil, rexInFront: false, microphone: { reads += 1; return true })
-        _ = AgentHold.current(s, now: at(0), locked: false, voiceCall: false, pausedUntil: until, rexInFront: false, microphone: { reads += 1; return true })
-        _ = AgentHold.current(calls, now: at(0), locked: false, voiceCall: false, pausedUntil: nil, rexInFront: false, microphone: { reads += 1; return true })
+        _ = AgentHold.current(s, now: at(0), locked: true, onBreak: false, voiceCall: false, pausedUntil: nil, rexInFront: false, microphone: { reads += 1; return true })
+        _ = AgentHold.current(s, now: at(0), locked: false, onBreak: false, voiceCall: false, pausedUntil: until, rexInFront: false, microphone: { reads += 1; return true })
+        _ = AgentHold.current(s, now: at(0), locked: false, onBreak: true, voiceCall: false, pausedUntil: nil, rexInFront: false, microphone: { reads += 1; return true })
+        _ = AgentHold.current(calls, now: at(0), locked: false, onBreak: false, voiceCall: false, pausedUntil: nil, rexInFront: false, microphone: { reads += 1; return true })
         assert(reads == 0)
 
         // what the card and the later alert say; the ring's bell shows for the three rules with a line
@@ -224,7 +234,8 @@ enum AgentChecks {
         assert(AgentHold.paused(until: until).line(time) == "Sounds and alerts wait until breaks resume at 3:30 PM")
         assert(AgentHold.call.line(time) == "Sounds and alerts wait for your call to end")
         assert(AgentHold.voiceCall.line(time) == "Sounds and alerts wait for your voice call to end")
-        assert(AgentHold.locked.line(time) == nil && AgentHold.rexInFront.line(time) == nil)
+        assert(AgentHold.locked.line(time) == nil && AgentHold.rexInFront.line(time) == nil && AgentHold.onBreak.line(time) == nil)
+        assert(!AgentHold.onBreak.shown && AgentHold.onBreak.after == "During your break")
         assert(AgentHold.paused(until: until).shown && AgentHold.call.shown && AgentHold.voiceCall.shown && !AgentHold.locked.shown && !AgentHold.rexInFront.shown)
         assert(AgentHold.locked.after == "While the screen was locked" && AgentHold.paused(until: until).after == "While breaks were paused")
         assert(AgentHold.rexInFront.after == nil)
@@ -271,6 +282,22 @@ enum AgentChecks {
         assert(n.step([a], now: at(6), settings: s, hold: .locked) == R())
         assert(n.step([a], now: at(7), settings: s, hold: .rexInFront) == R())
         assert(n.step([a], now: at(8), settings: s, hold: nil) == R(alert: true, after: .rexInFront))
+        // a break on screen: someone is past the limit and held by Rex in front; a break starts, which puts Pulse in
+        // front; nothing fires or counts as announced during it; one alert once it's over
+        var loudly = s; loudly.sound = "Glass"
+        for settings in [s, loudly] {
+            n = AgentNotifier()
+            assert(n.step([a], now: at(6), settings: settings, hold: .rexInFront) == R())
+            assert(n.step([a], now: at(7), settings: settings, hold: .onBreak) == R())
+            assert(n.step([a, b], now: at(9), settings: settings, hold: .onBreak) == R(), "nor for one who starts waiting during it")
+            assert(n.step([a, b], now: at(12), settings: settings, hold: nil) == R(alert: true, after: .onBreak))
+            assert(n.step([a, b], now: at(13), settings: settings, hold: nil) == R(), "once")
+        }
+        // back in Rex after the break: still held, and the alert comes on leaving Rex
+        n = AgentNotifier()
+        assert(n.step([a], now: at(6), settings: s, hold: .rexInFront) == R() && n.step([a], now: at(7), settings: s, hold: .onBreak) == R())
+        assert(n.step([a], now: at(12), settings: s, hold: .rexInFront) == R())
+        assert(n.step([a], now: at(20), settings: s, hold: nil) == R(alert: true, after: .rexInFront))
         // a wait that hasn't reached 5 minutes when the hold ends still waits its 5 minutes
         n = AgentNotifier()
         assert(n.step([a], now: at(2), settings: s, hold: .call) == R() && n.step([a], now: at(3), settings: s, hold: nil) == R())

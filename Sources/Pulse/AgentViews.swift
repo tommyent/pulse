@@ -297,7 +297,7 @@ struct AgentSettingsSection: View {
                     Text("Needs Rex, which Pulse didn't find on this Mac. [Get Rex…](https://www.superlogical.com/rex)")
                 }
             }
-            Text("While this is on, Pulse reads each pane's label and status line through the rex command all day. It never starts a Rex server and keeps nothing. A click on an agent shows its pane in Rex; nothing is answered from Pulse. Rex has its own tab marks, Dock badge, sounds and notifications: Pulse sends no notifications, and holds its own sound and alert while Rex is in front.")
+            Text("While this is on, Pulse reads each pane's label and status line through the rex command all day. It never starts a Rex server and saves nothing to disk. A click on an agent shows its pane in Rex; nothing is answered from Pulse. Rex has its own tab marks, Dock badge, sounds and notifications: Pulse sends no notifications, and holds its own sound and alert while Rex is in front.")
                 .font(.caption).foregroundStyle(PulsePalette.secondary)
         }
         Group {
@@ -325,7 +325,7 @@ struct AgentSettingsSection: View {
                         .accessibilityLabel("Alert after an agent has waited")
                 } label: {
                     Text("Alert after an agent has waited")
-                    Text("Pulse's own alert in the middle of the screen, once for each wait. It stays until you click Dismiss")
+                    Text("Pulse's own alert in the middle of the screen, once for each wait. It stays until you click Dismiss, or until nobody needs you any more")
                 }
             }
             Section("Hold sounds and alerts") {
@@ -341,7 +341,7 @@ struct AgentSettingsSection: View {
                 .accessibilityLabel("Hold agent sounds and alerts during calls")
                 Toggle("While the screen is locked", isOn: $settings.holdWhileLocked)
                     .accessibilityLabel("Hold agent sounds and alerts while the screen is locked")
-                Text("The rail keeps counting. When the hold ends, one alert lists the agents still waiting, not one alert for each.")
+                Text("They always wait during a break on screen and while Rex is in front, too. The rail keeps counting. When the hold ends, one alert lists the agents still waiting, not one alert for each.")
                     .font(.caption).foregroundStyle(PulsePalette.secondary)
             }
         }

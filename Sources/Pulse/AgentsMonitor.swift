@@ -99,8 +99,9 @@ final class AgentsMonitor: ObservableObject {
 
     private func currentHold(_ now: Date) -> AgentHold? {
         let breaks = BreakController.shared
-        return AgentHold.current(settings, now: now, locked: breaks.away, voiceCall: CodexPetSession.shared.voiceState != .off,
-                                 pausedUntil: breaks.pausedUntil,
+        return AgentHold.current(settings, now: now, locked: breaks.away,
+                                 onBreak: AgentHold.breakHolds(onScreen: breaks.onScreen, ended: breaks.breakEnded, now: now),
+                                 voiceCall: CodexPetSession.shared.voiceState != .off, pausedUntil: breaks.pausedUntil,
                                  rexInFront: NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Self.rexApp,
                                  microphone: BreakController.microphoneInUse)
     }
