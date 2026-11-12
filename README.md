@@ -41,7 +41,7 @@ Click a picture to see it full size.
 2. Drag Pulse to Applications and open it.
 3. Sign in to the provider CLIs you use, or choose **Connect** for Claude and Grok. [Setup details](docs/getting-started.md).
 
-Tested on macOS 26.5.1 on Apple silicon. Releases are signed, notarized and update in the app.
+Tested on macOS 26.5.1 and 27.3 on Apple silicon. Releases are signed, notarized and update in the app.
 
 ## Docs
 

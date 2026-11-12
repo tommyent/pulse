@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- **Tested:** macOS 26.5.1 on Apple silicon. Intel is untested.
+- **Tested:** macOS 26.5.1 and 27.3 on Apple silicon. Intel is untested.
 - **Build:** Xcode 26 or later (the Command Line Tools alone lack the SwiftUI macro plugin) and Swift 6.2 or later. Sparkle, for in-app updates, is the only third-party package; SwiftPM fetches it.
 - **Codex:** a signed-in Codex CLI (`codex login`). Voice needs a CLI package containing `codex-voice-host` (tested with 0.160.0), microphone permission, and an account that supports the CLI's experimental realtime protocol.
 - **Claude and Grok:** sign in through their CLIs, or use **Connect**, which shows on the account's card, in the menu bar popover and in **Settings → Accounts** while the CLI isn't signed in. Grok CLI support reads Grok Build's `~/.grok/auth.json`.
