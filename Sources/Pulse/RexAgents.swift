@@ -99,15 +99,21 @@ final class RexAgents: ObservableObject {
             agents = found.keys.sorted().flatMap { found[$0] ?? [] }.filter { seen.insert($0.id).inserted }
         }
     }
+    private var watching: Set<String> = []   // the servers followed: their stream is up, or waiting to start again
     private var streams: [String: Process] = [:]
-    private var places: [String: Place] = [:]   // by block id
+    private var places: [String: [String: Place]] = [:]   // each server's panes by block id, as its latest snapshot had them
     private var pending: [String: [(String, BreakAgent?)]] = [:] // events that arrive while a server's snapshot runs, applied after it
     private var reading: [String: Int] = [:]   // each server's latest snapshot: an older one still running is dropped when it ends
     private var generation = 0
     private var users: Set<String> = []   // who wants the agents read
     private var rex: URL?
     private var asked: Set<String> = []   // panes the snapshot didn't have, each read for once
+    private var readingSoon: Set<String> = []   // servers with that read already on its way
     private var simulation: NSKeyValueObservation?
+    private let find: () -> URL?
+
+    /// `find`: where the `rex` command is. Pulse looks in the usual places; a test can hand in its own.
+    init(find: @escaping () -> URL? = { RexAgents.executable() }) { self.find = find }
 
     /// Reads while anyone wants it, and stops with the last one.
     func want(_ on: Bool, for user: String) {
@@ -130,38 +136,52 @@ final class RexAgents: ObservableObject {
             agents = Self.simulated(simulated)
             return
         }
-        guard let rex = Self.executable() else { return }
+        guard let rex = find() else { return }
         self.rex = rex
         generation += 1
         let mine = generation
         watch(rex, "", mine)
         watchHosts(rex, mine)
-        // shortcut: a full read every 10 minutes picks up a renamed pane and anything the stream missed; follow Rex's
-        // layout events instead if that ever proves too slow
+        // shortcut: a full read every 10 minutes picks up a renamed pane and anything the stream missed, and the list
+        // of hosts is read again with it; follow Rex's layout events instead if that ever proves too slow
         Task { @MainActor in
             while generation == mine {
                 try? await Task.sleep(for: .seconds(600))
                 guard generation == mine else { return }
-                for server in streams.keys { read(rex, server, mine, again: false) }
+                for server in watching { read(rex, server, mine, again: false) }
+                watchHosts(rex, mine)
             }
         }
     }
 
-    /// The hosts Rex connects to, read again whenever this Mac's stream starts over: one added since is watched too.
+    /// The hosts Rex connects to. Read at the start, when Rex says its list changed, whenever this Mac's stream
+    /// starts over and with every 10-minute read: a host added since is watched too, and one removed is let go. A
+    /// listed host that can't be reached yet is watched all the same; its stream keeps trying.
     private func watchHosts(_ rex: URL, _ mine: Int) {
         Task.detached(priority: .utility) {
-            let hosts = Self.run(rex, ["hosts", "list", "--json"]).map(Self.hosts(fromList:)) ?? []
+            let listed = Self.run(rex, ["hosts", "list", "--json"]).map(Self.hosts(fromList:))
             await MainActor.run {
-                guard self.generation == mine else { return }
-                for host in hosts where self.streams[host] == nil { self.watch(rex, host, mine) }
+                guard self.generation == mine, let listed else { return }   // a list that couldn't be read changes nothing
+                for host in listed where !self.watching.contains(host) { self.watch(rex, host, mine) }
+                for gone in self.watching where !gone.isEmpty && !listed.contains(gone) { self.unwatch(gone) }
             }
         }
     }
 
     /// The stream starts first, so a change during the snapshot isn't lost.
     private func watch(_ rex: URL, _ server: String, _ mine: Int) {
+        watching.insert(server)
         follow(rex, server)
         read(rex, server, mine, again: true)
+    }
+
+    /// A host that is no longer in Rex's list: its stream ends and its agents go.
+    private func unwatch(_ server: String) {
+        watching.remove(server)
+        streams.removeValue(forKey: server)?.terminate()
+        pending[server] = nil
+        places[server] = nil
+        found[server] = nil
     }
 
     /// A snapshot, with the events that arrive while it runs applied after it. The stream may not have subscribed yet
@@ -173,9 +193,9 @@ final class RexAgents: ObservableObject {
         Task.detached(priority: .utility) {
             let snapshot = Self.snapshot(rex, server)
             await MainActor.run {
-                guard self.generation == mine, self.reading[server] == read else { return }
+                guard self.generation == mine, self.reading[server] == read, self.watching.contains(server) else { return }
                 if let (agents, places) = snapshot {
-                    self.places.merge(places) { _, new in new }
+                    self.places[server] = places   // replaced, not added to: closed panes go, renamed ones are renamed
                     let before = self.found[server] ?? []
                     self.found[server] = agents.map { agent in agent.keepingWait(of: before.first { $0.id == agent.id }) }
                 } else if self.streams[server]?.isRunning != true {
@@ -194,18 +214,21 @@ final class RexAgents: ObservableObject {
 
     func stop() {
         generation += 1
-        streams.values.forEach { $0.terminate() }
+        streams.values.forEach { $0.terminate() }   // Foundation collects the ended process: none is left as a zombie
         streams = [:]
+        watching = []
         pending = [:]
         found = [:]
+        places = [:]
         asked = []
+        readingSoon = []
     }
 
     // MARK: the event stream
 
-    /// A stream that ends on its own while it's wanted starts again: after `retry` seconds, twice as long each time up
-    /// to a minute, and from 2 s again once one has run for a minute. With Rex not running that's one short `rex` call
-    /// a minute.
+    /// A stream that ends on its own while it's wanted, or can't be started, starts again: after `retry` seconds,
+    /// twice as long each time up to a minute, and from 2 s again once one has run for a minute. With Rex not running
+    /// that's one short `rex` call a minute.
     private func follow(_ rex: URL, _ server: String, retry: Double = 2) {
         let p = Process()
         p.executableURL = rex
@@ -213,32 +236,44 @@ final class RexAgents: ObservableObject {
         let out = Pipe()
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice
-        guard (try? p.run()) != nil else { return }
-        streams[server] = p
+        let started = (try? p.run()) != nil
+        if started { streams[server] = p }
         let mine = generation, began = Date()
         // ends when stop() terminates the process and its pipe closes
         Task.detached(priority: .utility) { [self] in
-            do {
-                for try await line in out.fileHandleForReading.bytes.lines {
-                    // the stream carries every server event: only the few about a program's status or a closed pane are parsed
-                    guard line.contains("program_status") || line.contains("block_closed"),
-                          let update = Self.update(fromEvent: Data(line.utf8)) else { continue }
-                    await MainActor.run {
-                        guard generation == mine else { return }
-                        apply(server, update.0, update.1)
+            if started {
+                do {
+                    for try await line in out.fileHandleForReading.bytes.lines {
+                        // the stream carries every server event: only the few Pulse acts on are parsed
+                        if server.isEmpty, line.contains("\"hosts_changed\"") {
+                            await MainActor.run { if generation == mine { watchHosts(rex, mine) } }
+                            continue
+                        }
+                        guard line.contains("program_status") || line.contains("block_closed"),
+                              let update = Self.update(fromEvent: Data(line.utf8)) else { continue }
+                        await MainActor.run {
+                            guard generation == mine else { return }
+                            apply(server, update.0, update.1)
+                        }
                     }
-                }
-            } catch {}   // the pipe closed: the stream is over
+                } catch {}   // the pipe closed: the stream is over
+            }
             // it ended on its own while it's still wanted: start it again and read again, so nothing freezes
-            let lived = Date().timeIntervalSince(began)
+            let lived = started ? Date().timeIntervalSince(began) : 0
             try? await Task.sleep(for: .seconds(retry))
             await MainActor.run {
-                guard generation == mine else { return }
-                follow(rex, server, retry: lived > 60 ? 2 : min(retry * 2, 60))
+                guard generation == mine, watching.contains(server) else { return }
+                follow(rex, server, retry: Self.nextRetry(after: retry, lived: lived))
                 read(rex, server, mine, again: true)   // a second read once the new stream has surely subscribed
                 if server.isEmpty { watchHosts(rex, mine) }
             }
         }
+    }
+
+    /// How long to wait before the start after next: 2 s once a stream has run for a minute, else twice as long as
+    /// last time, up to a minute.
+    nonisolated static func nextRetry(after retry: Double, lived: TimeInterval) -> Double {
+        lived > 60 ? 2 : min(retry * 2, 60)
     }
 
     private func apply(_ server: String, _ block: String, _ agent: BreakAgent?) {
@@ -247,7 +282,7 @@ final class RexAgents: ObservableObject {
         let old = list.first { $0.id == block }
         list.removeAll { $0.id == block }
         if var agent {
-            let place = places[block]
+            let place = places[server]?[block]
             agent.label = place?.label ?? ""
             agent.host = server
             if agent.session.isEmpty { agent.session = place?.session ?? "" }
@@ -258,13 +293,16 @@ final class RexAgents: ObservableObject {
         found[server] = list
     }
 
-    /// A pane opened since the snapshot has no label yet: one more read 2 s on, once for each such pane.
+    /// A pane opened since the snapshot has no label yet: one more read 2 s on. Panes that appear together share
+    /// that one read, and each pane asks for it once.
     private func readSoon(_ server: String, for block: String) {
-        guard let rex, asked.insert(block).inserted else { return }
+        guard let rex, asked.insert(block).inserted, readingSoon.insert(server).inserted else { return }
         let mine = generation
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
-            if generation == mine { read(rex, server, mine, again: false) }
+            guard generation == mine else { return }
+            readingSoon.remove(server)
+            read(rex, server, mine, again: false)
         }
     }
 

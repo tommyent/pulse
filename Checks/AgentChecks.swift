@@ -126,6 +126,9 @@ enum AgentChecks {
         let noApp = json(#"{"clients":[{"client_id":"client:cli","info":{"kind":"cli"},"principal":{"transport":"unix"}}]}"#)
         assert(RexAgents.localApp(fromList: noApp) == nil && RexAgents.remoteApp(fromList: noApp, label: "Desk Mac") == nil)
         assert(RexAgents.localApp(fromList: json("not json")) == nil && RexAgents.remoteApp(fromList: json("not json"), label: "x") == nil)
+        // a stream that keeps ending is started again more and more slowly, up to once a minute
+        assert(RexAgents.nextRetry(after: 2, lived: 0) == 4 && RexAgents.nextRetry(after: 32, lived: 5) == 60 && RexAgents.nextRetry(after: 60, lived: 59) == 60)
+        assert(RexAgents.nextRetry(after: 60, lived: 61) == 2, "one that ran for a minute starts over quickly")
         var placed = waiting("block:1", since: 0); placed.session = "session:s1"; placed.window = "window:w1"
         assert(RexAgents.selectArguments(placed) == ["do", "session.select", "session_id=session:s1", "window_id=window:w1"])
         placed.window = ""
