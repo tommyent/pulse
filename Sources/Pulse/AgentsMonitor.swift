@@ -32,6 +32,8 @@ final class AgentsMonitor: ObservableObject {
     private var alertAfter: AgentHold?
     private var sound: NSSound?             // kept until it has played
     private var cancellables: Set<AnyCancellable> = []
+    private let clicks = LatestRequest()
+    private var showing: Task<Void, Never>?   // the latest row click's requests to Rex
 
     func attach(_ state: AppState) {
         self.state = state
@@ -158,14 +160,18 @@ final class AgentsMonitor: ObservableObject {
     func show(_ agent: BreakAgent) {
         state?.collapseOverlay()
         closeAlert()
-        let rex = RexAgents.executable()
-        Task { @MainActor in
+        let rex = RexAgents.executable(), click = clicks.next(), earlier = showing
+        // Only the latest click counts. An earlier one sends nothing more, and this one waits for whatever request
+        // that one had under way, so the pane Rex ends on is the one clicked last.
+        showing = Task { @MainActor [clicks] in
+            await earlier?.value
+            guard clicks.isLatest(click) else { return }
             // in front first, and asked only then: Rex's guide says its app may not act on a request in the background
             await Self.bringRexForward()
-            guard let rex else { return }
-            Task.detached(priority: .userInitiated) {
-                RexAgents.show(agent, rex: rex, thisMac: Host.current().localizedName ?? "")
-            }
+            guard let rex, clicks.isLatest(click) else { return }
+            await Task.detached(priority: .userInitiated) {
+                RexAgents.show(agent, rex: rex, thisMac: Host.current().localizedName ?? "") { clicks.isLatest(click) }
+            }.value
         }
     }
 

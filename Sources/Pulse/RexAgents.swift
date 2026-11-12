@@ -81,6 +81,31 @@ extension UserDefaults {
     @objc dynamic var simulatedAgents: String? { string(forKey: "simulatedAgents") }
 }
 
+/// The servers the reader follows, each with the number of its current start. A host that was let go and taken up
+/// again is a new start, so a retry still pending from the old one must not start a second stream beside the new one.
+struct WatchedServers {
+    private var starts: [String: Int] = [:]
+    private var count = 0
+    var servers: [String] { Array(starts.keys) }
+    func contains(_ server: String) -> Bool { starts[server] != nil }
+    func isCurrent(_ server: String, start: Int) -> Bool { starts[server] == start }
+    mutating func watch(_ server: String) -> Int {
+        count += 1
+        starts[server] = count
+        return count
+    }
+    mutating func unwatch(_ server: String) { starts[server] = nil }
+    mutating func removeAll() { starts = [:] }   // the count goes on: an old start never matches a later one
+}
+
+/// Numbers requests so that only the latest counts: a newer click on a row makes an older one stale.
+final class LatestRequest: @unchecked Sendable {
+    private let lock = NSLock()
+    private var latest = 0
+    func next() -> Int { lock.withLock { latest += 1; return latest } }
+    func isLatest(_ request: Int) -> Bool { lock.withLock { latest == request } }
+}
+
 /// Reads the agents Rex reports (https://www.superlogical.com/rex) while someone wants them: the rail's agents ring all
 /// day, a break while it's on screen. One snapshot of every pane and Rex's event stream from just before it, until nobody
 /// does. Every call passes `--autostart=false`, so Pulse never starts a Rex server; when Rex is missing or not running,
@@ -99,7 +124,7 @@ final class RexAgents: ObservableObject {
             agents = found.keys.sorted().flatMap { found[$0] ?? [] }.filter { seen.insert($0.id).inserted }
         }
     }
-    private var watching: Set<String> = []   // the servers followed: their stream is up, or waiting to start again
+    private var watching = WatchedServers()   // the servers followed: their stream is up, or waiting to start again
     private var streams: [String: Process] = [:]
     private var places: [String: [String: Place]] = [:]   // each server's panes by block id, as its latest snapshot had them
     private var pending: [String: [(String, BreakAgent?)]] = [:] // events that arrive while a server's snapshot runs, applied after it
@@ -148,7 +173,7 @@ final class RexAgents: ObservableObject {
             while generation == mine {
                 try? await Task.sleep(for: .seconds(600))
                 guard generation == mine else { return }
-                for server in watching { read(rex, server, mine, again: false) }
+                for server in watching.servers { read(rex, server, mine, again: false) }
                 watchHosts(rex, mine)
             }
         }
@@ -163,21 +188,20 @@ final class RexAgents: ObservableObject {
             await MainActor.run {
                 guard self.generation == mine, let listed else { return }   // a list that couldn't be read changes nothing
                 for host in listed where !self.watching.contains(host) { self.watch(rex, host, mine) }
-                for gone in self.watching where !gone.isEmpty && !listed.contains(gone) { self.unwatch(gone) }
+                for gone in self.watching.servers where !gone.isEmpty && !listed.contains(gone) { self.unwatch(gone) }
             }
         }
     }
 
     /// The stream starts first, so a change during the snapshot isn't lost.
     private func watch(_ rex: URL, _ server: String, _ mine: Int) {
-        watching.insert(server)
-        follow(rex, server)
+        follow(rex, server, start: watching.watch(server))
         read(rex, server, mine, again: true)
     }
 
     /// A host that is no longer in Rex's list: its stream ends and its agents go.
     private func unwatch(_ server: String) {
-        watching.remove(server)
+        watching.unwatch(server)
         streams.removeValue(forKey: server)?.terminate()
         pending[server] = nil
         places[server] = nil
@@ -216,7 +240,7 @@ final class RexAgents: ObservableObject {
         generation += 1
         streams.values.forEach { $0.terminate() }   // Foundation collects the ended process: none is left as a zombie
         streams = [:]
-        watching = []
+        watching.removeAll()
         pending = [:]
         found = [:]
         places = [:]
@@ -229,7 +253,7 @@ final class RexAgents: ObservableObject {
     /// A stream that ends on its own while it's wanted, or can't be started, starts again: after `retry` seconds,
     /// twice as long each time up to a minute, and from 2 s again once one has run for a minute. With Rex not running
     /// that's one short `rex` call a minute.
-    private func follow(_ rex: URL, _ server: String, retry: Double = 2) {
+    private func follow(_ rex: URL, _ server: String, start: Int, retry: Double = 2) {
         let p = Process()
         p.executableURL = rex
         p.arguments = ["--autostart=false"] + Self.target(server) + ["events", "--all", "--json"]
@@ -237,7 +261,11 @@ final class RexAgents: ObservableObject {
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice
         let started = (try? p.run()) != nil
-        if started { streams[server] = p }
+        if started {
+            // never two streams for one server: a Process that is only dropped leaves its child running
+            if let old = streams[server], old.isRunning { old.terminate() }
+            streams[server] = p
+        }
         let mine = generation, began = Date()
         // ends when stop() terminates the process and its pipe closes
         Task.detached(priority: .utility) { [self] in
@@ -262,8 +290,9 @@ final class RexAgents: ObservableObject {
             let lived = started ? Date().timeIntervalSince(began) : 0
             try? await Task.sleep(for: .seconds(retry))
             await MainActor.run {
-                guard generation == mine, watching.contains(server) else { return }
-                follow(rex, server, retry: Self.nextRetry(after: retry, lived: lived))
+                // not if the host was let go meanwhile, even if it's being followed again: that start has its own stream
+                guard generation == mine, watching.isCurrent(server, start: start) else { return }
+                follow(rex, server, start: start, retry: Self.nextRetry(after: retry, lived: lived))
                 read(rex, server, mine, again: true)   // a second read once the new stream has surely subscribed
                 if server.isEmpty { watchHosts(rex, mine) }
             }
@@ -354,15 +383,17 @@ final class RexAgents: ObservableObject {
     /// Brings an agent's pane forward as far as the `rex` command can: the pane gets the focus in its session, and the
     /// Rex app on this Mac is asked to go to that session and tab. The app does that only with its Remote Control
     /// setting on. The caller then brings Rex to the front.
-    nonisolated static func show(_ agent: BreakAgent, rex: URL, thisMac: String) {
-        guard !agent.session.isEmpty else { return }
+    /// `current` is asked before each request: once it says no (a newer click), nothing more is sent.
+    nonisolated static func show(_ agent: BreakAgent, rex: URL, thisMac: String, current: () -> Bool = { true }) {
+        guard !agent.session.isEmpty, current() else { return }
         _ = run(rex, ["block", "focus", "-s", agent.session, agent.id], on: agent.host)
+        guard current() else { return }
         let here = run(rex, ["client", "ls", "--json"]).flatMap(localApp(fromList:))
         // a pane on another host is shown by this Mac's app too: it's asked through that host's server, where it is
         // one of the network clients
         let client = agent.host.isEmpty ? here?.id
             : run(rex, ["client", "ls", "--json"], on: agent.host).flatMap { remoteApp(fromList: $0, label: here?.label ?? thisMac) }
-        guard let client else { return }
+        guard let client, current() else { return }
         _ = run(rex, ["-C", client] + selectArguments(agent), on: agent.host)
     }
 

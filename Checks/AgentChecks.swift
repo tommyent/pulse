@@ -23,10 +23,11 @@ enum AgentChecks {
         events()
         board()
         quietRules()
+        reader()
         notifier()
         settingsAndRex()
         print("Agent checks passed: Rex's error state and kind, closed panes, waits kept across reports, the card's order and counts, "
-              + "the bubbles, the quiet rules and a break on screen, one alert for each wait, which Rex app is asked, off by default, and the ring only with Rex")
+              + "the bubbles, the quiet rules and a break on screen, one alert for each wait, which Rex app is asked and what a row click sends, off by default, and the ring only with Rex")
     }
 
     static func parsing() {
@@ -194,6 +195,69 @@ enum AgentChecks {
                 }
             }
         }
+    }
+
+    static func reader() {
+        // a host leaves Rex's list while its dead stream waits to start again, and is back before the wait is over:
+        // the old start's retry no longer counts, so only the new start has a stream
+        var watching = WatchedServers()
+        let local = watching.watch(""), first = watching.watch("studio")
+        assert(watching.isCurrent("studio", start: first) && watching.contains("studio") && Set(watching.servers) == ["", "studio"])
+        watching.unwatch("studio")
+        assert(!watching.isCurrent("studio", start: first) && !watching.contains("studio"))
+        let second = watching.watch("studio")
+        assert(second != first && !watching.isCurrent("studio", start: first) && watching.isCurrent("studio", start: second))
+        assert(watching.isCurrent("", start: local), "the other servers' starts stay as they were")
+        watching.removeAll()
+        assert(watching.servers.isEmpty && watching.watch("studio") != second, "a start from before a stop never matches a later one")
+
+        // two clicks: only the latest counts
+        let clicks = LatestRequest()
+        let a = clicks.next()
+        assert(clicks.isLatest(a))
+        let b = clicks.next()
+        assert(!clicks.isLatest(a) && clicks.isLatest(b))
+
+        // what a row click sends to Rex, through a stand-in for the rex command that notes each call
+        let fm = FileManager.default, dir = fm.temporaryDirectory.appending(path: "pulse-show-\(UUID().uuidString)")
+        try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let rex = dir.appending(path: "rex"), log = dir.appending(path: "calls.log")
+        try! Data(#"""
+        #!/bin/sh
+        here="$(dirname "$0")"
+        echo "$*" >> "$here/calls.log"
+        case "$*" in
+            *"-S studio client ls"*) cat "$here/there.json" ;;
+            *"client ls"*) cat "$here/here.json" ;;
+        esac
+        """#.utf8).write(to: rex)
+        try! fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rex.path)
+        try! Data(#"{"clients":[{"client_id":"client:studio-app","info":{"kind":"app","label":"Studio Mac"},"principal":{"transport":"tailscale"}},{"client_id":"client:desk-app","info":{"kind":"app","label":"Desk Mac"},"principal":{"transport":"unix"}}]}"#.utf8).write(to: dir.appending(path: "here.json"))
+        try! Data(#"{"clients":[{"client_id":"client:studio-own","info":{"kind":"app","label":"Studio Mac"},"principal":{"transport":"unix"}},{"client_id":"client:desk-visiting","info":{"kind":"app","label":"Desk Mac"},"principal":{"transport":"tailscale"}}]}"#.utf8).write(to: dir.appending(path: "there.json"))
+        func calls() -> [String] {
+            defer { try? fm.removeItem(at: log) }
+            return ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(separator: "\n")
+                .map { $0.replacingOccurrences(of: "--autostart=false --timeout 3s ", with: "") }
+        }
+        var near = waiting("block:b1", since: 0); near.session = "session:s1"; near.window = "window:w1"
+        var far = waiting("block:b2", since: 0); far.session = "session:s2"; far.host = "studio"
+        RexAgents.show(near, rex: rex, thisMac: "Unknown")
+        assert(calls() == ["block focus -s session:s1 block:b1", "client ls --json",
+                           "-C client:desk-app do session.select session_id=session:s1 window_id=window:w1"])
+        // a pane on the other Mac: focused there, and this Mac's app is the one asked, through that host's server
+        RexAgents.show(far, rex: rex, thisMac: "Unknown")
+        assert(calls() == ["-S studio block focus -s session:s2 block:b2", "client ls --json", "-S studio client ls --json",
+                           "-S studio -C client:desk-visiting do session.select session_id=session:s2"])
+        // a click that a newer one has overtaken sends nothing more: none at all, or none after the request under way
+        RexAgents.show(near, rex: rex, thisMac: "Unknown") { false }
+        assert(calls().isEmpty)
+        var asked = 0
+        RexAgents.show(near, rex: rex, thisMac: "Unknown") { asked += 1; return asked == 1 }
+        assert(calls() == ["block focus -s session:s1 block:b1"])
+        var unplaced = near; unplaced.session = ""
+        RexAgents.show(unplaced, rex: rex, thisMac: "Unknown")
+        assert(calls().isEmpty, "a stand-in agent has no pane to show")
     }
 
     static func quietRules() {
