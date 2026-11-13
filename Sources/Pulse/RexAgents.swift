@@ -107,6 +107,9 @@ final class LatestRequest: @unchecked Sendable {
     func isLatest(_ request: Int) -> Bool { lock.withLock { latest == request } }
 }
 
+/// The end of a pipe's last read that isn't a whole line yet.
+private final class Unread: @unchecked Sendable { var data = Data() }
+
 /// Reads the agents Rex reports (https://www.superlogical.com/rex) while someone wants them: the rail's agents ring all
 /// day, a break while it's on screen. One snapshot of every pane and Rex's event stream from just before it, until nobody
 /// does. Every call passes `--autostart=false`, so Pulse never starts a Rex server; when Rex is missing or not running,
@@ -271,21 +274,19 @@ final class RexAgents: ObservableObject {
         // ends when stop() terminates the process and its pipe closes
         Task.detached(priority: .utility) { [self] in
             if started {
-                do {
-                    for try await line in out.fileHandleForReading.bytes.lines {
-                        // the stream carries every server event: only the few Pulse acts on are parsed
-                        if server.isEmpty, line.contains("\"hosts_changed\"") {
-                            await MainActor.run { if generation == mine { watchHosts(rex, mine) } }
-                            continue
-                        }
-                        guard line.contains("program_status") || line.contains("block_closed"),
-                              let update = Self.update(fromEvent: Data(line.utf8)) else { continue }
-                        await MainActor.run {
-                            guard generation == mine else { return }
-                            apply(server, update.0, update.1)
-                        }
+                for await line in Self.lines(of: out.fileHandleForReading) {
+                    // the stream carries every server event: only the few Pulse acts on are parsed
+                    if server.isEmpty, line.contains("\"hosts_changed\"") {
+                        await MainActor.run { if generation == mine { watchHosts(rex, mine) } }
+                        continue
                     }
-                } catch {}   // the pipe closed: the stream is over
+                    guard line.contains("program_status") || line.contains("block_closed"),
+                          let update = Self.update(fromEvent: Data(line.utf8)) else { continue }
+                    await MainActor.run {
+                        guard generation == mine else { return }
+                        apply(server, update.0, update.1)
+                    }
+                }   // the pipe closed: the stream is over
             }
             // it ended on its own while it's still wanted: start it again and read again, so nothing freezes
             let lived = started ? Date().timeIntervalSince(began) : 0
@@ -296,6 +297,27 @@ final class RexAgents: ObservableObject {
                 follow(rex, server, start: start, retry: Self.nextRetry(after: retry, lived: lived))
                 read(rex, server, mine, again: true)   // a second read once the new stream has surely subscribed
                 if server.isEmpty { watchHosts(rex, mine) }
+            }
+        }
+    }
+
+    /// A pipe's lines as they arrive, until it closes. Read on the handle's own queue, never through `FileHandle.bytes`:
+    /// Foundation reads every `bytes` sequence on one serial queue with a blocking read, so a server with nothing to
+    /// say held up every other server's events until it spoke, and the ring missed agents at work.
+    nonisolated static func lines(of pipe: FileHandle) -> AsyncStream<String> {
+        AsyncStream { continuation in
+            let unread = Unread()
+            pipe.readabilityHandler = { handle in   // one call at a time for a handle
+                let data = handle.availableData
+                guard !data.isEmpty else {   // the pipe closed
+                    handle.readabilityHandler = nil
+                    return continuation.finish()
+                }
+                unread.data.append(data)
+                while let end = unread.data.firstIndex(of: 0x0A) {
+                    continuation.yield(String(decoding: unread.data[..<end], as: UTF8.self))
+                    unread.data = Data(unread.data[(end + 1)...])
+                }
             }
         }
     }

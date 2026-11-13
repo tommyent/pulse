@@ -236,6 +236,25 @@ enum AgentChecks {
         watching.removeAll()
         assert(watching.servers.isEmpty && watching.watch("studio") != second, "a start from before a stop never matches a later one")
 
+        // a server with nothing to say doesn't hold up another server's events: two pipes, the first never written to.
+        // (Read through `FileHandle.bytes`, the second one's lines never came: the ring missed an agent at work.)
+        final class Heard: @unchecked Sendable { var lines: [String] = [] }
+        let quiet = Pipe(), busy = Pipe(), heard = Heard(), ended = DispatchSemaphore(value: 0)
+        Task.detached { for await _ in RexAgents.lines(of: quiet.fileHandleForReading) {} }
+        Thread.sleep(forTimeInterval: 0.2)   // the quiet one is waiting to read first
+        Task.detached {
+            for await line in RexAgents.lines(of: busy.fileHandleForReading) { heard.lines.append(line) }
+            ended.signal()
+        }
+        // lines that arrive together, and one that arrives in two parts
+        for part in ["one\ntwo\nthr", "ee\n", "four\n"] {
+            Thread.sleep(forTimeInterval: 0.2)
+            busy.fileHandleForWriting.write(Data(part.utf8))
+        }
+        try! busy.fileHandleForWriting.close()   // the stream ends with its pipe
+        assert(ended.wait(timeout: .now() + 5) == .success, "a quiet stream held up another stream's lines")
+        assert(heard.lines == ["one", "two", "three", "four"], "\(heard.lines)")
+
         // two clicks: only the latest counts
         let clicks = LatestRequest()
         let a = clicks.next()
