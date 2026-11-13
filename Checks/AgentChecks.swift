@@ -24,6 +24,7 @@ enum AgentChecks {
         board()
         quietRules()
         reader()
+        removedHost()
         context()
         notifier()
         settingsAndRex()
@@ -253,11 +254,14 @@ enum AgentChecks {
         // a server with nothing to say doesn't hold up another server's events: two pipes, the first never written to.
         // (Read through `FileHandle.bytes`, the second one's lines never came: the ring missed an agent at work.)
         final class Heard: @unchecked Sendable { var lines: [String] = [] }
-        let quiet = Pipe(), busy = Pipe(), heard = Heard(), ended = DispatchSemaphore(value: 0)
+        let quiet = Pipe(), busy = Pipe(), heard = Heard(), arrived = DispatchSemaphore(value: 0), ended = DispatchSemaphore(value: 0)
         Task.detached { for await _ in RexAgents.lines(of: quiet.fileHandleForReading) {} }
         Thread.sleep(forTimeInterval: 0.2)   // the quiet one is waiting to read first
         Task.detached {
-            for await line in RexAgents.lines(of: busy.fileHandleForReading) { heard.lines.append(line) }
+            for await line in RexAgents.lines(of: busy.fileHandleForReading) {
+                heard.lines.append(line)
+                if line == "four" { arrived.signal() }
+            }
             ended.signal()
         }
         // lines that arrive together, and one that arrives in two parts
@@ -265,6 +269,7 @@ enum AgentChecks {
             Thread.sleep(forTimeInterval: 0.2)
             busy.fileHandleForWriting.write(Data(part.utf8))
         }
+        assert(arrived.wait(timeout: .now() + 5) == .success, "lines come as they are written, not when the pipe closes")
         try! busy.fileHandleForWriting.close()   // the stream ends with its pipe
         assert(ended.wait(timeout: .now() + 5) == .success, "a quiet stream held up another stream's lines")
         assert(heard.lines == ["one", "two", "three", "four"], "\(heard.lines)")
@@ -316,6 +321,62 @@ enum AgentChecks {
         var unplaced = near; unplaced.session = ""
         RexAgents.show(unplaced, rex: rex, thisMac: "Unknown")
         assert(calls().isEmpty, "a stand-in agent has no pane to show")
+    }
+
+    /// The reader itself, against a stand-in for the rex command: a host is taken out of Rex's list while its stream
+    /// still has a line on the way. That line must not put the host's agent back on the rail.
+    static func removedHost() {
+        let fm = FileManager.default, dir = fm.temporaryDirectory.appending(path: "pulse-hosts-\(UUID().uuidString)")
+        try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        func write(_ text: String, _ name: String) { try! Data(text.utf8).write(to: dir.appending(path: name)) }
+        func status(_ block: String) -> String {
+            #"{"type":"session_event","payload":{"session_id":"session:s9","event":{"type":"block_event","payload":{"block_id":""# + block
+                + #"","name":"program_status_changed","payload":{"id":"","record":{"state":"working","app":"codex"}}}}}}"# + "\n"
+        }
+        // the host's stream says one line at once and, when Pulse ends it, one more: a line left in the pipe. This
+        // Mac's stream says the list of hosts changed once the file `changed` is there.
+        write(#"""
+        #!/bin/sh
+        here="$(dirname "$0")"
+        case "$*" in
+            *"-S studio events"*)
+                trap 'kill $!; cat "$here/last-line.json"; echo "studio ended" >> "$here/calls.log"; exit 0' TERM
+                cat "$here/first-line.json"
+                sleep 600 & wait ;;
+            *"events"*)
+                trap 'kill $!; exit 0' TERM
+                while [ ! -e "$here/changed" ]; do sleep 0.1; done
+                echo '{"type":"hosts_changed"}'
+                sleep 600 & wait ;;
+            *"hosts list"*) cat "$here/hosts.json" ;;
+            *"session.list"*) echo '{"sessions":[]}' ;;
+        esac
+        """#, "rex")
+        try! fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.appending(path: "rex").path)
+        write(#"{"hosts":[{"host":{"label":"studio"}}]}"#, "hosts.json")
+        write(status("block:early"), "first-line.json")
+        write(status("block:late"), "last-line.json")
+        MainActor.assumeIsolated {
+            let rex = RexAgents(find: { dir.appending(path: "rex") })
+            // lets the reader's work on the main thread run, until `done` or for `seconds`
+            func wait(_ seconds: Double, until done: () -> Bool = { false }) -> Bool {
+                let end = Date().addingTimeInterval(seconds)
+                while Date() < end, !done() { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+                return done()
+            }
+            rex.want(true, for: "check")
+            let followed = wait(10) { rex.agents.map(\.id) == ["block:early"] }
+            assert(followed, "a followed host's line is applied: \(rex.agents.map(\.id))")
+            write(#"{"hosts":[]}"#, "hosts.json")
+            write("", "changed")
+            let ended = wait(10) { ((try? String(contentsOf: dir.appending(path: "calls.log"), encoding: .utf8)) ?? "").contains("studio ended") }
+            assert(ended, "a host that left the list has its stream ended")
+            _ = wait(1)   // time for the last line to arrive
+            assert(rex.agents.isEmpty, "a line from a removed host's stream put its agent back: \(rex.agents.map(\.id))")
+            rex.want(false, for: "check")
+            _ = wait(0.3)
+        }
     }
 
     static func quietRules() {

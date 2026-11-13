@@ -283,7 +283,9 @@ final class RexAgents: ObservableObject {
                     guard line.contains("program_status") || line.contains("block_closed"),
                           let update = Self.update(fromEvent: Data(line.utf8)) else { continue }
                     await MainActor.run {
-                        guard generation == mine else { return }
+                        // not from a stream whose host was let go: a line it still had on the way would put the
+                        // host's agent back, or land on the snapshot of a host that is being followed again
+                        guard generation == mine, watching.isCurrent(server, start: start) else { return }
                         apply(server, update.0, update.1)
                     }
                 }   // the pipe closed: the stream is over
