@@ -157,6 +157,7 @@ final class OverlayController {
     private var voiceGesture = VoiceShortcutGesture()
     private var agentsKey: HotKey?
     private var cardKeyMonitor: Any?   // ↑ ↓ Return Esc while the agents card's shortcut has it open
+    private var keyboardLender: NSRunningApplication?   // the app in front when that shortcut took the keyboard
 
     /// The agents card's shortcut. A combination that can't be registered is said in Settings › Agents, not in an alert:
     /// the ring and its card work without it.
@@ -177,6 +178,8 @@ final class OverlayController {
         if let cardKeyMonitor { NSEvent.removeMonitor(cardKeyMonitor) }
         cardKeyMonitor = nil
         if on {
+            let front = NSWorkspace.shared.frontmostApplication
+            if front != .current { keyboardLender = front }   // pressed again while Pulse is in front: the first one stands
             NSApp.activate(ignoringOtherApps: true)
             panel.makeKeyAndOrderFront(nil)
             cardKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -187,10 +190,19 @@ final class OverlayController {
                 MainActor.assumeIsolated { AgentsMonitor.shared.key(key) }
                 return nil   // the card's own: not passed on
             }
-        } else if NSApp.isActive, !state.petVisible, NSApp.keyWindow == nil || NSApp.keyWindow === panel {
-            // not when the pet's card took over, or a click went to another of Pulse's windows (Settings)
+        } else {
+            let lender = keyboardLender
+            keyboardLender = nil
+            // not when the pet's card took the keyboard over, or a click went to one of Pulse's own windows (Settings)
+            guard NSApp.isActive, !state.petVisible, NSApp.keyWindow?.styleMask.contains(.titled) != true else { return }
             panel.resignKey()
-            NSApp.deactivate()
+            // back to the app that had the keyboard, by name: deactivating alone left Pulse in front
+            if let lender, !lender.isTerminated {
+                NSApp.yieldActivation(to: lender)
+                lender.activate()
+            } else {
+                NSApp.deactivate()
+            }
         }
     }
 
@@ -413,7 +425,7 @@ final class OverlayController {
         state.menuOpen = false
         // after the chosen item has run: if the pointer left the rail meanwhile, it collapses as it would have
         DispatchQueue.main.async { [weak self] in
-            guard let self, !self.state.petVisible, !self.peekArea.contains(NSEvent.mouseLocation) else { return }
+            guard let self, !self.state.petVisible, !self.state.agentsByKeyboard, !self.peekArea.contains(NSEvent.mouseLocation) else { return }
             self.state.collapseOverlay()
         }
     }
@@ -540,7 +552,7 @@ final class OverlayController {
         panel.saveFrame(usingName: "PulseOverlay")
         guard !caught else { return }   // the drag that caught it decides the rest
         switch hoverAfterLanding(pointerInside: peekArea.contains(NSEvent.mouseLocation), tuckedAway: state.tuckedAway,
-                                 petVisible: state.petVisible) {
+                                 keyboardCard: state.petVisible || state.agentsByKeyboard) {
         case .collapse: state.collapseOverlay()   // ends a peek the pointer left mid-glide
         case .hover: state.hoveringOverlay = true
         case .leave: break

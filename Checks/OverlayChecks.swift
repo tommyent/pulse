@@ -355,11 +355,12 @@ enum OverlayChecks {
         assert(visibleParts(of: bottomTuck, in: [usableAir])!.map { flippedRect(of: $0, in: bottomTuck) } == [CGRect(x: 0, y: 0, width: 308, height: 35)])
         // After a glide lands, the pointer decides what hover missed while it moved (exits during a glide are dropped).
         // Left during a peek: the peek ends. Still on the peeked rail: it counts as hovered. A tucked sliver never expands,
-        // and an open pet card keeps the rail out.
-        assert(hoverAfterLanding(pointerInside: false, tuckedAway: false, petVisible: false) == .collapse)
-        assert(hoverAfterLanding(pointerInside: true, tuckedAway: false, petVisible: false) == .hover)
-        assert(hoverAfterLanding(pointerInside: true, tuckedAway: true, petVisible: false) == .leave)
-        assert(hoverAfterLanding(pointerInside: false, tuckedAway: false, petVisible: true) == .leave)
+        // and a card that holds the keyboard keeps the rail out: the pet's, or the agents card its shortcut opened on
+        // a tucked rail, where the pointer is nowhere near (it used to close as the rail landed).
+        assert(hoverAfterLanding(pointerInside: false, tuckedAway: false, keyboardCard: false) == .collapse)
+        assert(hoverAfterLanding(pointerInside: true, tuckedAway: false, keyboardCard: false) == .hover)
+        assert(hoverAfterLanding(pointerInside: true, tuckedAway: true, keyboardCard: false) == .leave)
+        assert(hoverAfterLanding(pointerInside: false, tuckedAway: false, keyboardCard: true) == .leave)
         // The short card leaves transparent window space above and below it.
         // Rotate the layout to exercise the same dismissal rules on all four edges.
         for turns in 0..<4 {
