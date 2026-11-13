@@ -361,6 +361,17 @@ enum OverlayChecks {
         assert(hoverAfterLanding(pointerInside: true, tuckedAway: false, keyboardCard: false) == .hover)
         assert(hoverAfterLanding(pointerInside: true, tuckedAway: true, keyboardCard: false) == .leave)
         assert(hoverAfterLanding(pointerInside: false, tuckedAway: false, keyboardCard: true) == .leave)
+        // A card that held the keyboard closes (the pet's, or the agents card its shortcut opened): the keyboard goes
+        // back to the app that lent it, by name. Deactivating Pulse alone left Pulse in front, for both cards.
+        assert(keyboardAfterCard(pulseActive: true, otherCardHolds: false, ownWindowIsKey: false, lenderRunning: true) == .lender)
+        assert(keyboardAfterCard(pulseActive: true, otherCardHolds: false, ownWindowIsKey: false, lenderRunning: false) == .deactivate,
+               "the app that lent it has quit: Pulse just steps back")
+        assert(keyboardAfterCard(pulseActive: false, otherCardHolds: false, ownWindowIsKey: false, lenderRunning: true) == .nothing,
+               "a click in another app already took the keyboard")
+        assert(keyboardAfterCard(pulseActive: true, otherCardHolds: true, ownWindowIsKey: false, lenderRunning: true) == .nothing,
+               "the other card is open and keeps it")
+        assert(keyboardAfterCard(pulseActive: true, otherCardHolds: false, ownWindowIsKey: true, lenderRunning: true) == .nothing,
+               "a click went to Settings: it keeps the keyboard")
         // The short card leaves transparent window space above and below it.
         // Rotate the layout to exercise the same dismissal rules on all four edges.
         for turns in 0..<4 {

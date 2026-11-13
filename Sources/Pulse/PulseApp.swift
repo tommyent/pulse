@@ -172,16 +172,44 @@ final class OverlayController {
         }
     }
 
+    /// A card takes the keyboard: the pet's composer, or the agents card its shortcut opened. Pulse becomes the active
+    /// app (an accessory app activating shows no Dock or menu change) and the panel the key window. The app that was
+    /// in front is noted, so the keyboard can go back to it.
+    private func takeKeyboard() {
+        let front = NSWorkspace.shared.frontmostApplication
+        if front != .current { keyboardLender = front }   // Pulse already in front: the app noted before stands
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    /// That card closed: the keyboard goes back (`keyboardAfterCard`). `otherCardHolds`: the other such card is open
+    /// and keeps it.
+    private func returnKeyboard(otherCardHolds: Bool) {
+        let lender = keyboardLender
+        if !otherCardHolds { keyboardLender = nil }
+        switch keyboardAfterCard(pulseActive: NSApp.isActive, otherCardHolds: otherCardHolds,
+                                 ownWindowIsKey: NSApp.keyWindow?.styleMask.contains(.titled) == true,
+                                 lenderRunning: lender?.isTerminated == false) {
+        case .nothing: break
+        case .lender:
+            panel.resignKey()
+            if let lender {
+                NSApp.yieldActivation(to: lender)
+                lender.activate()
+            }
+        case .deactivate:
+            panel.resignKey()
+            NSApp.deactivate()
+        }
+    }
+
     /// The card its shortcut opened takes the keyboard, as the pet's composer does, without a text field: the four
     /// keys are read here. When it closes, the keyboard goes back to the app that had it.
     private func agentsCardKeyboard(_ on: Bool) {
         if let cardKeyMonitor { NSEvent.removeMonitor(cardKeyMonitor) }
         cardKeyMonitor = nil
         if on {
-            let front = NSWorkspace.shared.frontmostApplication
-            if front != .current { keyboardLender = front }   // pressed again while Pulse is in front: the first one stands
-            NSApp.activate(ignoringOtherApps: true)
-            panel.makeKeyAndOrderFront(nil)
+            takeKeyboard()
             cardKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 let keys: [Int: AgentCardSelection.Key] = [kVK_UpArrow: .up, kVK_DownArrow: .down, kVK_Return: .enter,
                                                            kVK_ANSI_KeypadEnter: .enter, kVK_Escape: .escape]
@@ -191,18 +219,7 @@ final class OverlayController {
                 return nil   // the card's own: not passed on
             }
         } else {
-            let lender = keyboardLender
-            keyboardLender = nil
-            // not when the pet's card took the keyboard over, or a click went to one of Pulse's own windows (Settings)
-            guard NSApp.isActive, !state.petVisible, NSApp.keyWindow?.styleMask.contains(.titled) != true else { return }
-            panel.resignKey()
-            // back to the app that had the keyboard, by name: deactivating alone left Pulse in front
-            if let lender, !lender.isTerminated {
-                NSApp.yieldActivation(to: lender)
-                lender.activate()
-            } else {
-                NSApp.deactivate()
-            }
+            returnKeyboard(otherCardHolds: state.petVisible)
         }
     }
 
@@ -657,16 +674,11 @@ final class OverlayController {
         state.$petVisible
             .removeDuplicates()
             .receive(on: RunLoop.main)
-            .sink { [panel, state] visible in
+            .sink { [weak self] visible in
                 CodexPetSession.shared.cardOpen = visible   // closed, an idle Codex stops after a while
-                if visible {
-                    // typing needs key status; an accessory app activating shows no Dock or menu change
-                    NSApp.activate(ignoringOtherApps: true)
-                    panel.makeKeyAndOrderFront(nil)
-                } else if NSApp.isActive, !state.agentsByKeyboard {   // the agents card's shortcut took the keyboard over
-                    panel.resignKey()
-                    NSApp.deactivate()   // hand focus back to whatever the user was in
-                }
+                guard let self else { return }
+                // typing needs key status; closed, the keyboard goes back to whatever the user was in
+                if visible { self.takeKeyboard() } else { self.returnKeyboard(otherCardHolds: self.state.agentsByKeyboard) }
             }
             .store(in: &cancellables)
 

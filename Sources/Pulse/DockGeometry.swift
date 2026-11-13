@@ -292,6 +292,18 @@ extension AnyTransition {
     }
 }
 
+enum KeyboardReturn { case nothing, lender, deactivate }
+
+/// Where the keyboard goes when a card that held it closes: the pet's, or the agents card its shortcut opened.
+/// Nowhere when Pulse is no longer the active app (a click in another app took it already), when the other such card
+/// is open and keeps it, or when one of Pulse's own titled windows (Settings) is the key window. Otherwise to the app
+/// that was in front when the card took it, by name: deactivating Pulse alone left Pulse in front. Pulse only
+/// deactivates when that app is gone.
+func keyboardAfterCard(pulseActive: Bool, otherCardHolds: Bool, ownWindowIsKey: Bool, lenderRunning: Bool) -> KeyboardReturn {
+    guard pulseActive, !otherCardHolds, !ownWindowIsKey else { return .nothing }
+    return lenderRunning ? .lender : .deactivate
+}
+
 enum LandingHover { case collapse, hover, leave }
 
 /// Hover events are ignored while the rail glides (the box sliding under a still pointer would move its target), so a
