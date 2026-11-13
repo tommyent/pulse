@@ -43,7 +43,8 @@ struct HotKeyCombo: Codable, Equatable {
     var label: String
 
     static let voiceDefault = HotKeyCombo(keyCode: UInt32(kVK_Space), carbonModifiers: UInt32(controlKey | optionKey), label: "⌃⌥Space")
-    static let agentsDefault = HotKeyCombo(keyCode: UInt32(kVK_ANSI_A), carbonModifiers: UInt32(controlKey | optionKey), label: "⌃⌥A")
+    /// One hand on the right of the keyboard. The label is the recorder's own for these keys, so pressing them there is the default.
+    static let agentsDefault = HotKeyCombo(keyCode: UInt32(kVK_ANSI_K), carbonModifiers: UInt32(cmdKey | optionKey), label: "⌥⌘K")
     /// A shortcut that was cleared: saved as itself, so "no shortcut" is told from "the default".
     static let none = HotKeyCombo(keyCode: UInt32.max, carbonModifiers: 0, label: "")
 

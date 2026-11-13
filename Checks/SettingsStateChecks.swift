@@ -70,7 +70,8 @@ enum SettingsStateChecks {
         let newerAgents = try! JSONDecoder().decode(AppState.Persisted.self, from: Data(#"{"enabled":["claude"],"agentSettings":{"showOnRail":true,"waitMinutes":"soon","sound":"Glass"}}"#.utf8))
         assert(newerAgents.agents.showOnRail && newerAgents.agents.sound == "Glass" && newerAgents.agents.waitMinutes == 5, "one unreadable agents value costs only itself")
 
-        // the agents card's shortcut: ⌃⌥A unless changed, and held only while the agents ring is on the rail
+        // the agents card's shortcut: the default (⌥⌘K) unless changed, and held only while the agents ring is on the rail.
+        // A saved state holds no value for the default, so it follows the default when that changes
         assert(p.agentsHotKey == nil && back.agentsHotKey == nil, "a state from before the shortcut has the default")
         assert(back.agentsShortcut(rexFound: true).combo == .agentsDefault && back.agentsShortcut(rexFound: true).note == nil)
         assert(back.agentsShortcut(rexFound: false).combo == nil && back.agentsShortcut(rexFound: false).note == nil, "without Rex there is no ring, and no shortcut is held")
