@@ -23,13 +23,14 @@ enum AgentChecks {
         events()
         board()
         quietRules()
+        keyboard()
         reader()
         removedHost()
         context()
         notifier()
         settingsAndRex()
         print("Agent checks passed: Rex's error state and kind, closed panes, waits kept across reports, the card's order and counts, "
-              + "the bubbles, idle agents and their context, the quiet rules and a break on screen, one alert for each wait, which Rex app is asked and what a row click sends, off by default, and the ring only with Rex")
+              + "the bubbles, idle agents and their context, the quiet rules and a break on screen, one alert for each wait, which Rex app is asked and what a row click sends, the card's keys, off by default, and the ring only with Rex")
     }
 
     static func parsing() {
@@ -338,6 +339,53 @@ enum AgentChecks {
         var unplaced = near; unplaced.session = ""
         RexAgents.show(unplaced, rex: rex, thisMac: "Unknown")
         assert(calls().isEmpty, "a stand-in agent has no pane to show")
+    }
+
+    /// The agents card under the keyboard, once its shortcut has opened it.
+    static func keyboard() {
+        // the shortcut opens the agents card, and closes it only when that card is the one open
+        assert(AgentCardSelection.shortcutOpens(cardVisible: false, sideCard: nil) && AgentCardSelection.shortcutOpens(cardVisible: false, sideCard: "agents"))
+        assert(AgentCardSelection.shortcutOpens(cardVisible: true, sideCard: nil) && AgentCardSelection.shortcutOpens(cardVisible: true, sideCard: "battery"),
+               "over a usage card or the battery's, it opens the agents card")
+        assert(!AgentCardSelection.shortcutOpens(cardVisible: true, sideCard: "agents"), "pressed again, it closes the card")
+
+        let idle = BreakAgent(id: "i", app: .codex, blocked: false, idle: true, since: at(0))
+        let agents = [working("w"), idle, waiting("b", since: 16), finished("d", since: 17)]
+        let rows = AgentBoard(agents, now: at(20)).rows
+        assert(rows.map(\.id) == ["b", "d", "w", "i"])
+        var keys = AgentCardSelection()
+        // it opens on the first row, who needs you most, and Return there is a click on that row
+        assert(keys.row(in: rows)?.id == "b" && keys.press(.enter, rows: rows) == .show(rows[0].agent))
+        // ↓ goes through the rows as listed, the idle ones last, and stops at the end
+        var seen: [String] = []
+        for _ in 0..<5 {
+            assert(keys.press(.down, rows: rows) == .select)
+            seen.append(keys.row(in: rows)!.id)
+        }
+        assert(seen == ["d", "w", "i", "i", "i"], "\(seen)")
+        assert(keys.press(.enter, rows: rows) == .show(idle), "Return shows the selected agent, an idle one too")
+        // ↑ goes back and stops at the first
+        seen = []
+        for _ in 0..<5 {
+            assert(keys.press(.up, rows: rows) == .select)
+            seen.append(keys.row(in: rows)!.id)
+        }
+        assert(seen == ["w", "d", "b", "b", "b"], "\(seen)")
+        // the selection is the agent, not its place: when the rows move, it moves with them
+        _ = keys.press(.down, rows: rows)
+        _ = keys.press(.down, rows: rows)
+        assert(keys.row(in: rows)?.id == "w")
+        let moved = AgentBoard([waiting("w", .codex, since: 19), idle, waiting("b", since: 16), finished("d", since: 17)], now: at(20)).rows
+        assert(moved.map(\.id) == ["b", "w", "d", "i"] && keys.row(in: moved)?.id == "w" && keys.press(.enter, rows: moved) == .show(moved[1].agent))
+        assert(keys.press(.down, rows: moved) == .select && keys.row(in: moved)?.id == "d")
+        // an agent that left the card: back to the first row
+        let fewer = moved.filter { $0.id != "d" }
+        assert(keys.row(in: fewer)?.id == "b" && keys.press(.down, rows: fewer) == .select && keys.row(in: fewer)?.id == "w")
+        // Escape closes the card, wherever the selection is; an empty card has nothing to choose or show
+        assert(keys.press(.escape, rows: rows) == .close)
+        var none = AgentCardSelection()
+        assert(none.row(in: []) == nil && none.press(.down, rows: []) == nil && none.press(.up, rows: []) == nil && none.press(.enter, rows: []) == nil)
+        assert(none.press(.escape, rows: []) == .close)
     }
 
     /// The reader itself, against a stand-in for the rex command: a host is taken out of Rex's list while its stream

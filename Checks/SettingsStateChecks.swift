@@ -70,6 +70,33 @@ enum SettingsStateChecks {
         let newerAgents = try! JSONDecoder().decode(AppState.Persisted.self, from: Data(#"{"enabled":["claude"],"agentSettings":{"showOnRail":true,"waitMinutes":"soon","sound":"Glass"}}"#.utf8))
         assert(newerAgents.agents.showOnRail && newerAgents.agents.sound == "Glass" && newerAgents.agents.waitMinutes == 5, "one unreadable agents value costs only itself")
 
+        // the agents card's shortcut: ⌃⌥A unless changed, and held only while the agents ring is on the rail
+        assert(p.agentsHotKey == nil && back.agentsHotKey == nil, "a state from before the shortcut has the default")
+        assert(back.agentsShortcut(rexFound: true).combo == .agentsDefault && back.agentsShortcut(rexFound: true).note == nil)
+        assert(back.agentsShortcut(rexFound: false).combo == nil && back.agentsShortcut(rexFound: false).note == nil, "without Rex there is no ring, and no shortcut is held")
+        assert(p.agentsShortcut(rexFound: true).combo == nil, "nor with the ring switched off")
+        var hidden = back
+        hidden.showOverlay = false
+        assert(hidden.agentsShortcut(rexFound: true).combo == nil, "nor with the rings hidden")
+        var keyed = back
+        keyed.agentsHotKey = HotKeyCombo(keyCode: 11, carbonModifiers: 4352, label: "⌃⌘B")
+        let rekeyed = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(keyed))
+        assert(rekeyed.agentsShortcut(rexFound: true).combo?.label == "⌃⌘B", "a changed shortcut stays across launches")
+        keyed.agentsHotKey = HotKeyCombo.none
+        let cleared = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(keyed))
+        assert(cleared.agentsHotKey == HotKeyCombo.none && cleared.agentsShortcut(rexFound: true).combo == nil && cleared.agentsShortcut(rexFound: true).note == nil,
+               "a cleared shortcut stays cleared: it isn't the default again")
+        // the voice shortcut's own combination is never taken from it: Settings says so instead
+        keyed.agentsHotKey = keyed.voiceHotKey   // this state's saved voice shortcut, ⌥⇧Space
+        keyed.showPet = true
+        assert(keyed.agentsShortcut(rexFound: true).combo == nil && keyed.agentsShortcut(rexFound: true).note?.contains("⌥⇧Space") == true)
+        keyed.voiceHotKey = nil   // the voice shortcut back at its default, ⌃⌥Space
+        assert(keyed.agentsShortcut(rexFound: true).combo?.label == "⌥⇧Space", "free once the voice shortcut is another one")
+        keyed.agentsHotKey = HotKeyCombo.voiceDefault
+        assert(keyed.agentsShortcut(rexFound: true).combo == nil && keyed.agentsShortcut(rexFound: true).note?.contains("⌃⌥Space") == true)
+        keyed.showPet = false
+        assert(keyed.agentsShortcut(rexFound: true).combo == .voiceDefault, "or once the pet, and its shortcut with it, is hidden")
+
         // the oldest form: only the keys Pulse has always written
         let oldest = try! JSONDecoder().decode(AppState.Persisted.self, from: Data(#"{"enabled":["claude"],"order":["claude"],"alwaysOnTop":true,"showOverlay":true}"#.utf8))
         assert(oldest.battery == BatterySettings() && oldest.breaks == BreakSettings() && oldest.dock == nil && oldest.appearance == .solid

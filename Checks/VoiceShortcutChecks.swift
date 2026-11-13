@@ -58,6 +58,10 @@ struct VoiceShortcutChecks {
         let custom = HotKeyCombo(keyCode: UInt32(kVK_ANSI_V), carbonModifiers: UInt32(cmdKey | optionKey), label: "⌘⌥V")
         let restored = try! JSONDecoder().decode(HotKeyCombo.self, from: JSONEncoder().encode(custom))
         check(restored == custom && restored != .voiceDefault, "a saved custom shortcut stays unchanged")
+        check(HotKeyCombo.agentsDefault.keyCode == UInt32(kVK_ANSI_A) && HotKeyCombo.agentsDefault.carbonModifiers == UInt32(controlKey | optionKey)
+              && HotKeyCombo.agentsDefault != .voiceDefault, "the agents card's default is Control-Option-A, apart from the voice shortcut")
+        let none = try! JSONDecoder().decode(HotKeyCombo.self, from: JSONEncoder().encode(HotKeyCombo.none))
+        check(none == .none && none != .agentsDefault && none != .voiceDefault, "a cleared shortcut is saved as cleared")
         print("Voice shortcut checks passed")
     }
 }

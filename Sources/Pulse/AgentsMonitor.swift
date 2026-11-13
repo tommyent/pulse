@@ -24,6 +24,10 @@ final class AgentsMonitor: ObservableObject {
     @Published private(set) var rexFound = false
     /// Idle agents' context, by block, where their session data could be found (`AgentContext`).
     @Published private(set) var contexts: [String: AgentContext] = [:]
+    /// The row the keyboard is on, while the shortcut has the card open.
+    @Published private(set) var selection = AgentCardSelection()
+    /// Why the card's shortcut isn't working, for Settings: it's the voice shortcut's, or it couldn't be registered.
+    @Published var shortcutNote: String?
 
     private var contextReads = AgentContext.Reads()   // which idle agents have been looked up for their idle spell
     private var readingContexts = false
@@ -170,6 +174,26 @@ final class AgentsMonitor: ObservableObject {
                 }
                 self.readingContexts = false
             }
+        }
+    }
+
+    // MARK: the card under the keyboard
+
+    /// The shortcut opened the card: the keyboard starts on its first row.
+    func resetSelection() { selection = AgentCardSelection() }
+
+    /// A key in the card its shortcut opened: ↑ and ↓ choose a row, which VoiceOver is told; Return shows that pane
+    /// exactly as a click on the row does; Escape closes the card.
+    func key(_ key: AgentCardSelection.Key) {
+        let now = Date(), rows = AgentBoard(agents, dismissed: dismissed, now: now).rows
+        switch selection.press(key, rows: rows) {
+        case .select:
+            if let row = selection.row(in: rows) {
+                AccessibilityNotification.Announcement(row.spoken(now, context: row.state == .idle ? contexts[row.id]?.text ?? "" : "")).post()
+            }
+        case let .show(agent): show(agent)
+        case .close: state?.collapseOverlay()
+        case nil: break
         }
     }
 

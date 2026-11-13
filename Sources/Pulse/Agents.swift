@@ -157,6 +157,34 @@ struct AgentBoard: Equatable {
     }
 }
 
+/// The agents card under the keyboard, once its shortcut has opened it: which row is selected and what a key does.
+/// The selection is an agent, not a place in the list, because the rows move as the agents' states change.
+struct AgentCardSelection: Equatable {
+    enum Key { case up, down, enter, escape }
+    enum Outcome: Equatable { case select, show(BreakAgent), close }
+
+    private(set) var id: String?   // nil, or an agent that has left the card: the first row
+
+    /// The selected row: the first one, who needs you most, until a key has moved it.
+    func row(in rows: [AgentBoard.Row]) -> AgentBoard.Row? { rows.first { $0.id == id } ?? rows.first }
+
+    /// ↑ and ↓ move through the rows in the card's order and stop at its ends: holding ↑ always lands on the first.
+    /// Return shows the selected agent's pane, as a click on its row does. Escape closes the card. nil: nothing to do.
+    mutating func press(_ key: Key, rows: [AgentBoard.Row]) -> Outcome? {
+        switch key {
+        case .escape: return .close
+        case .enter: return row(in: rows).map { .show($0.agent) }
+        case .up, .down:
+            guard let at = rows.firstIndex(where: { $0.id == row(in: rows)?.id }) else { return nil }
+            id = rows[min(max(at + (key == .down ? 1 : -1), 0), rows.count - 1)].id
+            return .select
+        }
+    }
+
+    /// What the shortcut does: it opens the agents card, and closes it only when that card is the one open.
+    static func shortcutOpens(cardVisible: Bool, sideCard: String?) -> Bool { !(cardVisible && sideCard == "agents") }
+}
+
 /// A quiet rule that is holding Pulse's own sound and alert for agents right now.
 enum AgentHold: Equatable {
     case locked, onBreak, voiceCall, paused(until: Date), call, rexInFront

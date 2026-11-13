@@ -17,6 +17,7 @@ final class AppState: ObservableObject {
         var tucked: Bool?   // nil = out: the rail tucked into its edge, a sliver left on screen
         var tuckPeek: Bool?   // nil = off: resting the pointer on the sliver slides the rail out until it leaves
         var voiceHotKey: HotKeyCombo?   // nil = the default shortcut
+        var agentsHotKey: HotKeyCombo?   // nil = the default shortcut; `HotKeyCombo.none` = cleared
         var showPet: Bool?   // nil = shown; independent of the Codex usage switch
         var showRemaining: Bool?   // nil = off: rings show what's used
         var hiddenPools: Set<String>?   // nil = none: "account.pool" for a later pool whose ring is switched off
@@ -64,6 +65,7 @@ final class AppState: ObservableObject {
             tucked = c.lenient(Bool.self, forKey: .tucked, in: decoder)
             tuckPeek = c.lenient(Bool.self, forKey: .tuckPeek, in: decoder)
             voiceHotKey = c.lenient(HotKeyCombo.self, forKey: .voiceHotKey, in: decoder)
+            agentsHotKey = c.lenient(HotKeyCombo.self, forKey: .agentsHotKey, in: decoder)
             showPet = c.lenient(Bool.self, forKey: .showPet, in: decoder)
             showRemaining = c.lenient(Bool.self, forKey: .showRemaining, in: decoder)
             hiddenPools = c.lenient(Set<String>.self, forKey: .hiddenPools, in: decoder)
@@ -71,6 +73,17 @@ final class AppState: ObservableObject {
             batterySettings = c.lenient(BatterySettings.self, forKey: .batterySettings, in: decoder)
             breakSettings = c.lenient(BreakSettings.self, forKey: .breakSettings, in: decoder)
             agentSettings = c.lenient(AgentSettings.self, forKey: .agentSettings, in: decoder)
+        }
+
+        /// The shortcut to hold for the agents card and, when the chosen one can't be used, why. None is held while
+        /// the agents ring isn't on the rail, so the combination stays free for other apps, or once it was cleared.
+        func agentsShortcut(rexFound: Bool) -> (combo: HotKeyCombo?, note: String?) {
+            let combo = agentsHotKey ?? .agentsDefault
+            guard showOverlay, agents.onRail(rexFound: rexFound), combo != .none else { return (nil, nil) }
+            if showPet != false, combo == voiceHotKey ?? .voiceDefault {
+                return (nil, "\(combo.label) is the Codex pet's voice shortcut. Choose another one here.")
+            }
+            return (combo, nil)
         }
 
         /// The settings at `url`, and whether a save may replace that file. Anything Pulse couldn't read first gets a copy
@@ -105,6 +118,10 @@ final class AppState: ObservableObject {
         Binding(get: { self.voiceHotKey }, set: { self.persisted.voiceHotKey = $0 == .voiceDefault ? nil : $0 })
     }
 
+    var agentsHotKeyBinding: Binding<HotKeyCombo> {
+        Binding(get: { self.persisted.agentsHotKey ?? .agentsDefault }, set: { self.persisted.agentsHotKey = $0 == .agentsDefault ? nil : $0 })
+    }
+
     var dock: DockEdge { persisted.dock ?? .right }
 
     /// Tucked and not peeking out: the rail rests past its edge with only a sliver on screen. Dragged out by its sliver,
@@ -129,7 +146,12 @@ final class AppState: ObservableObject {
     @Published var persisted: Persisted { didSet { save() } }
     @Published var selected: AccountID = .claude { didSet { selectedPool = 0 } }
     @Published var selectedPool = 0   // which of the selected account's rings opened the card (`[UsageWindow].pools`)
-    @Published var cardVisible = false
+    @Published var cardVisible = false { didSet { if !cardVisible, agentsByKeyboard { agentsByKeyboard = false } } }
+    /// "battery" or "agents": the open card is that ring's, not the selected account's.
+    @Published var sideCard: String? { didSet { if sideCard != "agents", agentsByKeyboard { agentsByKeyboard = false } } }
+    /// The agents card was opened by its shortcut and holds the keyboard (↑ ↓ Return Esc) until it closes. Like the
+    /// pet's card it then stays open when the pointer passes over it and leaves.
+    @Published private(set) var agentsByKeyboard = false
     @Published var hoveringOverlay = false
     @Published var petVisible = false   // the Codex pet's chat/voice card (mutually exclusive with a usage card)
     @Published var snapshots: [AccountID: AccountSnapshot]
@@ -181,6 +203,30 @@ final class AppState: ObservableObject {
 
     var enabledAccounts: [AccountID] {
         persisted.order.filter { persisted.enabled.contains($0) }
+    }
+
+    /// The battery's card or the agents': a second click on the same ring closes it.
+    func toggleSide(_ card: String) {
+        guard !dragging else { return }
+        petVisible = false
+        if cardVisible, sideCard == card {
+            cardVisible = false
+        } else {
+            sideCard = card
+            cardVisible = true
+        }
+    }
+
+    /// The agents shortcut: opens the agents card with the keyboard in it, its first row selected, or closes that
+    /// card if it's the one open. A tucked rail comes out for it, as for any card.
+    func toggleAgentsCard() {
+        guard !dragging else { return }
+        guard AgentCardSelection.shortcutOpens(cardVisible: cardVisible, sideCard: sideCard) else { return collapseOverlay() }
+        petVisible = false
+        sideCard = "agents"
+        cardVisible = true
+        AgentsMonitor.shared.resetSelection()
+        agentsByKeyboard = true
     }
 
     func collapseOverlay() {

@@ -16,6 +16,10 @@ extension AgentBoard.Row {
     var pane: String { agent.label.isEmpty ? agent.app.account.displayName : agent.label }
     /// "fix-tests on studio" for a pane on another Mac.
     var place: String { agent.host.isEmpty ? pane : "\(pane) on \(agent.host)" }
+    /// What VoiceOver reads for the row: its pane, its state, the agent's own line and an idle one's context.
+    func spoken(_ now: Date, context: String = "") -> String {
+        [place, stateText(now), agent.msg, context].filter { !$0.isEmpty }.joined(separator: ", ")
+    }
 }
 
 /// The rail's agents ring: the agents' icons as overlapping bubbles that fill it, idle ones grey, the ring orange while one
@@ -113,6 +117,7 @@ struct AgentsCard: View {
     var dismissed: [String: Date] = [:]
     var hold: AgentHold? = nil   // the quiet rule holding the sound and the alert
     var contexts: [String: AgentContext] = [:]   // idle agents' context, by block, where it could be read
+    var selection: AgentCardSelection? = nil     // the keyboard's row, while the shortcut has the card open
     let show: (BreakAgent) -> Void
     let clear: (BreakAgent) -> Void
     var refresh: () -> Void = {}   // asks for the idle agents' context to be read; called while the card is open
@@ -134,10 +139,18 @@ struct AgentsCard: View {
                 if board.rows.isEmpty {
                     Text("No agents are open in Rex.").font(.caption).foregroundStyle(PulsePalette.secondary)
                 } else {
-                    let rows = AgentRows(rows: board.rows, now: context.date, contexts: contexts, show: show, clear: clear)
+                    let selected = selection?.row(in: board.rows)?.id
+                    let rows = AgentRows(rows: board.rows, now: context.date, contexts: contexts, selected: selected, show: show, clear: clear)
                     Group {
-                        // more than fit a small screen: they scroll
-                        if board.rows.count > Self.most { ScrollView { rows }.frame(height: 400) } else { rows }
+                        // more than fit a small screen: they scroll, and the keyboard's row stays in view
+                        if board.rows.count > Self.most {
+                            ScrollViewReader { scroll in
+                                ScrollView { rows }.frame(height: 400)
+                                    .onChange(of: selected) { _, id in if let id { scroll.scrollTo(id) } }
+                            }
+                        } else {
+                            rows
+                        }
                     }
                     .padding(.horizontal, -8)   // a row's highlight reaches past the text's edges
                     let time: (Date) -> String = { $0.formatted(date: .omitted, time: .shortened) }
@@ -169,6 +182,7 @@ struct AgentRows: View {
     let rows: [AgentBoard.Row]
     let now: Date
     var contexts: [String: AgentContext] = [:]
+    var selected: String? = nil   // the row the keyboard is on
     let show: (BreakAgent) -> Void
     var clear: ((BreakAgent) -> Void)? = nil   // the × on a failed row; the alert has none
 
@@ -187,7 +201,8 @@ struct AgentRows: View {
                         .padding(.horizontal, 8).padding(.top, 6).padding(.bottom, 2)
                         .accessibilityAddTraits(.isHeader)
                 }
-                AgentRow(row: row, now: now, context: contexts[row.id], show: show, clear: clear)
+                AgentRow(row: row, now: now, context: contexts[row.id], selected: row.id == selected, show: show, clear: clear)
+                    .id(row.id)
             }
         }
         .padding(.vertical, -5)   // the rows' own padding is their highlight's
@@ -198,6 +213,7 @@ private struct AgentRow: View {
     let row: AgentBoard.Row
     let now: Date
     var context: AgentContext? = nil   // an idle agent's, where it could be read
+    var selected = false               // the keyboard is on this row
     let show: (BreakAgent) -> Void
     let clear: ((BreakAgent) -> Void)?
     @State private var hovering = false
@@ -232,14 +248,15 @@ private struct AgentRow: View {
             .foregroundStyle(Color.primary)
             .opacity(row.state == .working || row.state == .idle ? 0.78 : 1)
             .padding(.vertical, 5).padding(.horizontal, 8)
-            .background(Color.white.opacity(hovering ? 0.1 : 0), in: RoundedRectangle(cornerRadius: 9))
+            .background(Color.white.opacity(selected ? 0.18 : hovering ? 0.1 : 0), in: RoundedRectangle(cornerRadius: 9))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help("Show in Rex")
-        .accessibilityLabel([row.place, state, agent.msg, context].filter { !$0.isEmpty }.joined(separator: ", "))
+        .accessibilityLabel(row.spoken(now, context: context))
         .accessibilityHint("Shows this pane in Rex")
+        .accessibilityAddTraits(selected ? .isSelected : [])
         // beside the row's button, not inside it: a button in a button never fires
         .overlay(alignment: .bottomTrailing) {
             if clears, let clear {
@@ -309,6 +326,8 @@ struct AgentsAlertView: View {
 struct AgentSettingsSection: View {
     @Binding var settings: AgentSettings
     let rexFound: Bool
+    var shortcut: Binding<HotKeyCombo> = .constant(.agentsDefault)
+    var shortcutNote: String? = nil   // why the chosen shortcut isn't working
     @State private var sounds: [String] = []
 
     var body: some View {
@@ -329,6 +348,18 @@ struct AgentSettingsSection: View {
             }
             Text("While this is on, Pulse reads each pane's label and status line through the rex command all day. It never starts a Rex server and saves nothing to disk. While the card is open, it also reads how full each idle agent's context is, for agents on this Mac: it asks macOS when the agent's process started and which files it has open, then reads token counts only from the agent's own session files. It reads no messages from them, keeps the numbers in memory only and needs no permission. A click on an agent shows its pane in Rex; nothing is answered from Pulse. Rex has its own tab marks, Dock badge, sounds and notifications: Pulse sends no notifications, and holds its own sound and alert while Rex is in front.")
                 .font(.caption).foregroundStyle(PulsePalette.secondary)
+            LabeledContent {
+                HotKeyRecorder(combo: shortcut, fallback: .agentsDefault, clearable: true)
+                    .accessibilityLabel("Shortcut for the agents card")
+            } label: {
+                Text("Shortcut for the agents card")
+                if let shortcutNote {
+                    Text(shortcutNote).foregroundStyle(Color.orange)
+                } else {
+                    Text("Opens the card from any app, and closes it. Then ↑ and ↓ choose an agent, Return shows its pane in Rex and Esc closes the card")
+                }
+            }
+            .disabled(!settings.onRail(rexFound: rexFound))
         }
         Group {
             Section("Sounds and alerts") {

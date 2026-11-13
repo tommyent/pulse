@@ -1,4 +1,5 @@
 import SwiftUI
+import Carbon.HIToolbox
 import Combine
 import os
 
@@ -154,6 +155,44 @@ final class OverlayController {
     private var globalClickMonitor: Any?
     private var voiceKey: HotKey?
     private var voiceGesture = VoiceShortcutGesture()
+    private var agentsKey: HotKey?
+    private var cardKeyMonitor: Any?   // ↑ ↓ Return Esc while the agents card's shortcut has it open
+
+    /// The agents card's shortcut. A combination that can't be registered is said in Settings › Agents, not in an alert:
+    /// the ring and its card work without it.
+    private func bindAgentsKey(_ combo: HotKeyCombo?, note: String?) {
+        agentsKey = nil   // unregister before registering its replacement
+        AgentsMonitor.shared.shortcutNote = note
+        guard let combo else { return }
+        agentsKey = HotKey(combo)
+        agentsKey?.onPress = { [weak self] in self?.state.toggleAgentsCard() }
+        if agentsKey == nil {
+            AgentsMonitor.shared.shortcutNote = "Pulse couldn't register \(combo.label). Another app may be using it. Choose another one here."
+        }
+    }
+
+    /// The card its shortcut opened takes the keyboard, as the pet's composer does, without a text field: the four
+    /// keys are read here. When it closes, the keyboard goes back to the app that had it.
+    private func agentsCardKeyboard(_ on: Bool) {
+        if let cardKeyMonitor { NSEvent.removeMonitor(cardKeyMonitor) }
+        cardKeyMonitor = nil
+        if on {
+            NSApp.activate(ignoringOtherApps: true)
+            panel.makeKeyAndOrderFront(nil)
+            cardKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                let keys: [Int: AgentCardSelection.Key] = [kVK_UpArrow: .up, kVK_DownArrow: .down, kVK_Return: .enter,
+                                                           kVK_ANSI_KeypadEnter: .enter, kVK_Escape: .escape]
+                guard let key = keys[Int(event.keyCode)],
+                      event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return event }
+                MainActor.assumeIsolated { AgentsMonitor.shared.key(key) }
+                return nil   // the card's own: not passed on
+            }
+        } else if NSApp.isActive, !state.petVisible, NSApp.keyWindow == nil || NSApp.keyWindow === panel {
+            // not when the pet's card took over, or a click went to another of Pulse's windows (Settings)
+            panel.resignKey()
+            NSApp.deactivate()
+        }
+    }
 
     /// A held shortcut mutes only capture on release, so Codex can still answer aloud.
     private func bindVoiceKey(_ combo: HotKeyCombo?) {
@@ -299,7 +338,8 @@ final class OverlayController {
         guard peeking else { return }
         peekWatch = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, !self.state.gliding, !self.state.dragging, !self.state.petVisible else { return }
+                // a card the keyboard opened has no pointer on it: it ends with the card, like the pet's
+                guard let self, !self.state.gliding, !self.state.dragging, !self.state.petVisible, !self.state.agentsByKeyboard else { return }
                 if !self.peekArea.contains(NSEvent.mouseLocation) { self.state.collapseOverlay() }   // ends the peek
             }
         }
@@ -563,11 +603,12 @@ final class OverlayController {
             .sink { [weak self] _ in self?.beginMorph() }
             .store(in: &cancellables)
 
-        // while the pet card holds the keyboard Pulse is the active app; switching to another app closes it
+        // while the pet card holds the keyboard Pulse is the active app; switching to another app closes it. The same
+        // for the agents card its shortcut opened
         NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                guard let self, self.state.petVisible else { return }
+                guard let self, self.state.petVisible || self.state.agentsByKeyboard else { return }
                 self.state.collapseOverlay()
             }
             .store(in: &cancellables)
@@ -604,13 +645,13 @@ final class OverlayController {
         state.$petVisible
             .removeDuplicates()
             .receive(on: RunLoop.main)
-            .sink { [panel] visible in
+            .sink { [panel, state] visible in
                 CodexPetSession.shared.cardOpen = visible   // closed, an idle Codex stops after a while
                 if visible {
                     // typing needs key status; an accessory app activating shows no Dock or menu change
                     NSApp.activate(ignoringOtherApps: true)
                     panel.makeKeyAndOrderFront(nil)
-                } else if NSApp.isActive {
+                } else if NSApp.isActive, !state.agentsByKeyboard {   // the agents card's shortcut took the keyboard over
                     panel.resignKey()
                     NSApp.deactivate()   // hand focus back to whatever the user was in
                 }
@@ -622,6 +663,21 @@ final class OverlayController {
             .sink { [weak self] voice in
                 if voice == .off { self?.cancelVoiceKey() }
             }
+            .store(in: &cancellables)
+
+        // before the voice shortcut's own binding below: a combination moved from this one to that one is free by then
+        typealias Shortcut = (combo: HotKeyCombo?, note: String?)
+        state.$persisted.combineLatest(AgentsMonitor.shared.$rexFound)
+            .map { (saved: AppState.Persisted, rexFound: Bool) -> Shortcut in saved.agentsShortcut(rexFound: rexFound) }
+            .removeDuplicates { (a: Shortcut, b: Shortcut) -> Bool in a.combo == b.combo && a.note == b.note }
+            .receive(on: RunLoop.main)
+            .sink { [weak self] (shortcut: Shortcut) in self?.bindAgentsKey(shortcut.combo, note: shortcut.note) }
+            .store(in: &cancellables)
+        state.$agentsByKeyboard
+            .removeDuplicates()
+            .dropFirst()   // nothing to hand back at launch
+            .receive(on: RunLoop.main)
+            .sink { [weak self] in self?.agentsCardKeyboard($0) }
             .store(in: &cancellables)
 
         state.$persisted
@@ -643,6 +699,7 @@ final class OverlayController {
     deinit {
         if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor) }
         if let globalClickMonitor { NSEvent.removeMonitor(globalClickMonitor) }
+        if let cardKeyMonitor { NSEvent.removeMonitor(cardKeyMonitor) }
         peekWatch?.invalidate()   // the run loop would keep a repeating timer after its controller is gone
     }
 }

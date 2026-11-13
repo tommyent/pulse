@@ -43,6 +43,9 @@ struct HotKeyCombo: Codable, Equatable {
     var label: String
 
     static let voiceDefault = HotKeyCombo(keyCode: UInt32(kVK_Space), carbonModifiers: UInt32(controlKey | optionKey), label: "⌃⌥Space")
+    static let agentsDefault = HotKeyCombo(keyCode: UInt32(kVK_ANSI_A), carbonModifiers: UInt32(controlKey | optionKey), label: "⌃⌥A")
+    /// A shortcut that was cleared: saved as itself, so "no shortcut" is told from "the default".
+    static let none = HotKeyCombo(keyCode: UInt32.max, carbonModifiers: 0, label: "")
 
     init(keyCode: UInt32, carbonModifiers: UInt32, label: String) {
         self.keyCode = keyCode; self.carbonModifiers = carbonModifiers; self.label = label
@@ -113,16 +116,21 @@ import SwiftUI
 
 struct HotKeyRecorder: View {
     @Binding var combo: HotKeyCombo
+    var fallback = HotKeyCombo.voiceDefault   // what Reset goes back to
+    var clearable = false                     // whether the shortcut can be given up altogether
     @State private var recording = false
     @State private var monitor: Any?
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         HStack(spacing: 8) {
-            Button(recording ? "Press keys…" : combo.label) { recording ? stop() : start() }
+            Button(recording ? "Press keys…" : combo == .none ? "None" : combo.label) { recording ? stop() : start() }
                 .frame(minWidth: 110)
-            if combo != .voiceDefault, !recording {
-                Button("Reset") { combo = .voiceDefault }.buttonStyle(.borderless).font(.caption)
+            if combo != fallback, !recording {
+                Button("Reset") { combo = fallback }.buttonStyle(.borderless).font(.caption)
+            }
+            if clearable, combo != .none, !recording {
+                Button("Clear") { combo = .none }.buttonStyle(.borderless).font(.caption)
             }
         }
         .onDisappear { stop() }

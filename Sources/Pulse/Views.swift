@@ -767,7 +767,11 @@ struct OverlayView: View {
     /// The agents ring is on the rail: switched on, and Rex is on this Mac.
     private var showsAgents: Bool { state.persisted.agents.onRail(rexFound: agents.rexFound) }
     @State private var itemFrames: [String: CGRect] = [:]   // the pet and each ring, so a card's tail points at its own
-    @State private var sideCard: String?   // "battery" or "agents": the open card is that ring's, not the selected account's
+    /// "battery" or "agents": the open card is that ring's. In AppState, where the agents shortcut can open it too.
+    private var sideCard: String? {
+        get { state.sideCard }
+        nonmutating set { state.sideCard = newValue }
+    }
     @State private var cardFrame = CGRect.zero
     @State private var railFrame = CGRect.zero
 
@@ -833,7 +837,8 @@ struct OverlayView: View {
                 return
             }
             if over { state.hoveringOverlay = true; return }
-            guard !state.petVisible else { return }   // a chat stays open until a click outside
+            // a chat stays open until a click outside, and so does the agents card its shortcut opened
+            guard !state.petVisible, !state.agentsByKeyboard else { return }
             // Hover also ends without the pointer leaving: when Pulse hands focus back as the pet closes, and while a
             // shorter card shifts the rail inside the not yet resized panel. Then no later exit may come, so the
             // pointer is watched until it really leaves.
@@ -841,7 +846,7 @@ struct OverlayView: View {
             // ponytail: a 250 ms check, only after an exit the pointer didn't make
             exitWatch = Task { @MainActor in
                 while !Task.isCancelled, pointerInside?() == true { try? await Task.sleep(for: .milliseconds(250)) }
-                if !Task.isCancelled, !state.petVisible { state.collapseOverlay() }
+                if !Task.isCancelled, !state.petVisible, !state.agentsByKeyboard { state.collapseOverlay() }
             }
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { onSize?($0) }
@@ -877,6 +882,7 @@ struct OverlayView: View {
         } else if state.cardVisible, sideCard == "agents" {
             if showsAgents {
                 AgentsCard(agents: agents.agents, dismissed: agents.dismissed, hold: agents.hold, contexts: agents.contexts,
+                           selection: state.agentsByKeyboard ? agents.selection : nil,
                            show: agents.show, clear: agents.clear, refresh: agents.readContexts,
                            tailEdge: tail, tailAt: tailAt("agents"))
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { cardFrame = $0; onCardFrame?($0) }
@@ -904,7 +910,7 @@ struct OverlayView: View {
             // under the pet: the agents Rex reports, all day
             if showsAgents {
                 let board = agents.board
-                Button { toggleSide("agents") } label: {
+                Button { state.toggleSide("agents") } label: {
                     AgentsRing(board: board, size: expanded ? 52 : 28, showCount: expanded, beside: beside, held: agents.hold != nil)
                         .contentShape(Rectangle())
                 }
@@ -973,7 +979,7 @@ struct OverlayView: View {
             }
             // last: the bottom of a vertical rail, the right end of a horizontal one
             if state.persisted.battery.showInRail, let reading = battery.reading {
-                Button { toggleSide("battery") } label: {
+                Button { state.toggleSide("battery") } label: {
                     BatteryRing(reading: reading, level: state.persisted.battery.level(reading.percent),
                                 size: expanded ? 52 : 28, showPercent: expanded, beside: beside)
                         .contentShape(Rectangle())
@@ -1099,18 +1105,6 @@ struct OverlayView: View {
             sideCard = nil
             state.selected = id
             state.selectedPool = pool
-            state.cardVisible = true
-        }
-    }
-
-    /// The battery's card or the agents': a second click on the same ring closes it.
-    private func toggleSide(_ card: String) {
-        guard !state.dragging else { return }
-        state.petVisible = false
-        if state.cardVisible, sideCard == card {
-            state.cardVisible = false
-        } else {
-            sideCard = card
             state.cardVisible = true
         }
     }
@@ -1330,8 +1324,9 @@ struct SettingsView: View {
                         .help("Ask again for future command and folder-access requests. Current task grants expire when that task ends.")
                 }
             }
-            tab("Agents", "person.2", height: 750) {
-                AgentSettingsSection(settings: $state.persisted.agents, rexFound: agents.rexFound)
+            tab("Agents", "person.2", height: 830) {
+                AgentSettingsSection(settings: $state.persisted.agents, rexFound: agents.rexFound,
+                                     shortcut: state.agentsHotKeyBinding, shortcutNote: agents.shortcutNote)
             }
             tab("Breaks", "cup.and.saucer", height: 720) {
                 BreakSettingsSection(settings: $state.persisted.breaks)
