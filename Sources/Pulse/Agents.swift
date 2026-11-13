@@ -35,8 +35,8 @@ struct AgentSettings: Codable, Equatable {
 }
 
 /// What the agents ring and its card show at a moment: the agents in the card's order. The active ones (waiting,
-/// failed, just finished, working) are the ring's; idle ones, and finished ones past their 15 minutes, are listed in
-/// the card only. Failed ones whose mark was cleared are left out.
+/// failed, just finished, working) set the ring's colour, number and tick; idle ones, and finished ones past their
+/// 15 minutes, are in the ring only as grey bubbles behind them. Failed ones whose mark was cleared are left out.
 struct AgentBoard: Equatable {
     /// In the card's order: waiting for you, failed, just finished, working, idle.
     enum State: Int { case waiting, failed, finished, working, idle }
@@ -103,7 +103,7 @@ struct AgentBoard: Equatable {
     }
 
     func count(_ state: State) -> Int { rows.filter { $0.state == state }.count }
-    /// The rows without the idle ones: who the ring's bubbles stand for.
+    /// The rows without the idle ones: whose bubbles are in colour.
     var active: [Row] { rows.filter { $0.state != .idle } }
     /// Waiting or failed.
     var needsYou: Int { count(.waiting) + count(.failed) }
@@ -115,10 +115,12 @@ struct AgentBoard: Equatable {
     var tone: Tone { count(.failed) > 0 ? .failed : count(.waiting) > 0 ? .waiting : .quiet }
     var justFinished: Bool { count(.finished) > 0 }
 
-    /// The ring's bubbles: up to four agents' apps, those who need you first; with more than four, three and how many more.
-    var bubbles: (apps: [BreakAgent.App], more: Int) {
-        let apps = active.map(\.agent.app)
-        return apps.count > 4 ? (Array(apps.prefix(3)), apps.count - 3) : (apps, 0)
+    /// The ring's bubbles: up to four agents' apps in the card's order, so the active ones come first, those who need
+    /// you in front, and the idle ones last. The first `colour` are active and drawn in colour; the rest are idle
+    /// and drawn grey. With more than four agents, three and how many more: the idle ones, unless over three are active.
+    var bubbles: (apps: [BreakAgent.App], colour: Int, more: Int) {
+        let apps = rows.map(\.agent.app), shown = apps.count > 4 ? 3 : apps.count
+        return (Array(apps.prefix(shown)), min(shown, active.count), apps.count - shown)
     }
 
     /// The card's header: "3 need you · 2 working"; only finished agents, "2 finished"; only idle ones, "4 idle".

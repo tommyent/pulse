@@ -153,8 +153,8 @@ enum AgentChecks {
         assert(board.needsYou == 3 && board.needing.map(\.id) == ["b1", "b2", "f1"])
         assert(board.tone == .failed && board.justFinished && board.summary == "3 need you · 2 working")
         assert(board.spoken == "2 waiting for you, 1 failed, 2 just finished, 2 working, 2 idle")
-        // more than four: three bubbles, those who need you first, and how many more
-        assert(board.bubbles.apps == [.claude, .codex, .grok] && board.bubbles.more == 4)
+        // more than four agents: three bubbles, those who need you first, and how many more, the idle ones among them
+        assert(board.bubbles.apps == [.claude, .codex, .grok] && board.bubbles.colour == 3 && board.bubbles.more == 6, "\(board.bubbles)")
         assert(board.rows[0].stateText(at(20)) == "Asks permission · 12 min" && board.rows[1].stateText(at(20)) == "Asks a question · 4 min")
         assert(board.rows[2].stateText(at(20)) == "Failed · 9 min ago" && board.rows[3].stateText(at(20)) == "Finished · 3 min ago")
         assert(board.rows[5].stateText(at(20)) == "Working")
@@ -178,7 +178,7 @@ enum AgentChecks {
         assert(answered.needsYou == 1 && answered.tone == .waiting && answered.summary == "1 needs you · 1 working")
         let quiet = AgentBoard([working("w1"), working("w2", .claude)], now: at(20))
         assert(quiet.tone == .quiet && quiet.needsYou == 0 && !quiet.justFinished && quiet.summary == "2 working" && quiet.tick == 0)
-        assert(quiet.bubbles.apps == [.codex, .claude] && quiet.bubbles.more == 0)
+        assert(quiet.bubbles.apps == [.codex, .claude] && quiet.bubbles.colour == 2 && quiet.bubbles.more == 0)
         // the number under the ring: how many are working, until one needs you; then how many need you, on a ring
         // that is orange or red. (It was only ever who needs you: "0" under a grey ring with two agents at work.)
         assert(quiet.number == 2 && quiet.spoken == "2 working", "\(quiet.number)")
@@ -187,15 +187,10 @@ enum AgentChecks {
         assert(AgentBoard([working("w1"), working("w2"), working("w3"), finished("d1", since: 19), idle], now: at(20)).number == 3)
         // nobody working or waiting: 0, which is then true. Finished and idle agents aren't in it
         assert(later.number == 0 && unseen.number == 0 && AgentBoard().number == 0 && AgentBoard().spoken == "No active agents")
-        // a bubble for each active agent, whatever they do: two at work are two bubbles, never one plain icon; idle
-        // ones add none; past four, three and the rest as "+N"
-        for n in 0...7 {
-            let shown = AgentBoard((0..<n).map { working("w\($0)", .claude) } + [idle, stale], now: at(20)).bubbles
-            assert(shown.apps.count == (n > 4 ? 3 : n) && shown.more == (n > 4 ? n - 3 : 0), "\(n) working: \(shown)")
-        }
-        // idle agents are listed and nothing more: no bubble, no number, no colour, no tick on the sliver
+        // idle agents are grey bubbles in the ring, and nothing more: no number, no colour, no tick on the sliver
         let resting = AgentBoard([idle, stale], now: at(20))
-        assert(resting.rows.map(\.id) == ["stale", "idle"] && resting.active.isEmpty && resting.bubbles.apps.isEmpty && resting.bubbles.more == 0)
+        assert(resting.rows.map(\.id) == ["stale", "idle"] && resting.active.isEmpty)
+        assert(resting.bubbles.apps == [.claude, .codex] && resting.bubbles.colour == 0 && resting.bubbles.more == 0, "\(resting.bubbles)")
         assert(resting.needsYou == 0 && resting.number == 0 && resting.needing.isEmpty && resting.tone == .quiet && !resting.justFinished && resting.tick == 0)
         assert(resting.summary == "2 idle" && resting.spoken == "No active agents, 2 idle")
         assert(AgentBoard([working("w1"), idle], now: at(20)).summary == "1 working", "the header names the idle only when nobody else is there")
@@ -207,6 +202,23 @@ enum AgentChecks {
                                  rested("y", since: 0)], now: at(200))
         assert(idlers.rows.map(\.id) == ["y", "z", "old-finish", "m", "a-unknown"], "\(idlers.rows.map(\.id))")
         assert(idlers.rows.map { $0.stateText(at(200)) } == ["Idle · 3 hr 20 min", "Idle · 3 hr 20 min", "Idle · 2 hr 40 min", "Idle · 1 hr 40 min", "Idle"])
+        // a bubble for every agent, from none to seven in every mix: the active ones first, in colour (two at work
+        // are two bubbles, never one plain icon), then the idle ones, grey. Past four agents, three bubbles and the
+        // rest as "+N"; with up to three active, those are the idle agents not drawn
+        for total in 0...7 {
+            for busy in 0...total {
+                let agents = (0..<busy).map { working("w\($0)", .claude) } + (busy..<total).map { rested("i\($0)", since: 0) }
+                let shown = AgentBoard(agents.reversed(), now: at(20)).bubbles, drawn = total > 4 ? 3 : total
+                assert(shown.apps.count == drawn && shown.more == total - drawn && shown.colour == min(busy, drawn), "\(busy) of \(total): \(shown)")
+                if busy <= 3 { assert(shown.more == (total - busy) - (drawn - shown.colour), "\(busy) of \(total): +N is the idle agents not drawn") }
+            }
+        }
+        // colour before grey whatever order Rex gave them in: who needs you, who finished, who works, then the idle
+        let mixed = AgentBoard([idle, working("w", .claude), waiting("b", .grok, since: 16), finished("d", .antigravity, since: 17), rested("r", since: 0)], now: at(20))
+        assert(mixed.bubbles.apps == [.grok, .antigravity, .claude] && mixed.bubbles.colour == 3 && mixed.bubbles.more == 2, "\(mixed.bubbles)")
+        let fitted = AgentBoard([rested("r", since: 5), idle, working("w", .codex), waiting("b", .grok, since: 16)], now: at(20))
+        assert(fitted.bubbles.apps == [.grok, .codex, .claude, .codex] && fitted.bubbles.colour == 2 && fitted.bubbles.more == 0, "\(fitted.bubbles)")
+        assert(fitted.number == 1 && fitted.tone == .waiting && AgentBoard([working("w"), idle, rested("r", since: 0)], now: at(20)).number == 1, "idle agents aren't in the number")
         func idleText(_ minutes: Double) -> String { AgentBoard.Row(agent: rested("x", since: 0), state: .idle).stateText(at(minutes)) }
         assert(idleText(0.5) == "Idle" && idleText(41) == "Idle · 41 min" && idleText(120) == "Idle · 2 hr" && idleText(134) == "Idle · 2 hr 14 min")
         // past a day it's days and hours: the stale ones stand out by that alone
@@ -218,7 +230,7 @@ enum AgentChecks {
         assert(AgentBoard([reported!], now: began + 134 * 60).rows[0].stateText(began + 134 * 60) == "Idle · 2 hr 14 min")
         assert(AgentBoard() == AgentBoard([], now: at(0)))
         let four = AgentBoard([working("a"), working("b"), working("c"), waiting("d", .grok, since: 0)], now: at(1))
-        assert(four.bubbles.apps == [.grok, .codex, .codex, .codex] && four.bubbles.more == 0, "four fit; the one who needs you is in front")
+        assert(four.bubbles.apps == [.grok, .codex, .codex, .codex] && four.bubbles.colour == 4 && four.bubbles.more == 0, "four fit; the one who needs you is in front")
         // the minimized rail's tick: 4 pt for each who needs you, up to the rings' longest
         assert(AgentBoard([waiting("a", since: 0)], now: at(1)).tick == 8 && board.tick == 16)
         assert(AgentBoard((0..<9).map { waiting("a\($0)", since: 0) }, now: at(1)).tick == 20)

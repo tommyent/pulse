@@ -18,7 +18,7 @@ extension AgentBoard.Row {
     var place: String { agent.host.isEmpty ? pane : "\(pane) on \(agent.host)" }
 }
 
-/// The rail's agents ring: the active agents' icons as overlapping bubbles that fill it, the ring orange while one
+/// The rail's agents ring: the agents' icons as overlapping bubbles that fill it, idle ones grey, the ring orange while one
 /// waits for you and red when one has failed, a tick when one has just finished, and under it (grown) how many are
 /// working, or once one needs you, how many do.
 struct AgentsRing: View, Animatable {
@@ -52,7 +52,8 @@ struct AgentsRing: View, Animatable {
     }
 
     /// One agent is its plain icon, like any ring's logo. From two, each sits on its own disc; the first, who needs
-    /// you most, in front. With no active agent, a dimmed glyph keeps the rail's length.
+    /// you most, in front. Active agents are in colour and idle ones grey, behind them. With no agent at all, a
+    /// dimmed glyph keeps the rail's length.
     @ViewBuilder private var bubbles: some View {
         let shown = board.bubbles, count = shown.apps.count + (shown.more > 0 ? 1 : 0)
         if count == 0 {
@@ -60,14 +61,14 @@ struct AgentsRing: View, Animatable {
                 .font(.system(size: size * 0.3))
                 .foregroundStyle(Color.primary.opacity(0.5))
         } else if count == 1 {
-            BrandIcon(account: shown.apps[0].account, size: size * 0.4)
+            icon(0, shown, size: size * 0.4)
         } else {
             let places = AgentBoard.bubblePlaces(count), d = size * places.diameter
             ZStack {
                 ForEach(Array(places.centres.enumerated()), id: \.offset) { i, centre in
                     Group {
                         if i < shown.apps.count {
-                            BrandIcon(account: shown.apps[i].account, size: d * 0.66)
+                            icon(i, shown, size: d * 0.66)
                         } else {
                             // at the resting size there's room for the sign only
                             Text(size >= 40 ? "+\(shown.more)" : "+")
@@ -85,6 +86,13 @@ struct AgentsRing: View, Animatable {
                 }
             }
         }
+    }
+
+    /// An agent's app icon: in colour for an active agent, grey and dimmed for an idle one.
+    private func icon(_ i: Int, _ shown: (apps: [BreakAgent.App], colour: Int, more: Int), size: CGFloat) -> some View {
+        BrandIcon(account: shown.apps[i].account, size: size)
+            .grayscale(i < shown.colour ? 0 : 1)
+            .opacity(i < shown.colour ? 1 : 0.6)
     }
 
     private func badge(_ symbol: String) -> some View {
