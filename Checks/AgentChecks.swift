@@ -178,10 +178,24 @@ enum AgentChecks {
         let quiet = AgentBoard([working("w1"), working("w2", .claude)], now: at(20))
         assert(quiet.tone == .quiet && quiet.needsYou == 0 && !quiet.justFinished && quiet.summary == "2 working" && quiet.tick == 0)
         assert(quiet.bubbles.apps == [.codex, .claude] && quiet.bubbles.more == 0)
+        // the number under the ring: how many are working, until one needs you; then how many need you, on a ring
+        // that is orange or red. (It was only ever who needs you: "0" under a grey ring with two agents at work.)
+        assert(quiet.number == 2 && quiet.spoken == "2 working", "\(quiet.number)")
+        assert(answered.number == 1 && answered.tone == .waiting, "one waits and one works: the one who waits")
+        assert(board.number == 3 && board.tone == .failed && cleared.number == 2 && cleared.tone == .waiting)
+        assert(AgentBoard([working("w1"), working("w2"), working("w3"), finished("d1", since: 19), idle], now: at(20)).number == 3)
+        // nobody working or waiting: 0, which is then true. Finished and idle agents aren't in it
+        assert(later.number == 0 && unseen.number == 0 && AgentBoard().number == 0 && AgentBoard().spoken == "No active agents")
+        // a bubble for each active agent, whatever they do: two at work are two bubbles, never one plain icon; idle
+        // ones add none; past four, three and the rest as "+N"
+        for n in 0...7 {
+            let shown = AgentBoard((0..<n).map { working("w\($0)", .claude) } + [idle, stale], now: at(20)).bubbles
+            assert(shown.apps.count == (n > 4 ? 3 : n) && shown.more == (n > 4 ? n - 3 : 0), "\(n) working: \(shown)")
+        }
         // idle agents are listed and nothing more: no bubble, no number, no colour, no tick on the sliver
         let resting = AgentBoard([idle, stale], now: at(20))
         assert(resting.rows.map(\.id) == ["stale", "idle"] && resting.active.isEmpty && resting.bubbles.apps.isEmpty && resting.bubbles.more == 0)
-        assert(resting.needsYou == 0 && resting.needing.isEmpty && resting.tone == .quiet && !resting.justFinished && resting.tick == 0)
+        assert(resting.needsYou == 0 && resting.number == 0 && resting.needing.isEmpty && resting.tone == .quiet && !resting.justFinished && resting.tick == 0)
         assert(resting.summary == "2 idle" && resting.spoken == "No active agents, 2 idle")
         assert(AgentBoard([working("w1"), idle], now: at(20)).summary == "1 working", "the header names the idle only when nobody else is there")
         // the longest idle first, by the time Rex gives for the idle or finished state; one with no time last

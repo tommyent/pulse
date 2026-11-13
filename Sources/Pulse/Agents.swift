@@ -105,8 +105,11 @@ struct AgentBoard: Equatable {
     func count(_ state: State) -> Int { rows.filter { $0.state == state }.count }
     /// The rows without the idle ones: who the ring's bubbles stand for.
     var active: [Row] { rows.filter { $0.state != .idle } }
-    /// Waiting or failed: the number under the ring.
+    /// Waiting or failed.
     var needsYou: Int { count(.waiting) + count(.failed) }
+    /// The number under the ring: how many are working, until one needs you; then how many need you, which the
+    /// ring's orange or red says. 0 with nobody working or waiting, as the other rings always carry a number.
+    var number: Int { needsYou > 0 ? needsYou : count(.working) }
     var needing: [BreakAgent] { rows.filter { $0.state == .waiting || $0.state == .failed }.map(\.agent) }
     /// The ring's colour: red when any agent has failed, orange when one waits.
     var tone: Tone { count(.failed) > 0 ? .failed : count(.waiting) > 0 ? .waiting : .quiet }

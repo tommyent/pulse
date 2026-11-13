@@ -19,7 +19,8 @@ extension AgentBoard.Row {
 }
 
 /// The rail's agents ring: the active agents' icons as overlapping bubbles that fill it, the ring orange while one
-/// waits for you and red when one has failed, a tick when one has just finished, and under it (grown) how many need you.
+/// waits for you and red when one has failed, a tick when one has just finished, and under it (grown) how many are
+/// working, or once one needs you, how many do.
 struct AgentsRing: View, Animatable {
     var animatableData: CGFloat { get { size } set { size = newValue } }   // as RingView's
     let board: AgentBoard
@@ -43,7 +44,7 @@ struct AgentsRing: View, Animatable {
             .overlay(alignment: .topTrailing) { if board.justFinished { badge("checkmark") } }
             .overlay(alignment: .bottomTrailing) { if held { badge("bell.slash.fill") } }
             if showCount {
-                PercentText(text: "\(board.needsYou)", beside: beside)
+                PercentText(text: "\(board.number)", beside: beside)
                     .foregroundStyle(Color.primary)
                     .transition(.railExtra)
             }
