@@ -144,11 +144,12 @@ struct AgentBoard: Equatable {
     var tick: Double { needsYou == 0 ? 0 : min(20, 4 + 4 * Double(needsYou)) }
 
     /// Where `count` bubbles sit in the ring: each one's diameter, and their centres from the ring's centre, as
-    /// shares of the ring's size. One is the plain icon; from two, discs that overlap and fill the ring: side by side
-    /// on a slant, a triangle, a tilted square. All stay inside the ring's inner edge, 0.44 from the centre.
+    /// shares of the ring's size. One is a disc in the middle, so a lone agent doesn't pass for its app's usage ring;
+    /// from two, discs that overlap and fill the ring: side by side on a slant, a triangle, a tilted square. All stay
+    /// inside the ring's inner edge, 0.44 from the centre.
     static func bubblePlaces(_ count: Int) -> (diameter: Double, centres: [(x: Double, y: Double)]) {
         switch count {
-        case ...1: (0.40, [(0, 0)])
+        case ...1: (0.56, [(0, 0)])
         case 2: (0.46, [(-0.17, -0.05), (0.17, 0.05)])
         case 3: (0.42, [(-0.17, -0.11), (0.17, -0.09), (0, 0.19)])
         default: (0.37, [(-0.18, -0.151), (0.151, -0.18), (-0.151, 0.18), (0.18, 0.151)])

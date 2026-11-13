@@ -51,17 +51,15 @@ struct AgentsRing: View, Animatable {
         }
     }
 
-    /// One agent is its plain icon, like any ring's logo. From two, each sits on its own disc; the first, who needs
-    /// you most, in front. Active agents are in colour and idle ones grey, behind them. With no agent at all, a
-    /// dimmed glyph keeps the rail's length.
+    /// Each agent sits on its own disc, a lone one too: a plain icon would pass for its app's usage ring. The first,
+    /// who needs you most, is in front. Active agents are in colour and idle ones grey, behind them. With no agent
+    /// at all, a dimmed glyph keeps the rail's length.
     @ViewBuilder private var bubbles: some View {
         let shown = board.bubbles, count = shown.apps.count + (shown.more > 0 ? 1 : 0)
         if count == 0 {
             Image(systemName: "person.2.fill")
                 .font(.system(size: size * 0.3))
                 .foregroundStyle(Color.primary.opacity(0.5))
-        } else if count == 1 {
-            icon(0, shown, size: size * 0.4)
         } else {
             let places = AgentBoard.bubblePlaces(count), d = size * places.diameter
             ZStack {

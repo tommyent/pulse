@@ -235,6 +235,11 @@ enum AgentChecks {
         assert(AgentBoard([waiting("a", since: 0)], now: at(1)).tick == 8 && board.tick == 16)
         assert(AgentBoard((0..<9).map { waiting("a\($0)", since: 0) }, now: at(1)).tick == 20)
 
+        // a lone agent sits on a disc like the others, so it can't pass for its app's usage ring: one disc in the
+        // middle, larger than any of several, its icon (0.66 of the disc) about as large as the plain icon was
+        let lone = AgentBoard.bubblePlaces(1)
+        assert(lone.centres.count == 1 && lone.centres[0].x == 0 && lone.centres[0].y == 0)
+        assert(lone.diameter > AgentBoard.bubblePlaces(2).diameter && lone.diameter * 0.66 >= 0.36, "a lone agent's disc: \(lone.diameter)")
         // every bubble stays inside the ring's inner edge, and neighbours overlap without one hiding another
         for count in 1...4 {
             let places = AgentBoard.bubblePlaces(count)
