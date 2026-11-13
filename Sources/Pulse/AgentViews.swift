@@ -320,7 +320,7 @@ struct AgentSettingsSection: View {
                     Text("Needs Rex, which Pulse didn't find on this Mac. [Get Rex…](https://www.superlogical.com/rex)")
                 }
             }
-            Text("While this is on, Pulse reads each pane's label and status line through the rex command all day. It never starts a Rex server and saves nothing to disk. For idle agents on this Mac, the card also reads how full their context is from their own session files. A click on an agent shows its pane in Rex; nothing is answered from Pulse. Rex has its own tab marks, Dock badge, sounds and notifications: Pulse sends no notifications, and holds its own sound and alert while Rex is in front.")
+            Text("While this is on, Pulse reads each pane's label and status line through the rex command all day. It never starts a Rex server and saves nothing to disk. While the card is open, it also reads how full each idle agent's context is, for agents on this Mac: it asks macOS when the agent's process started and which files it has open, then reads token counts only from the agent's own session files. It reads no messages from them, keeps the numbers in memory only and needs no permission. A click on an agent shows its pane in Rex; nothing is answered from Pulse. Rex has its own tab marks, Dock badge, sounds and notifications: Pulse sends no notifications, and holds its own sound and alert while Rex is in front.")
                 .font(.caption).foregroundStyle(PulsePalette.secondary)
         }
         Group {

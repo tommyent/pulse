@@ -25,7 +25,7 @@ final class AgentsMonitor: ObservableObject {
     /// Idle agents' context, by block, where their session data could be found (`AgentContext`).
     @Published private(set) var contexts: [String: AgentContext] = [:]
 
-    private var contextRead: [String: Date] = [:]   // block → the idle spell (when it began) its context was read for
+    private var contextReads = AgentContext.Reads()   // which idle agents have been looked up for their idle spell
     private var readingContexts = false
     private weak var state: AppState?
     private var settings = AgentSettings()
@@ -152,24 +152,21 @@ final class AgentsMonitor: ObservableObject {
 
     // MARK: idle agents' context
 
-    /// The open card asks for this every half minute. Each idle agent on this Mac is read once for its idle spell: at
-    /// rest its context doesn't move. One that couldn't be read is tried again. Off the main thread, since it opens
-    /// the agents' session files.
+    /// The open card asks for this every half minute. Each idle agent on this Mac is looked up once for its idle
+    /// spell, found or not (`AgentContext.Reads`). Off the main thread, since it opens the agents' session files.
     func readContexts() {
-        let idle = board.rows.filter { $0.state == .idle }.map(\.agent)
-        let current = contexts.filter { id, _ in idle.contains { $0.id == id && $0.since == contextRead[id] } }
+        guard !readingContexts else { return }
+        let wanted = contextReads.wanted(among: board.rows.filter { $0.state == .idle }.map(\.agent))
+        let current = contexts.filter { contextReads.covers($0.key) }
         if current != contexts { contexts = current }   // an agent that ran again has a new context to read
-        contextRead = contextRead.filter { current[$0.key] != nil }
-        let wanted = idle.filter { $0.host.isEmpty && $0.pid != nil && $0.since != nil && current[$0.id] == nil }
-        guard !wanted.isEmpty, !readingContexts else { return }
+        guard !wanted.isEmpty else { return }
         readingContexts = true
         Task.detached(priority: .utility) {
             let read = wanted.map { ($0, AgentContext.read($0)) }
             await MainActor.run {
                 for (agent, context) in read {
-                    guard let context else { continue }
-                    self.contexts[agent.id] = context
-                    self.contextRead[agent.id] = agent.since
+                    self.contextReads.read(agent)
+                    if let context { self.contexts[agent.id] = context }
                 }
                 self.readingContexts = false
             }

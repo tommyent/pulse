@@ -460,6 +460,13 @@ enum AgentChecks {
         let named = write(transcript, ".claude/projects/-Users-example-code-app/\(session).jsonl")
         // the last reply of the main conversation: not a helper's, not a notice without tokens
         assert(read(idle(.claude)) == AgentContext(tokens: 84_000, window: nil))
+        // a second copy of the session in another folder: an old one can't be told from the live one, even when one
+        // of the two is in the folder named after the working folder
+        let stray = write(transcript.replacingOccurrences(of: "80000", with: "70000"), ".claude/projects/old-place/\(session).jsonl")
+        assert(read(idle(.claude)) == nil, "the same session's transcript in two folders")
+        try! fm.removeItem(at: stray)
+        assert(read(idle(.claude)) == AgentContext(tokens: 84_000, window: nil))
+        assert(AgentContext.claudeSession(fromRecord: Data(#"{"pid":7,"sessionId":"abc-1"}"#.utf8), pid: 7) == "abc-1")
         assert(AgentContext.claudeContext(Data("not json\n".utf8)) == nil && AgentContext.claudeContext(Data()) == nil)
         // no certain match, nothing shown: the process gone; its number reused by something started after the status;
         // a pane on another Mac; no process or no time in the status; a record that is another process's
@@ -494,6 +501,19 @@ enum AgentChecks {
         let second = write(#"{"type":"session_meta","payload":{"id":"t3","source":"cli"}}"# + "\n", ".codex/sessions/2026/11/12/rollout-c.jsonl").path
         open = [own, second]
         assert(read(idle(.codex)) == nil, "two conversations open in one process: which is the pane's can't be told")
+        // an open session file whose first line can't be read (it doesn't end within the first megabyte) might be a
+        // second conversation: nothing is shown, whatever the other file says
+        let unreadable = write(String(repeating: "x", count: (1 << 20) + 64) + "\n"
+            + #"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":11000},"model_context_window":100000}}}"# + "\n",
+            ".codex/sessions/2026/11/12/rollout-d.jsonl").path
+        open = [own, unreadable]
+        assert(read(idle(.codex)) == nil, "one file that can't be told apart")
+        open = [unreadable]
+        assert(read(idle(.codex)) == nil)
+        let notMeta = write(#"{"type":"something_else","payload":{}}"# + "\n", ".codex/sessions/2026/11/12/rollout-e.jsonl").path
+        open = [own, notMeta]
+        assert(read(idle(.codex)) == nil, "nor when a first line isn't the session's own description")
+        assert(AgentContext.codexIsOwnThread(nil) == nil && AgentContext.codexIsOwnThread(Data("{}".utf8)) == nil)
         open = [helper]
         assert(read(idle(.codex)) == nil)
         open = []
@@ -518,6 +538,31 @@ enum AgentChecks {
         assert(AgentContext.tail(long, 15).map { String(decoding: $0, as: UTF8.self) } == "third line\n")
         assert(AgentContext.tail(long, 1000).map { String(decoding: $0, as: UTF8.self) } == "first line\nsecond line\nthird line\n")
         assert(AgentContext.firstLine(long).map { String(decoding: $0, as: UTF8.self) } == "first line" && AgentContext.tail(home.appending(path: "none"), 10) == nil)
+
+        // each idle agent is looked up once for its idle spell, found or not: a miss would otherwise cost megabytes of
+        // transcript every half minute while the card is open
+        func resting(_ id: String, since: Double? = 10, pid: Int32? = 4242, host: String = "") -> BreakAgent {
+            BreakAgent(id: id, app: .claude, blocked: false, idle: true, host: host, since: since.map(at), pid: pid)
+        }
+        var reads = AgentContext.Reads()
+        let all = [resting("a"), resting("b"), resting("far", host: "studio"), resting("no-pid", pid: nil), resting("no-time", since: nil)]
+        let firstAsk = reads.wanted(among: all).map(\.id)
+        assert(firstAsk == ["a", "b"], "only agents on this Mac with a process and a time: \(firstAsk)")
+        reads.read(all[0])   // whether or not a number was found
+        assert(reads.covers("a") && !reads.covers("b"))
+        let secondAsk = reads.wanted(among: all).map(\.id)
+        assert(secondAsk == ["b"], "a miss isn't read again while the agent stays idle: \(secondAsk)")
+        reads.read(all[1])
+        let thirdAsk = reads.wanted(among: all).map(\.id)
+        assert(thirdAsk.isEmpty)
+        // it ran and went idle again: a new spell, looked up again; the other one's stays
+        let anew = reads.wanted(among: [resting("a", since: 30), resting("b")]).map(\.id)
+        assert(anew == ["a"] && !reads.covers("a") && reads.covers("b"))
+        // no longer idle: forgotten, and looked up afresh when it rests again
+        let afterLeaving = reads.wanted(among: []).map(\.id)
+        assert(afterLeaving.isEmpty && !reads.covers("b"))
+        let back = reads.wanted(among: [resting("b")]).map(\.id)
+        assert(back == ["b"])
 
         // what macOS says about a process: this check's own
         let me = getpid(), mine = fm.temporaryDirectory.appending(path: "pulse-open-\(UUID().uuidString).txt")

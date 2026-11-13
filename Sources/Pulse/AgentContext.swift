@@ -45,8 +45,11 @@ struct AgentContext: Equatable {
             // a reply's line is usually near the end; one long tool result can push it further back
             return tail(transcript, 512 << 10).flatMap(claudeContext) ?? tail(transcript, 4 << 20).flatMap(claudeContext)
         case .codex:
-            let own = processes.openFiles(pid).filter { $0.contains("/.codex/sessions/") && $0.hasSuffix(".jsonl") }
-                .filter { firstLine(URL(fileURLWithPath: $0)).map(codexIsOwnThread) == true }
+            let files = processes.openFiles(pid).filter { $0.contains("/.codex/sessions/") && $0.hasSuffix(".jsonl") }
+            let kinds = files.map { codexIsOwnThread(firstLine(URL(fileURLWithPath: $0))) }
+            // one that can't be told apart might be a second conversation: then no number at all
+            guard !kinds.contains(nil) else { return nil }
+            let own = zip(files, kinds).filter { $0.1 == true }.map { $0.0 }
             guard own.count == 1 else { return nil }
             return tail(URL(fileURLWithPath: own[0]), 512 << 10).flatMap(codexContext)
         case .grok:
@@ -59,24 +62,42 @@ struct AgentContext: Equatable {
         }
     }
 
+    /// Which idle agents' context has been looked for. Each is read once for its idle spell, found or not: at rest
+    /// neither its context nor the reason nothing was found changes, and a miss costs megabytes of transcript.
+    struct Reads {
+        private var spells: [String: Date] = [:]   // block → the idle spell (when it began) already read for
+
+        /// Forgets the agents that are no longer idle, or went idle anew, and returns the ones still to read: on this
+        /// Mac, with a process and a time to check it by.
+        mutating func wanted(among idle: [BreakAgent]) -> [BreakAgent] {
+            let now = Dictionary(idle.compactMap { agent in agent.since.map { (agent.id, $0) } }) { first, _ in first }
+            spells = spells.filter { now[$0.key] == $0.value }
+            return idle.filter { $0.host.isEmpty && $0.pid != nil && $0.since != nil && spells[$0.id] == nil }
+        }
+
+        /// Whether a number read earlier still belongs to the agent's idle spell.
+        func covers(_ id: String) -> Bool { spells[id] != nil }
+
+        mutating func read(_ agent: BreakAgent) { spells[agent.id] = agent.since }
+    }
+
     // MARK: Claude Code
 
-    /// `~/.claude/sessions/<pid>.json`: the session that process runs, when the record is that process's own.
-    static func claudeSession(fromRecord data: Data, pid: Int32) -> (id: String, cwd: String)? {
+    /// `~/.claude/sessions/<pid>.json`: the id of the session that process runs, when the record is that process's own.
+    static func claudeSession(fromRecord data: Data, pid: Int32) -> String? {
         guard let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               record["pid"] as? Int == Int(pid), let id = record["sessionId"] as? String,
               !id.isEmpty, id.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }) else { return nil }   // a file name, never a path
-        return (id, record["cwd"] as? String ?? "")
+        return id
     }
 
-    /// The session's transcript: `<session>.jsonl` in the project folder named after its working folder, or in the one
-    /// project folder that has it. nil when it's in none, or in several.
-    static func claudeTranscript(_ session: (id: String, cwd: String), home: URL) -> URL? {
+    /// The session's transcript: `<session>.jsonl` in the one project folder that has it. nil when it's in none, or in
+    /// several: an old copy left in another folder can't be told from the live one. Every folder is looked in, the
+    /// one named after the working folder included.
+    static func claudeTranscript(_ session: String, home: URL) -> URL? {
         let projects = home.appending(path: ".claude/projects"), fm = FileManager.default
-        let named = projects.appending(path: String(session.cwd.map { $0.isLetter || $0.isNumber ? $0 : "-" })).appending(path: "\(session.id).jsonl")
-        if !session.cwd.isEmpty, fm.fileExists(atPath: named.path) { return named }
         let found = ((try? fm.contentsOfDirectory(atPath: projects.path)) ?? [])
-            .map { projects.appending(path: $0).appending(path: "\(session.id).jsonl") }
+            .map { projects.appending(path: $0).appending(path: "\(session).jsonl") }
             .filter { fm.fileExists(atPath: $0.path) }
         return found.count == 1 ? found[0] : nil
     }
@@ -98,10 +119,10 @@ struct AgentContext: Equatable {
     // MARK: Codex
 
     /// A session file's first line: true for the conversation itself, false for a helper's thread, which the same
-    /// process also keeps open.
-    static func codexIsOwnThread(_ firstLine: Data) -> Bool {
-        guard let entry = try? JSONSerialization.jsonObject(with: firstLine) as? [String: Any],
-              entry["type"] as? String == "session_meta", let meta = entry["payload"] as? [String: Any] else { return false }
+    /// process also keeps open, and nil when the line can't be read or isn't the session's own description.
+    static func codexIsOwnThread(_ firstLine: Data?) -> Bool? {
+        guard let firstLine, let entry = try? JSONSerialization.jsonObject(with: firstLine) as? [String: Any],
+              entry["type"] as? String == "session_meta", let meta = entry["payload"] as? [String: Any] else { return nil }
         return meta["parent_thread_id"] == nil && !(meta["source"] is [String: Any])
     }
 
