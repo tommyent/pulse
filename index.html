@@ -79,7 +79,7 @@ h1 em { font-style: normal; color: var(--bar); }
 .download svg { width: 1.25rem; height: 1.25rem; }
 .download small { font-weight: 500; }
 .textlink { font-weight: 600; }
-.badge { margin-top: 1.4rem; }
+.badge { margin-top: 1.4rem; display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1.25rem; }
 .badge img { display: block; }
 .specs { margin-top: 1rem; font-size: .95rem; color: var(--faint); }
 .live-note { margin-top: 2.6rem; font-size: .9rem; color: var(--faint); max-width: 44ch; }
@@ -260,7 +260,8 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
     <a class="download" href="https://github.com/tommyent/pulse/releases/download/v0.4.3/Pulse-0.4.3.dmg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg>Download for Mac <small>v0.4.3</small></a>
     <a class="textlink" href="https://github.com/tommyent/pulse">Source on GitHub</a>
   </div>
-  <p class="badge"><a href="https://macpip.com/apps/pulse?ref=badge"><img src="https://macpip.com/badge/pulse.svg?theme=dark" width="222" height="58" alt="Listed on MacPip"></a></p>
+  <p class="badge"><a href="https://macpip.com/apps/pulse?ref=badge"><img src="https://macpip.com/badge/pulse.svg?theme=dark" width="182" height="58" alt="Listed on MacPip"></a>
+    <a href="https://macbase.app/apps/pulse-2?ref=badge" target="_blank" rel="noopener"><img src="https://macbase.app/badge/featured-on-macbase-dark.svg" alt="Pulse is featured on MacBase" height="72" style="height:72px;width:auto"></a></p>
   <p class="specs">macOS 26 or later · Apple silicon · signed and notarized · free and open source</p>
   <p class="live-note">That rail at the edge of this page is Pulse, drawn the way the app draws it, with sample numbers. Point at it to see them, or push it into the edge to tuck it away.</p>
 </section>
