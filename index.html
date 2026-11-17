@@ -195,10 +195,15 @@ kbd { font: 600 .92em Geist; padding: .05em .4em; border-radius: 6px; background
 [data-film="on"] .screen .film { display: block; }
 [data-film="on"] .screen .still { display: none; }
 .under { max-width: 1060px; display: flex; justify-content: space-between; align-items: start; gap: 1.5rem 3rem; margin-top: 1.4rem; flex-wrap: wrap; }
-.sound { display: none; align-items: center; gap: .5rem; padding: .55rem .95rem; border-radius: 999px; border: 1px solid rgba(255,255,255,.26); background: rgba(255,255,255,.06); color: var(--text); font: 600 .95rem Geist; cursor: pointer; }
-[data-film="on"] .sound { display: inline-flex; }
-.sound:hover { background: rgba(255,255,255,.12); }
-.sound svg { width: 1.05rem; height: 1.05rem; }
+.sound, .pause { display: none; align-items: center; gap: .5rem; padding: .55rem .95rem; border-radius: 999px; border: 1px solid rgba(255,255,255,.26); background: rgba(255,255,255,.06); color: var(--text); font: 600 .95rem Geist; cursor: pointer; }
+[data-film="on"] .sound, .pause { display: inline-flex; }
+.sound:hover, .pause:hover { background: rgba(255,255,255,.12); }
+.sound svg, .pause svg { width: 1.05rem; height: 1.05rem; }
+
+/* the intro film, just under the hero: muted, looping, with a pause button (moving content needs one) */
+.reel { padding: 0 calc(130px + 4vw) 0 7vw; scroll-margin-top: 4rem; }   /* #intro clears the sticky menu bar */
+.reel .screen video { height: auto; background: var(--night); }
+.pause[data-state="paused"] .i-pause, .pause[data-state="playing"] .i-play { display: none; }
 .break-copy { max-width: 1060px; display: flex; justify-content: space-between; align-items: end; gap: 2rem 4rem; flex-wrap: wrap; margin-top: 2.6rem; }
 .break-copy p { margin-top: 0; }
 .caption { color: var(--faint); font-size: .95rem; }
@@ -219,7 +224,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
 @media (max-width: 760px) {
   .menubar { padding: 0 1rem; }
   .menubar nav a:not(.brand) { display: none; }
-  .desktop, section.band, .break, .facts, .closing, footer { padding-left: 1.25rem; padding-right: 1.25rem; }
+  .desktop, .reel, section.band, .break, .facts, .closing, footer { padding-left: 1.25rem; padding-right: 1.25rem; }
   .desktop { min-height: auto; padding-top: 12vh; padding-bottom: 12vh; }
   section.band { padding-top: 12vh; }
   .feature { grid-template-columns: 1fr; gap: 2.4rem; }
@@ -259,11 +264,25 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
   <div class="actions">
     <a class="download" href="https://github.com/tommyent/pulse/releases/download/v0.4.3/Pulse-0.4.3.dmg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg>Download for Mac <small>v0.4.3</small></a>
     <a class="textlink" href="https://github.com/tommyent/pulse">Source on GitHub</a>
+    <a class="textlink" href="#intro">Watch the 30-second intro</a>
   </div>
   <p class="badge"><a href="https://macpip.com/apps/pulse?ref=badge"><img src="https://macpip.com/badge/pulse.svg?theme=dark" width="182" height="58" alt="Listed on MacPip"></a>
     <a href="https://macbase.app/apps/pulse-2?ref=badge" target="_blank" rel="noopener"><img src="https://macbase.app/badge/featured-on-macbase-dark.svg" alt="Pulse is featured on MacBase" height="72" style="height:72px;width:auto"></a></p>
-  <p class="specs">macOS 26 or later · Apple silicon · signed and notarized · free and open source</p>
+  <p class="specs">Tested on macOS 26 and 27 · Apple silicon · signed and notarized · free and open source</p>
   <p class="live-note">That rail at the edge of this page is Pulse, drawn the way the app draws it, with sample numbers. Point at it to see them, or push it into the edge to tuck it away.</p>
+</section>
+
+<section class="reel" id="intro" aria-label="Pulse in 30 seconds">
+  <div class="screen">
+    <video class="intro" autoplay muted loop playsinline preload="metadata" poster="assets/pulse-intro-poster.webp" width="1920" height="1080" aria-label="Pulse intro video" aria-describedby="reel-caption">
+      <source src="assets/pulse-intro.mp4" type="video/mp4">
+    </video>
+    <script>if (matchMedia("(prefers-reduced-motion: reduce)").matches) { const v = document.currentScript.previousElementSibling; v.removeAttribute("autoplay"); v.preload = "none"; }</script>
+  </div>
+  <div class="under">
+    <p class="caption" id="reel-caption">Pulse in 30 seconds, without sound: the rings, a usage card, a chat with the Codex pet and a break.</p>
+    <button class="pause" type="button" data-state="playing"><svg class="i-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg><svg class="i-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg><span>Pause</span></button>
+  </div>
 </section>
 
 <section class="band" id="rings">
@@ -351,7 +370,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
     <a class="textlink" href="https://github.com/tommyent/pulse/releases/tag/v0.4.3">Release notes</a>
     <a class="textlink" href="https://github.com/tommyent/pulse">Source</a>
   </div>
-  <p class="meta">For Apple silicon Macs on macOS 26 or later. Open the DMG and drag Pulse to Applications. To check the download, save <a href="https://github.com/tommyent/pulse/releases/download/v0.4.3/Pulse-0.4.3.dmg.sha256">Pulse-0.4.3.dmg.sha256</a> beside it and run <code>shasum -a 256 -c Pulse-0.4.3.dmg.sha256</code>.</p>
+  <p class="meta">For Apple silicon Macs; tested on macOS 26 and 27. Open the DMG and drag Pulse to Applications. To check the download, save <a href="https://github.com/tommyent/pulse/releases/download/v0.4.3/Pulse-0.4.3.dmg.sha256">Pulse-0.4.3.dmg.sha256</a> beside it and run <code>shasum -a 256 -c Pulse-0.4.3.dmg.sha256</code>.</p>
 </section>
 </main>
 
@@ -415,6 +434,17 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
       sound.querySelector("span").textContent = video.muted ? "Sound off" : "Sound on";
     });
   }
+
+  // the intro: its button says what a click will do; with reduced motion it starts on the poster (autoplay removed inline)
+  const intro = document.querySelector(".intro"), pause = document.querySelector(".pause");
+  const state = () => {
+    pause.dataset.state = intro.paused ? "paused" : "playing";
+    pause.querySelector("span").textContent = intro.paused ? "Play" : "Pause";
+  };
+  // the markup says "Pause"; correct it once there's data, as a browser may still refuse to autoplay (Low Power Mode)
+  for (const e of ["play", "pause", "loadeddata"]) intro.addEventListener(e, state);
+  if (!intro.autoplay) state();
+  pause.addEventListener("click", () => intro.paused ? intro.play().catch(() => {}) : intro.pause());
 
   // the rail: rings as RingView draws them (52 pt, outer 0.12, inner 0.07 inset 0.16, cap disc 0.61)
   const C = r => 2 * Math.PI * r;
