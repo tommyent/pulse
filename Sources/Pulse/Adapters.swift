@@ -712,7 +712,7 @@ enum AntigravityAdapter {
     static let noUsage = "Antigravity CLI returned no usage. Pulse checks again once agy has run, or click Refresh"
     static let signIn = "Run agy once to sign in to Antigravity, then click Refresh"
     static let offline = "Offline, Antigravity check skipped"
-    static let tooOld = "Update the Antigravity CLI (Pulse is tested with agy 1.5.11 and runs its usage report with --log-file)"
+    static let tooOld = "Update the Antigravity CLI (Pulse is tested with agy 1.5.11)"
 
     /// What a fetch's snapshot means for `AgyPause`. Only the snapshots named here are anything but a failed usage
     /// attempt, so any other reason, `noAnswer` and reasons added later included, holds agy back.
