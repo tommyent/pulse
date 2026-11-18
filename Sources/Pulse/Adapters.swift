@@ -626,26 +626,29 @@ enum GrokAdapter {
 /// When Antigravity polling pauses, and when a manual Refresh lifts it. A sign-out or a stalled agy run pauses it (agy
 /// would open a browser sign-in each poll). A Refresh runs it again, even one clicked while a run is in flight: that
 /// run's result doesn't re-pause before the Refresh's own pass, though a second failure does.
-/// A stall, unlike a sign-out, also lifts by itself: when agy has started a session of its own since the stalled run
-/// ended (`lastSession`), or once, half an hour on, since a stall is as often the network as a sign-in.
+/// A stall, unlike a sign-out, also lifts by itself: when agy's activity marker (`sessionMarker`) is no longer the one
+/// seen as the stalled run ended, or once, half an hour on, since a stall is as often the network as a sign-in. The
+/// marker is only compared for a change, never against the clock, and the half hour is on the monotonic clock, so
+/// setting the Mac's clock back or forward can neither fake activity nor move the extra run.
 struct AgyPause {
+    typealias Instant = ContinuousClock.Instant
     private(set) var paused = false
     private var retry = false
-    private var stalledAt: Date?   // when the last stalled run ended
+    private var stall: (at: Instant, marker: Date?)?   // the last stalled run: when it ended, and agy's marker then
     private var retried = false   // this stall already had its one run without evidence
     mutating func manualRefresh(whileRefreshing: Bool) { paused = false; retried = false; if whileRefreshing { retry = true } }
-    mutating func passStarted(now: Date = .now, lastSession: Date? = nil) {
+    mutating func passStarted(now: Instant = .now, marker: Date?) {
         retry = false
-        guard paused, let stalledAt else { return }
-        if let lastSession, lastSession > stalledAt {
+        guard paused, let stall else { return }
+        if marker != stall.marker {
             paused = false; retried = false
-        } else if !retried, now.timeIntervalSince(stalledAt) >= 30 * 60 {
+        } else if !retried, now - stall.at >= .seconds(30 * 60) {
             paused = false; retried = true
         }
     }
-    mutating func update(with snap: AccountSnapshot, at now: Date = .now) {
+    mutating func update(with snap: AccountSnapshot, now: Instant = .now, marker: Date?) {
         paused = AntigravityAdapter.pausesPolling(snap) && !retry
-        if snap.detail == AntigravityAdapter.stalled { stalledAt = now } else { stalledAt = nil; retried = false }
+        if snap.detail == AntigravityAdapter.stalled { stall = (now, marker) } else { stall = nil; retried = false }
     }
 }
 
@@ -661,9 +664,10 @@ enum AntigravityAdapter {
 
     static func pausesPolling(_ snap: AccountSnapshot) -> Bool { snap.health == .needsAuth || snap.detail == stalled }
 
-    /// When agy last started a session that logs to its own folder: each adds a file there. Pulse's runs pass
-    /// `--log-file`, so they never do, and a stalled run's own file would predate its stall anyway.
-    static func lastSessionStarted() -> Date? {
+    /// agy's activity marker: the modification date of its own log folder, which each session that logs there changes
+    /// by adding a file (agy's log pruning changes it too, also at a session's start). Pulse's runs pass `--log-file`,
+    /// so they never do. Only a change means anything; the date itself may be ahead of or behind the clock.
+    static func sessionMarker() -> Date? {
         try? home.appending(path: ".gemini/antigravity-cli/log").resourceValues(forKeys: [.contentModificationDateKey])
             .contentModificationDate
     }

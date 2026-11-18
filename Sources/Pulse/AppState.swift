@@ -243,13 +243,13 @@ final class AppState: ObservableObject {
         refreshing = true
         repeat {
             refreshRequested = false
-            agy.passStarted(lastSession: AntigravityAdapter.lastSessionStarted())
+            agy.passStarted(marker: AntigravityAdapter.sessionMarker())
             await withTaskGroup(of: AccountSnapshot?.self) { group in
                 for id in enabledAccounts where !(id == .antigravity && agy.paused) {
                     group.addTask { [fetches] in await fetches.answer(id) }
                 }
                 for await case let snap? in group {
-                    if snap.id == .antigravity { agy.update(with: snap) }
+                    if snap.id == .antigravity { agy.update(with: snap, marker: AntigravityAdapter.sessionMarker()) }
                     // keep last good windows for stale display instead of blanking the card
                     if snap.windows.isEmpty, let old = snapshots[snap.id], !old.windows.isEmpty,
                        snap.health == .providerError {
