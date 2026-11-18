@@ -218,6 +218,8 @@ enum SettingsStateChecks {
         let reread = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(groove))
         assert(reread.skin == "groove" && PulseSkin.named(reread.skin) == .groove, "Groove stays picked after a relaunch")
         assert(PulseSkin.named("a-skin-this-version-lacks") == .classic, "an unknown skin falls back to Classic")
+        assert(PulseSkinSet.named("a-skin-this-version-lacks").name == "classic" && PulseSkinSet.named(nil).name == "classic",
+               "the Skin picker shows Classic for a missing or unknown name, as it draws")
 
         for skin in PulseSkinSet.builtIn {
             let json = try! JSONEncoder().encode(skin)

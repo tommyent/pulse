@@ -1277,7 +1277,7 @@ struct SettingsView: View {
                     if loginItem == .requiresApproval {
                         Button("Allow Pulse in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
                     }
-                    Picker("Skin", selection: Binding(get: { state.persisted.skin ?? PulseSkinSet.classic.name },
+                    Picker("Skin", selection: Binding(get: { PulseSkinSet.named(state.persisted.skin).name },   // a name this version lacks shows as Classic, as it draws
                                                       set: { state.persisted.skin = $0 == PulseSkinSet.classic.name ? nil : $0 })) {
                         Text("Classic").tag(PulseSkinSet.classic.name)
                         Text("Groove").tag(PulseSkinSet.groove.name)
