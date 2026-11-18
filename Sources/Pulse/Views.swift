@@ -366,8 +366,7 @@ struct WindowRow: View {
                 if let groove = skin.groove {
                     GrooveBar(groove: groove, value: value,
                               colour: window.isNearLimit ? skin.alert : dim ? tint.mix(with: groove.secondBarGround.color, by: 0.5) : tint)
-                        .accessibilityElement()
-                        .accessibilityValue("\(Int(value)) percent")
+                        .accessibilityRepresentation { ProgressView(value: value, total: 100) }   // as Classic's bar reads
                 } else {
                     ProgressView(value: value, total: 100)
                         .tint(window.isNearLimit ? .red : tint.opacity(dim ? 0.5 : 1))
