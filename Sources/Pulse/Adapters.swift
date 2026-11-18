@@ -756,12 +756,16 @@ enum AntigravityAdapter {
             snap.detail = offline
             return snap
         }
-        // agy's log goes in the folder `run` removes, not one more file per refresh in ~/.gemini. An older agy that refuses the flag runs without it.
-        let usage = ["-p", "/usage", "--output-format", "json", "--print-timeout", "45s"]
-        var answer = await run(agy, usage + ["--log-file", "agy.log"], timeout: .seconds(60))
-        if let refused = answer, !refused.killed, String(decoding: refused.err, as: UTF8.self).contains("not defined") {
-            answer = await run(agy, usage, timeout: .seconds(60))
-        }
+        return await usage(agy, into: snap)
+    }
+
+    /// The usage run itself. Its log always goes to `agy.log` in the folder `run` removes, never to agy's own log
+    /// folder, so none of Pulse's runs can change the activity marker (`sessionMarker`), nor add a file per refresh
+    /// in ~/.gemini. An agy that refuses `--log-file` gives no report: a failure like any other, its output still read.
+    static func usage(_ agy: URL, into snap: AccountSnapshot) async -> AccountSnapshot {
+        var snap = snap
+        let answer = await run(agy, ["-p", "/usage", "--output-format", "json", "--print-timeout", "45s",
+                                     "--log-file", "agy.log"], timeout: .seconds(60))
         guard let report = answer else {
             snap.detail = stalled   // couldn't be started safely: fail closed
             return snap

@@ -405,6 +405,62 @@ enum SecurityChecks {
         Thread.sleep(forTimeInterval: 0.3)
         assert(agyRun("echo ok").map { String(decoding: $0.out, as: UTF8.self) } == "ok\n"
                && AntigravityAdapter.survivors.withLock { $0.isEmpty }, "once it's gone, runs start again")
+        // Sol's round-4 probe: an agy that refuses --log-file. Pulse used to run it again without the flag, writing to
+        // agy's own log folder, so its own run could look like the owner's and admit the next. Now it runs once,
+        // with the flag, and what it printed is still read. A scratch folder stands in for agy's log folder.
+        let fakeLogs = dir.appendingPathComponent("fake-default-logs"), calls = dir.appendingPathComponent("calls")
+        let oldAgy = dir.appendingPathComponent("old-agy")
+        try fm.createDirectory(at: fakeLogs, withIntermediateDirectories: false)
+        func mark() -> Date? {   // a fresh URL each read, as sessionMarker() makes: a URL caches its resource values
+            try? URL(fileURLWithPath: fakeLogs.path).resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        }
+        func standIn(refusing refusal: String) throws {
+            try Data("""
+                #!/bin/sh
+                echo run >> '\(calls.path)'
+                for a in "$@"; do [ "$a" = --log-file ] && { printf '%s\\n' '\(refusal)' >&2; exit 2; }; done
+                printf '%s\\n' 'Opening browser to authenticate with Google...' > '\(fakeLogs.path)/run-$$.log'
+                exit 1
+                """.utf8).write(to: oldAgy)
+            try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: oldAgy.path)
+        }
+        func usage() -> AccountSnapshot {
+            let done = DispatchSemaphore(value: 0)
+            nonisolated(unsafe) var snap = agSnap(.providerError, nil)
+            let start = snap   // made here: the detached task can't call back into main, which waits on it
+            Task.detached {
+                snap = await AntigravityAdapter.usage(oldAgy, into: start)
+                done.signal()
+            }
+            done.wait()
+            return snap
+        }
+        func runs() -> Int { ((try? String(contentsOf: calls, encoding: .utf8)) ?? "").split(separator: "\n").count }
+        try standIn(refusing: "flag provided but not defined: --log-file")
+        let logsBefore = mark()
+        let refused = usage()
+        assert(refused.detail == AntigravityAdapter.noUsage && AntigravityAdapter.outcome(of: refused) == .failed,
+               "an agy that refuses --log-file is a failed attempt (\(refused.detail ?? "nil"))")
+        assert(runs() == 1 && mark() == logsBefore && (try? fm.contentsOfDirectory(atPath: fakeLogs.path))?.isEmpty == true,
+               "it runs once, with the flag, and never writes to agy's own log folder")
+        try standIn(refusing: "flag provided but not defined: --log-file. Please sign in first")
+        assert(usage().health == .needsAuth, "a refusal's own output is still read for a sign-in")
+        // The gate as Sol drove it: budget spent, one change made by the owner, then every completion read failing.
+        try standIn(refusing: "flag provided but not defined: --log-file")
+        var gate = AgyPause()
+        let emptyRun = agSnap(.providerError, AntigravityAdapter.noUsage)
+        gate.passStarted(now: t0, marker: mark()); gate.update(with: emptyRun, now: t0, marker: mark())
+        gate.passStarted(now: at(1800), marker: mark()); assert(!gate.paused)
+        gate.update(with: emptyRun, now: at(1800), marker: mark())
+        try Data("finished".utf8).write(to: fakeLogs.appendingPathComponent("manual.log"))   // the owner's own session
+        var admitted = 0
+        for poll in 1...5 {
+            gate.passStarted(now: at(1800 + poll * 120), marker: mark())
+            guard !gate.paused else { continue }
+            admitted += 1
+            gate.update(with: usage(), now: at(1800 + poll * 120), marker: nil)
+        }
+        assert(admitted == 1, "the owner's change admits one run, and Pulse's own runs never admit another (\(admitted))")
         let netStale = agSnap(.providerError, AntigravityAdapter.networkTimeout).staleKeeping(good)
         assert(netStale.health == .stale && netStale.windows.count == 1 && netStale.healthMessage?.contains("(network)") == true,
                "a network timeout keeps the last windows, stale, with its reason (got \(netStale.healthMessage ?? "nil"))")
