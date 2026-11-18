@@ -264,6 +264,21 @@ enum SettingsStateChecks {
         assert(contrast.accents == PulseSkin.classic.accents && contrast.groove?.wall == nil && contrast.ink.primary == "#FFFFFF")
         assert(contrast.groove?.raise == PulseSkin.groove.groove?.raise, "the slab keeps its shape")
 
+        // A Groove bar at 0 shows no fill, not a dot; at 50 the fill starts at the slot's left end
+        for (value, lit) in [(0.0, false), (50, true)] {
+            let bar = ImageRenderer(content: GrooveBar(groove: PulseSkin.groove.groove!, value: value, colour: Color(rgb: 0xFF0000))
+                .frame(width: 200).padding(8).background(Color.black))
+            bar.scale = 2
+            let image = bar.cgImage!
+            let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)!
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            // the dot's middle: 8 pt padding, 2 pt inset, half the 6 pt fill, at 2x
+            let pixel = context(ctx, x: (8 + 2 + 3) * 2, y: image.height / 2, width: image.width)
+            assert((pixel[0] > 150) == lit, "Groove bar at \(value): \(pixel)")
+        }
+
         // A Groove ring's empty channel is its dark floor, not Classic's grey track, over a light backdrop too
         let renderer = ImageRenderer(content: RingView(account: .claude, percent: 0, size: 52, showPercent: false).padding(8).background(Color.white)
             .environment(\.colorScheme, .dark).environment(\.pulseSkin, .groove))
@@ -277,6 +292,10 @@ enum SettingsStateChecks {
         let x = Int((8 + 26 + 0.465 * 52) * 2), y = image.height / 2
         let floor = Array(UnsafeBufferPointer(start: context.data!.assumingMemoryBound(to: UInt8.self).advanced(by: (y * image.width + x) * 4), count: 4))
         assert(floor[3] == 255 && floor[0] < 30 && floor[1] < 30 && floor[2] < 30, "an empty Groove channel is dark and opaque: \(floor)")
+    }
+
+    private static func context(_ ctx: CGContext, x: Int, y: Int, width: Int) -> [UInt8] {
+        Array(UnsafeBufferPointer(start: ctx.data!.assumingMemoryBound(to: UInt8.self).advanced(by: (y * width + x) * 4), count: 4))
     }
 
     @MainActor private static func checkTrackRendering() {

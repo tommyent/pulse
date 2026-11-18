@@ -505,9 +505,12 @@ struct GrooveBar: View {
             .frame(height: groove.barSlot)
             .overlay(alignment: .leading) {
                 GeometryReader { geo in
-                    RoundedRectangle(cornerRadius: groove.barRadius - 2)
-                        .fill(colour.skinShadows(inner: groove.fillInner, drop: [groove.fillDrop]))
-                        .frame(width: max(groove.barFill, geo.size.width * max(0, min(value, 100)) / 100))
+                    // nothing at 0, as Classic's bar; any use at all shows at least a dot
+                    if value > 0 {
+                        RoundedRectangle(cornerRadius: groove.barRadius - 2)
+                            .fill(colour.skinShadows(inner: groove.fillInner, drop: [groove.fillDrop]))
+                            .frame(width: max(groove.barFill, geo.size.width * min(value, 100) / 100))
+                    }
                 }
                 .padding(inset)
             }
