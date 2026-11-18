@@ -163,7 +163,7 @@ final class AppState: ObservableObject {
     @Published var menuOpen = false
     @Published var settingsTab = "General"   // Break settings… opens Settings at Breaks
     private var refreshRequested = false
-    private var agy = AgyPause()   // agy signed out or stalled: only a manual refresh runs it again
+    private var agy = AgyPause()   // agy signed out or stalled: a manual refresh, or for a stall agy's own use, runs it again
     private let fetches = ProviderFetches { await fetchSnapshot($0) }
     private var canSave = true   // false: saving now could erase settings Pulse couldn't read or keep a copy of
 
@@ -243,7 +243,7 @@ final class AppState: ObservableObject {
         refreshing = true
         repeat {
             refreshRequested = false
-            agy.passStarted()
+            agy.passStarted(lastSession: AntigravityAdapter.lastSessionStarted())
             await withTaskGroup(of: AccountSnapshot?.self) { group in
                 for id in enabledAccounts where !(id == .antigravity && agy.paused) {
                     group.addTask { [fetches] in await fetches.answer(id) }

@@ -626,23 +626,45 @@ enum GrokAdapter {
 /// When Antigravity polling pauses, and when a manual Refresh lifts it. A sign-out or a stalled agy run pauses it (agy
 /// would open a browser sign-in each poll). A Refresh runs it again, even one clicked while a run is in flight: that
 /// run's result doesn't re-pause before the Refresh's own pass, though a second failure does.
+/// A stall, unlike a sign-out, also lifts by itself: when agy has started a session of its own since the stalled run
+/// ended (`lastSession`), or once, half an hour on, since a stall is as often the network as a sign-in.
 struct AgyPause {
     private(set) var paused = false
     private var retry = false
-    mutating func manualRefresh(whileRefreshing: Bool) { paused = false; if whileRefreshing { retry = true } }
-    mutating func passStarted() { retry = false }
-    mutating func update(with snap: AccountSnapshot) { paused = AntigravityAdapter.pausesPolling(snap) && !retry }
+    private var stalledAt: Date?   // when the last stalled run ended
+    private var retried = false   // this stall already had its one run without evidence
+    mutating func manualRefresh(whileRefreshing: Bool) { paused = false; retried = false; if whileRefreshing { retry = true } }
+    mutating func passStarted(now: Date = .now, lastSession: Date? = nil) {
+        retry = false
+        guard paused, let stalledAt else { return }
+        if let lastSession, lastSession > stalledAt {
+            paused = false; retried = false
+        } else if !retried, now.timeIntervalSince(stalledAt) >= 30 * 60 {
+            paused = false; retried = true
+        }
+    }
+    mutating func update(with snap: AccountSnapshot, at now: Date = .now) {
+        paused = AntigravityAdapter.pausesPolling(snap) && !retry
+        if snap.detail == AntigravityAdapter.stalled { stalledAt = now } else { stalledAt = nil; retried = false }
+    }
 }
 
 /// The Antigravity CLI's own usage report (`agy -p /usage`). agy asks Google as itself, so Pulse never
 /// reads the Google token; Google's quota API refuses that token from any other client. The report is
 /// a local command: no model prompt, no tokens, no conversation.
 enum AntigravityAdapter {
-    /// A run Pulse had to kill: agy waits there for a browser sign-in it opened itself. AppState stops
-    /// polling agy on this or needsAuth until a manual refresh, so it can't open a tab every poll.
+    /// A run Pulse had to kill: agy may wait there for a browser sign-in it opened itself. AppState stops
+    /// polling agy on this or needsAuth (`AgyPause`), so it can't open a tab every poll.
     static let stalled = "Antigravity CLI stalled, likely waiting for sign-in. Run agy once, then click Refresh"
 
     static func pausesPolling(_ snap: AccountSnapshot) -> Bool { snap.health == .needsAuth || snap.detail == stalled }
+
+    /// When agy last started a session that logs to its own folder: each adds a file there. Pulse's runs pass
+    /// `--log-file`, so they never do, and a stalled run's own file would predate its stall anyway.
+    static func lastSessionStarted() -> Date? {
+        try? home.appending(path: ".gemini/antigravity-cli/log").resourceValues(forKeys: [.contentModificationDateKey])
+            .contentModificationDate
+    }
 
     static func fetch() async -> AccountSnapshot {
         var snap = AccountSnapshot(id: .antigravity, displayName: "Antigravity", planLabel: "Google",
