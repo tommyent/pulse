@@ -156,7 +156,22 @@ enum SecurityChecks {
         quiet.passStarted(now: at(86_400), marker: nil)
         assert(quiet.paused, "a stall with no evidence stays paused after its one extra run")
         quiet.passStarted(now: at(86_400), marker: m0)
-        assert(!quiet.paused, "evidence still lifts it, even where agy had no log folder before")
+        assert(quiet.paused, "a first successful read after failed ones is only the baseline")
+        quiet.passStarted(now: at(86_520), marker: m0 + 1)
+        assert(!quiet.paused, "a second read that differs from it is activity")
+        // Sol's round-3 probe: with the budget spent, a nil read at the pass and the known one at the result used to
+        // admit every poll.
+        var churn = AgyPause()
+        churn.passStarted(now: t0, marker: m0); churn.update(with: stall, now: t0, marker: m0)
+        churn.passStarted(now: at(1800), marker: m0); assert(!churn.paused)
+        churn.update(with: stall, now: at(1800), marker: m0)
+        for pass in 1...5 {
+            churn.passStarted(now: at(1800 + pass * 120), marker: nil)
+            assert(churn.paused, "a failed marker read is never activity (pass \(pass))")
+            churn.update(with: stall, now: at(1800 + pass * 120), marker: m0)
+        }
+        churn.passStarted(now: at(3000), marker: m0)
+        assert(churn.paused, "nor is the known value read again after it")
         var out = AgyPause()
         out.passStarted(now: t0, marker: m0); out.update(with: agSnap(.needsAuth, nil), now: t0, marker: m0)
         out.passStarted(now: at(86_400), marker: m0 + 60)

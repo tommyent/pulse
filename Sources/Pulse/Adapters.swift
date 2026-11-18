@@ -635,8 +635,9 @@ enum GrokAdapter {
 ///   outage is still retried through its first hour and 45 minutes.
 /// - Only fetches that never got as far as a usage run (`.noAttempt`: offline, agy missing or too old) change nothing.
 /// - A change in agy's activity marker (`sessionMarker`, the owner's own agy use) allows a run at once, once per
-///   change. The marker is only compared for a change, never against the clock, and the waits are on the monotonic
-///   clock, so setting the Mac's clock back or forward can neither fake activity nor move a run.
+///   change: two successful reads that differ. A read that fails (nil) keeps the last known value and allows nothing.
+///   The marker is only compared for a change, never against the clock, and the waits are on the monotonic clock, so
+///   setting the Mac's clock back or forward can neither fake activity nor move a run.
 /// - A Refresh clicked while a run is in flight drops that run's result, and the Refresh's own pass decides.
 struct AgyPause {
     typealias Instant = ContinuousClock.Instant
@@ -647,20 +648,26 @@ struct AgyPause {
     private var failure: (at: Instant, network: Bool, marker: Date?)?   // the latest failure since a report or Refresh
     private var spent = 0   // runs Pulse allowed itself since then without new activity
     private var timed = false   // this pass is one of them
+    private var lastRead: Date?   // the last successful read of agy's activity marker; a failed (nil) read keeps it
     mutating func manualRefresh(whileRefreshing: Bool) {
         paused = false; signedOut = false; failure = nil; spent = 0
         if whileRefreshing { retry = true }
     }
     mutating func passStarted(now: Instant = .now, marker: Date?) {
         retry = false; timed = false
+        if let marker { lastRead = marker }
         guard !signedOut else { paused = true; return }
-        guard let failure, marker == failure.marker else { paused = false; return }
+        guard var failure else { paused = false; return }
+        if failure.marker == nil { failure.marker = lastRead; self.failure = failure }   // the first read since is the baseline
+        // activity: only two successful reads that differ
+        if let marker, let base = failure.marker, marker != base { paused = false; return }
         let wait: Duration? = failure.network ? (spent < 3 ? .seconds(15 * 60) * (1 << spent) : nil)
                                               : (spent == 0 ? .seconds(30 * 60) : nil)
         timed = wait.map { now - failure.at >= $0 } ?? false
         paused = !timed
     }
     mutating func update(with snap: AccountSnapshot, now: Instant = .now, marker: Date?) {
+        if let marker { lastRead = marker }
         guard !retry else { return }
         let outcome = AntigravityAdapter.outcome(of: snap)
         if timed, outcome != .noAttempt { spent += 1 }
@@ -668,7 +675,7 @@ struct AgyPause {
         switch outcome {
         case .report: signedOut = false; failure = nil; spent = 0
         case .signedOut: signedOut = true
-        case .network, .failed: failure = (now, outcome == .network, marker)
+        case .network, .failed: failure = (now, outcome == .network, lastRead)
         case .noAttempt: break
         }
         paused = signedOut || failure != nil
