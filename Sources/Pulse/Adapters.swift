@@ -644,6 +644,7 @@ struct AgyPause {
     private var kill: (at: Instant, stalled: Bool, marker: Date?)?   // the latest killed run since a good report or Refresh
     private var spent = 0   // runs Pulse allowed itself since then without new activity
     private var timed = false   // this pass is one of them
+    private static let noAnswer = AccountSnapshot.noAnswer(.antigravity).detail
     mutating func manualRefresh(whileRefreshing: Bool) {
         paused = false; signedOut = false; kill = nil; spent = 0
         if whileRefreshing { retry = true }
@@ -664,8 +665,9 @@ struct AgyPause {
         switch (snap.health, snap.detail) {
         case (.ok, _): signedOut = false; kill = nil; spent = 0
         case (.needsAuth, _): signedOut = true
-        case (_, AntigravityAdapter.stalled?), (_, AntigravityAdapter.networkTimeout?):
-            kill = (now, snap.detail == AntigravityAdapter.stalled, marker)
+        case (_, AntigravityAdapter.stalled?), (_, AntigravityAdapter.networkTimeout?), (_, Self.noAnswer):
+            // noAnswer: the fetch outlasted ProviderFetches' limit and its own result will go nowhere, so take it for a stall
+            kill = (now, snap.detail != AntigravityAdapter.networkTimeout, marker)
         default: kill?.marker = marker   // any other failure: the activity it ran on is used up
         }
         paused = signedOut || kill != nil

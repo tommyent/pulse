@@ -196,6 +196,8 @@ enum SecurityChecks {
         let busy = poll(&back, marker: { $0 < 600 ? m0 : m0 + 1 }) { $0 < 4 ? netTimeout : good0 }
         assert(busy == Array([0, 16, 48, 110, 600]) + Array(stride(from: 602, through: 24 * 60, by: 2)),
                "with the budget spent, the owner's own agy use runs it, and a good report puts polling back (\(busy.prefix(8)))")
+        var lost = AgyPause()
+        assert(poll(&lost) { _ in .noAnswer(.antigravity) } == [0, 32], "a fetch that never answered is taken for a stall")
         var clicked = AgyPause()
         _ = poll(&clicked, to: 300) { _ in netTimeout }
         clicked.manualRefresh(whileRefreshing: false)
