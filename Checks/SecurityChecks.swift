@@ -104,15 +104,11 @@ enum SecurityChecks {
         assert(AntigravityAdapter.windows(from: prompted).isEmpty, "a model answer is not a usage report")
         assert(AntigravityAdapter.signedOut(Data("Select login method:".utf8)))
         assert(!AntigravityAdapter.signedOut(Data("dial tcp: i/o timeout".utf8)))
-        // agy opens a browser sign-in when it can't auth, so a stall or sign-out stops polling; offline does not.
+        // agy opens a browser sign-in when it can't auth, so a stall or sign-out holds polling back; offline does not.
         func agSnap(_ health: Health, _ detail: String?) -> AccountSnapshot {
             AccountSnapshot(id: .antigravity, displayName: "Antigravity", planLabel: "", health: health, windows: [],
                             fetchedAt: .now, source: .cliStatus, detail: detail)
         }
-        assert(AntigravityAdapter.pausesPolling(agSnap(.needsAuth, nil)))
-        assert(AntigravityAdapter.pausesPolling(agSnap(.providerError, AntigravityAdapter.stalled)))
-        assert(!AntigravityAdapter.pausesPolling(agSnap(.providerError, "Offline, Antigravity check skipped")))
-        assert(!AntigravityAdapter.pausesPolling(agSnap(.ok, nil)))
         // A Refresh clicked while agy runs gets its own pass, even if that run comes back stalled or signed out; a
         // second failure pauses again. Without a click, a failure pauses.
         let m0 = Date(timeIntervalSince1970: 1_000_000)   // agy's activity marker, a date that means nothing by itself
@@ -167,25 +163,75 @@ enum SecurityChecks {
         assert(out.paused, "a sign-out stays paused until Refresh, whatever agy does")
         out.manualRefresh(whileRefreshing: false)
         assert(!out.paused, "a Refresh lifts a sign-out")
-        // A killed run's log decides network or stall. agy logs "not logged into Antigravity" at every start, so only
-        // its browser sign-in's own lines count as one, and they win over network errors (a token refresh that hits
-        // the network can send agy to a sign-in).
-        let everyStart = "W1118 12:00:14.477407 52 cache.go:157] Cache(loadCodeAssistResponse): Singleflight refresh failed: error getting token source: You are not logged into Antigravity.\n"
-        let offline = everyStart + "W1117 16:52:25.926553 112832 cache.go:157] Post \"https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels\": dial tcp: lookup daily-cloudcode-pa.googleapis.com: i/o timeout\n"
-        assert(AntigravityAdapter.hungOnNetwork(Data(offline.utf8)), "a network error in the log is a network hang")
-        assert(AntigravityAdapter.hungOnNetwork(Data("Get \"https://aicode.googleapis.com/v1alpha:fetchConfig\": context deadline exceeded".utf8)))
-        assert(!AntigravityAdapter.hungOnNetwork(Data(everyStart.utf8)), "the every-start sign-in line alone is a stall")
-        assert(!AntigravityAdapter.hungOnNetwork(Data((offline + "Opening browser to authenticate with Google...\nWaiting for authentication (timeout 60s)...\n").utf8)),
-               "a real sign-in wait is a stall even with network errors")
-        assert(!AntigravityAdapter.hungOnNetwork(Data((offline + "Please visit the following URL to authorize the application:\n").utf8)))
-        assert(!AntigravityAdapter.hungOnNetwork(Data()), "no log is a stall")
-        var net = AgyPause()
-        net.passStarted(now: t0, marker: m0); net.update(with: agSnap(.providerError, AntigravityAdapter.networkTimeout), now: t0, marker: m0)
-        assert(!net.paused && !AntigravityAdapter.pausesPolling(agSnap(.providerError, AntigravityAdapter.networkTimeout)),
-               "a network timeout never pauses")
-        net.update(with: stall, now: at(120), marker: m0)
-        net.update(with: agSnap(.providerError, AntigravityAdapter.networkTimeout), now: at(240), marker: m0)
-        assert(!net.paused, "a network timeout after a stall runs agy again at the next poll")
+        // The poll loop as AppState runs it: a pass every 2 minutes, agy run only when not paused, its nth run's result
+        // landing a second later. Returns the minutes agy ran.
+        let netTimeout = agSnap(.providerError, AntigravityAdapter.networkTimeout)
+        let skipped = agSnap(.providerError, AntigravityAdapter.offline), good0 = agSnap(.ok, nil)
+        func poll(_ p: inout AgyPause, from: Int = 0, to: Int = 24 * 60, marker: (Int) -> Date? = { _ in m0 },
+                  results: (Int) -> AccountSnapshot) -> [Int] {
+            var ran: [Int] = []
+            for minute in stride(from: from, through: to, by: 2) {
+                p.passStarted(now: at(minute * 60), marker: marker(minute))
+                guard !p.paused else { continue }
+                p.update(with: results(ran.count), now: at(minute * 60 + 1), marker: marker(minute))
+                ran.append(minute)
+            }
+            return ran
+        }
+        var outage = AgyPause()
+        assert(poll(&outage) { _ in netTimeout } == [0, 16, 48, 110],
+               "network timeouts: runs 15, 30 and 60 minutes after each, then none for the rest of the day")
+        var stuck = AgyPause()
+        assert(poll(&stuck) { _ in stall } == [0, 32], "stalls: one run half an hour on, then none")
+        var mixed = AgyPause()
+        assert(poll(&mixed) { [stall, stall, netTimeout][min($0, 2)] } == [0, 32],
+               "a stall's timed run spends the budget a later network timeout would have used")
+        var alternating = AgyPause()   // Sol's probe: stall, timed run, network timeout, stall
+        assert(poll(&alternating) { [stall, netTimeout, stall][min($0, 2)] } == [0, 32, 64],
+               "a network timeout doesn't give back the run a stall used: one more, then none")
+        var spotty = AgyPause()
+        assert(poll(&spotty, to: 60) { [netTimeout, skipped, skipped, netTimeout][min($0, 3)] } == [0, 16, 18, 20, 52],
+               "an offline skip never ran agy, so it spends nothing")
+        var back = AgyPause()
+        let busy = poll(&back, marker: { $0 < 600 ? m0 : m0 + 1 }) { $0 < 4 ? netTimeout : good0 }
+        assert(busy == Array([0, 16, 48, 110, 600]) + Array(stride(from: 602, through: 24 * 60, by: 2)),
+               "with the budget spent, the owner's own agy use runs it, and a good report puts polling back (\(busy.prefix(8)))")
+        var clicked = AgyPause()
+        _ = poll(&clicked, to: 300) { _ in netTimeout }
+        clicked.manualRefresh(whileRefreshing: false)
+        assert(poll(&clicked, from: 302, to: 340) { _ in netTimeout } == [302, 318], "a Refresh gives the budget back")
+        // A killed run's cause, from its output and log. agy logs two not-signed-in lines at every start, working runs
+        // too, so those are taken out; any other sign of a sign-in wins over network errors.
+        func killed(log: String, out: String = "", survived: Bool = false, complete: Bool = true) -> AntigravityAdapter.Cause {
+            AntigravityAdapter.cause(of: .init(out: Data(out.utf8), log: Data(log.utf8), killed: true, survived: survived,
+                                               logComplete: complete))
+        }
+        let everyStart = """
+            W1118 12:00:14.477407 52 cache.go:157] Cache(loadCodeAssistResponse): Singleflight refresh failed: error getting token source: You are not logged into Antigravity.
+            I1118 11:51:22.380860 225 quota_manager.go:36] doRefreshQuota: skipped (not logged in)
+
+            """
+        let dns = everyStart + "W1117 16:52:25.926553 112832 cache.go:157] Post \"https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels\": dial tcp: lookup daily-cloudcode-pa.googleapis.com: i/o timeout\n"
+        assert(killed(log: dns) == .network, "a network error in a whole log is a network hang")
+        assert(killed(log: "Get \"https://aicode.googleapis.com/v1alpha:fetchConfig\": context deadline exceeded") == .network)
+        assert(killed(log: everyStart) == .stalled, "agy's every-start lines alone are neither a sign-out nor the network")
+        assert(killed(log: dns + "Opening browser to authenticate with Google...\nWaiting for authentication (timeout 60s)...\n") == .signedOut,
+               "a real sign-in wait is a sign-out even with network errors")
+        assert(killed(log: dns + "Please visit the following URL to authorize the application:\n") == .signedOut)
+        assert(killed(log: "authentication required\ndial tcp: i/o timeout\n") == .signedOut, "Sol's mixed auth and network log")
+        assert(killed(log: dns, out: "Please sign in to continue") == .signedOut, "a sign-in in the output counts too")
+        assert(killed(log: "") == .stalled && killed(log: "", out: "dial tcp: i/o timeout") == .stalled, "no log is a stall")
+        assert(killed(log: dns, survived: true) == .stalled, "a run that outlived SIGKILL is a stall")
+        assert(killed(log: dns, complete: false) == .stalled, "a log not read whole is never taken for the network")
+        let longLog = dir.appendingPathComponent("long.log")
+        try Data(("Opening browser to authenticate with Google...\n" + String(repeating: "x", count: 5_000) + "\ndial tcp: i/o timeout\n").utf8).write(to: longLog)
+        let (headAndTail, whole) = AntigravityAdapter.readLog(longLog, limit: 1_000)
+        assert(!whole && headAndTail.count == 1_000 && killed(log: String(decoding: headAndTail, as: UTF8.self), complete: whole) == .signedOut,
+               "past the limit, the log's start and end are both read: an early sign-in line isn't lost")
+        try Data((String(repeating: "x", count: 2_000) + "Opening browser to authenticate...\n" + String(repeating: "x", count: 2_000) + "\ndial tcp: i/o timeout\n").utf8).write(to: longLog)
+        let (middleLost, _) = AntigravityAdapter.readLog(longLog, limit: 1_000)
+        assert(killed(log: String(decoding: middleLost, as: UTF8.self), complete: false) == .stalled,
+               "a sign-in line lost in the middle still never makes it the network")
         // A run past its timeout is killed and hands back its own agy.log; one that finishes hands back no log. `run`
         // returns only once the stand-in and everything it started are gone, whatever they do with SIGTERM.
         func agyRun(_ script: String, timeout: Duration = .seconds(1), cancelAfter: TimeInterval? = nil) -> AntigravityAdapter.Run? {
@@ -204,8 +250,13 @@ enum SecurityChecks {
         }
         func gone(_ pid: pid_t) -> Bool { kill(pid, 0) != 0 && errno == ESRCH }
         let hung = agyRun("echo 'dial tcp: lookup example.com: i/o timeout' > agy.log; exec sleep 30")
-        assert(hung?.killed == true && hung?.survived == false && AntigravityAdapter.hungOnNetwork(hung!.log),
+        assert(hung?.killed == true && hung?.survived == false && hung.map(AntigravityAdapter.cause) == .network,
                "a killed run's log is read before its folder goes")
+        let sols = dir.appendingPathComponent("sol-fixture")   // Sol's probe: an early sign-in line, 70 KB, then the network
+        try Data(("Opening browser to authenticate with Google...\n" + String(repeating: "x", count: 70_000) + "\ndial tcp: i/o timeout\n").utf8).write(to: sols)
+        let early = agyRun("cat '\(sols.path)' > agy.log; exec sleep 30")
+        assert(early?.killed == true && early?.logComplete == true && early.map(AntigravityAdapter.cause) == .signedOut,
+               "the real kill path keeps an early sign-in line: a sign-out, not the network")
         let quick = agyRun("echo 'dial tcp: i/o timeout' > agy.log; echo ok")
         assert(quick?.killed == false && quick?.log.isEmpty == true && quick.map { String(decoding: $0.out, as: UTF8.self) } == "ok\n")
         assert(agyRun("exec sleep 30")?.log.isEmpty == true, "a killed run without a log hands back none")

@@ -623,32 +623,52 @@ enum GrokAdapter {
 
 // MARK: - Antigravity
 
-/// When Antigravity polling pauses, and when a manual Refresh lifts it. A sign-out or a stalled agy run pauses it (agy
-/// would open a browser sign-in each poll). A Refresh runs it again, even one clicked while a run is in flight: that
-/// run's result doesn't re-pause before the Refresh's own pass, though a second failure does.
-/// A stall, unlike a sign-out, also lifts by itself: when agy's activity marker (`sessionMarker`) is no longer the one
-/// seen as the stalled run ended, or once, half an hour on, since a stall is as often the network as a sign-in. The
-/// marker is only compared for a change, never against the clock, and the half hour is on the monotonic clock, so
-/// setting the Mac's clock back or forward can neither fake activity nor move the extra run.
+/// When Pulse runs agy by itself. agy may open a browser sign-in on any run that can't authenticate, so whenever a run
+/// might have been waiting for one, Pulse waits rather than run it each poll:
+/// - A sign-out (`needsAuth`) pauses until a Refresh.
+/// - A run Pulse had to kill pauses too. From then until a good report or a Refresh, Pulse allows itself at most three
+///   runs without new activity: 15, 30 and 60 minutes after the latest kill when it was a network timeout, and when it
+///   was a stall only the first of them, half an hour on. A network result never gives any back. So a sign-in wait that
+///   looks like the network costs at most three tabs, while an outage is still retried through its first hour and 45
+///   minutes.
+/// - A change in agy's activity marker (`sessionMarker`, the owner's own agy use) allows a run at once, once per
+///   change. The marker is only compared for a change, never against the clock, and the waits are on the monotonic
+///   clock, so setting the Mac's clock back or forward can neither fake activity nor move a run.
+/// - A Refresh clears all of it and runs agy again, even one clicked while a run is in flight: that run's result is
+///   dropped, and the Refresh's own pass decides.
 struct AgyPause {
     typealias Instant = ContinuousClock.Instant
     private(set) var paused = false
     private var retry = false
-    private var stall: (at: Instant, marker: Date?)?   // the last stalled run: when it ended, and agy's marker then
-    private var retried = false   // this stall already had its one run without evidence
-    mutating func manualRefresh(whileRefreshing: Bool) { paused = false; retried = false; if whileRefreshing { retry = true } }
+    private var signedOut = false
+    private var kill: (at: Instant, stalled: Bool, marker: Date?)?   // the latest killed run since a good report or Refresh
+    private var spent = 0   // runs Pulse allowed itself since then without new activity
+    private var timed = false   // this pass is one of them
+    mutating func manualRefresh(whileRefreshing: Bool) {
+        paused = false; signedOut = false; kill = nil; spent = 0
+        if whileRefreshing { retry = true }
+    }
     mutating func passStarted(now: Instant = .now, marker: Date?) {
-        retry = false
-        guard paused, let stall else { return }
-        if marker != stall.marker {
-            paused = false; retried = false
-        } else if !retried, now - stall.at >= .seconds(30 * 60) {
-            paused = false; retried = true
-        }
+        retry = false; timed = false
+        guard !signedOut else { paused = true; return }
+        guard let kill, marker == kill.marker else { paused = false; return }
+        let wait: Duration? = kill.stalled ? (spent == 0 ? .seconds(30 * 60) : nil)
+                                           : (spent < 3 ? .seconds(15 * 60) * (1 << spent) : nil)
+        timed = wait.map { now - kill.at >= $0 } ?? false
+        paused = !timed
     }
     mutating func update(with snap: AccountSnapshot, now: Instant = .now, marker: Date?) {
-        paused = AntigravityAdapter.pausesPolling(snap) && !retry
-        if snap.detail == AntigravityAdapter.stalled { stall = (now, marker) } else { stall = nil; retried = false }
+        guard !retry else { return }
+        if timed, snap.detail != AntigravityAdapter.offline { spent += 1 }   // offline: agy never ran
+        timed = false
+        switch (snap.health, snap.detail) {
+        case (.ok, _): signedOut = false; kill = nil; spent = 0
+        case (.needsAuth, _): signedOut = true
+        case (_, AntigravityAdapter.stalled?), (_, AntigravityAdapter.networkTimeout?):
+            kill = (now, snap.detail == AntigravityAdapter.stalled, marker)
+        default: kill?.marker = marker   // any other failure: the activity it ran on is used up
+        }
+        paused = signedOut || kill != nil
     }
 }
 
@@ -656,13 +676,12 @@ struct AgyPause {
 /// reads the Google token; Google's quota API refuses that token from any other client. The report is
 /// a local command: no model prompt, no tokens, no conversation.
 enum AntigravityAdapter {
-    /// A run Pulse had to kill: agy may wait there for a browser sign-in it opened itself. AppState stops
-    /// polling agy on this or needsAuth (`AgyPause`), so it can't open a tab every poll.
+    /// A run Pulse had to kill: agy may wait there for a browser sign-in it opened itself, so `AgyPause` holds off.
     static let stalled = "Antigravity CLI stalled, maybe waiting for sign-in. Pulse checks again once agy has run, or click Refresh"
-    /// A killed run whose own log shows it hung on the network (`hungOnNetwork`): no pause, the next poll runs it.
-    static let networkTimeout = "Antigravity CLI timed out (network); Pulse tries again on its next check"
-
-    static func pausesPolling(_ snap: AccountSnapshot) -> Bool { snap.health == .needsAuth || snap.detail == stalled }
+    /// A killed run whose own log shows it hung on the network (`cause(of:)`): `AgyPause` tries it again in a while.
+    static let networkTimeout = "Antigravity CLI timed out (network); Pulse tries again in a while, or click Refresh"
+    static let signIn = "Run agy once to sign in to Antigravity, then click Refresh"
+    static let offline = "Offline, Antigravity check skipped"
 
     /// agy's activity marker: the modification date of its own log folder, which each session that logs there changes
     /// by adding a file (agy's log pruning changes it too, also at a session's start). Pulse's runs pass `--log-file`,
@@ -691,7 +710,7 @@ enum AntigravityAdapter {
         var probe = URLRequest(url: URL(string: "https://oauth2.googleapis.com/")!, timeoutInterval: 5)
         probe.httpMethod = "HEAD"
         guard (try? await ProviderHTTP.session.data(for: probe)) != nil else {
-            snap.detail = "Offline, Antigravity check skipped"
+            snap.detail = offline
             return snap
         }
         // agy's log goes in the folder `run` removes, not one more file per refresh in ~/.gemini. An older agy that refuses the flag runs without it.
@@ -701,8 +720,11 @@ enum AntigravityAdapter {
             answer = await run(agy, usage, timeout: .seconds(60))
         }
         guard let report = answer, !report.killed else {
-            // a child that outlived SIGKILL is a stall whatever its log says
-            snap.detail = answer.map { !$0.survived && hungOnNetwork($0.out + $0.err + $0.log) } == true ? networkTimeout : stalled
+            switch answer.map(cause) ?? .stalled {
+            case .signedOut: snap.health = .needsAuth; snap.detail = signIn
+            case .network: snap.detail = networkTimeout
+            case .stalled: snap.detail = stalled
+            }
             return snap
         }
         if let json = try? JSONSerialization.jsonObject(with: report.out) as? [String: Any] {
@@ -712,7 +734,7 @@ enum AntigravityAdapter {
             snap.health = .ok
         } else if signedOut(report.err + report.out) {
             snap.health = .needsAuth
-            snap.detail = "Run agy once to sign in to Antigravity, then click Refresh"
+            snap.detail = signIn
         } else {
             snap.detail = "Antigravity CLI returned no usage"
         }
@@ -773,24 +795,32 @@ enum AntigravityAdapter {
             .contains { text.contains($0) }
     }
 
-    /// A killed run's output and log tail: true when it hung on the network rather than on a sign-in. agy logs "not
-    /// logged into Antigravity" at the start of every session, working ones too, so only its browser sign-in's own
-    /// lines count as a sign-in. A network error can itself send agy to a sign-in, so those lines win.
-    static func hungOnNetwork(_ output: Data) -> Bool {
-        let text = String(decoding: output, as: UTF8.self).lowercased()
-        let signIn = ["waiting for authentication", "opening browser", "open browser", "authorize the application",
-                      "local browser", "select login method", "accounts.google.com/o/oauth2", "oauth callback"]
+    enum Cause { case signedOut, network, stalled }
+
+    /// What a run Pulse had to kill was waiting on, from its output and log; when in doubt, a sign-in or a stall,
+    /// never the network. Any sign of a sign-in makes it a sign-out, even beside network errors (a token refresh
+    /// that hits the network can itself send agy to a sign-in): agy's browser sign-in lines, or anything `signedOut`
+    /// matches once the two lines agy logs at the start of every session, working ones too, are taken out. The
+    /// network needs network errors, a log read whole, and agy gone; anything else is a stall.
+    static func cause(of run: Run) -> Cause {
+        let text = String(decoding: run.out + run.err + run.log, as: UTF8.self).lowercased()
+            .replacingOccurrences(of: "you are not logged into antigravity", with: "")
+            .replacingOccurrences(of: "skipped (not logged in)", with: "")
+        let browser = ["waiting for authentication", "opening browser", "open browser", "authorize the application",
+                       "local browser", "accounts.google.com/o/oauth2", "oauth callback", "oauth2 flow"]
+        if browser.contains(where: text.contains) || signedOut(Data(text.utf8)) { return .signedOut }
         let network = ["i/o timeout", "context deadline exceeded", "dial tcp", "no such host", "operation timed out",
                        "network is unreachable", "network is down", "connection refused", "connection reset",
                        "tls handshake timeout"]
-        return !signIn.contains { text.contains($0) } && network.contains { text.contains($0) }
+        guard !run.survived, run.logComplete, !run.log.isEmpty, network.contains(where: text.contains) else { return .stalled }
+        return .network
     }
 
     /// One agy run. `killed`: it passed its timeout and Pulse ended it. `survived`: something in its process group was
-    /// still there after SIGKILL, so nothing it left behind can be trusted.
+    /// still there after SIGKILL, so nothing it left behind can be trusted. `logComplete`: all of `log` was read.
     struct Run {
         var out = Data(), err = Data(), log = Data()
-        var killed = false, survived = false
+        var killed = false, survived = false, logComplete = true
     }
 
     /// Runs agy in a private temp folder with no stdin, in a process group of its own. Output goes to files, not
@@ -818,7 +848,7 @@ enum AntigravityAdapter {
             if !(await end(group: pid, with: SIGTERM, within: .seconds(1))) {
                 result.survived = !(await end(group: pid, with: SIGKILL, within: .seconds(2)))
             }
-            result.log = (try? Data(contentsOf: dir.appending(path: "agy.log"))) ?? Data()
+            (result.log, result.logComplete) = readLog(dir.appending(path: "agy.log"))
         }
         result.out = (try? Data(contentsOf: outURL)) ?? Data()
         result.err = (try? Data(contentsOf: errURL)) ?? Data()
@@ -847,6 +877,20 @@ enum AntigravityAdapter {
         defer { argv.forEach { free($0) } }
         var pid: pid_t = 0
         return posix_spawn(&pid, exe.path, &actions, &attr, argv, environ) == 0 ? pid : nil
+    }
+
+    /// A killed run's log: all of it up to `limit`, else its first and last halves of that, not complete. A sign-in line
+    /// near the start can't be lost to the tail, and a log too big to read whole is never taken for the network.
+    static func readLog(_ url: URL, limit: Int = 4 << 20) -> (Data, complete: Bool) {
+        guard let h = try? FileHandle(forReadingFrom: url) else { return (Data(), true) }
+        defer { try? h.close() }
+        let size = (try? h.seekToEnd()) ?? 0
+        try? h.seek(toOffset: 0)
+        guard size > UInt64(limit) else { return ((try? h.readToEnd()) ?? Data(), true) }
+        var data = (try? h.read(upToCount: limit / 2)) ?? Data()
+        try? h.seek(toOffset: size - UInt64(limit / 2))
+        data += (try? h.readToEnd()) ?? Data()
+        return (data, false)
     }
 
     /// agy has exited and been reaped, now or before.
