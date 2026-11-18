@@ -68,8 +68,9 @@ struct PulseApp: App {
         Settings {
             SettingsView(state: state)
                 .containerBackground(for: .window) {
-                    PulseSurface(shape: Rectangle())
+                    PulseSurface(shape: Rectangle(), floats: false)
                         .environment(\.pulseAppearance, state.persisted.appearance)
+                        .environment(\.pulseSkin, PulseSkin.named(state.persisted.skin))
                         .environment(\.appearsActive, true)
                         .preferredColorScheme(.dark)
                 }

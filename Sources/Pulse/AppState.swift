@@ -13,6 +13,7 @@ final class AppState: ObservableObject {
         var alwaysOnTop: Bool = true
         var showOverlay: Bool = true
         var appearance: PulseAppearance = .solid
+        var skin: String?   // nil = Classic; otherwise a skin's name ("groove", `PulseSkinSet.named`)
         var dock: DockEdge?
         var tucked: Bool?   // nil = out: the rail tucked into its edge, a sliver left on screen
         var tuckPeek: Bool?   // nil = off: resting the pointer on the sliver slides the rail out until it leaves
@@ -62,6 +63,7 @@ final class AppState: ObservableObject {
             let legacy = try decoder.container(keyedBy: LegacyKeys.self)
             appearance = c.lenient(PulseAppearance.self, forKey: .appearance, in: decoder)
                 ?? ((try? legacy.decode(Bool.self, forKey: .glassTint)) == false ? .glass : .solid)
+            skin = c.lenient(String.self, forKey: .skin, in: decoder)
             dock = c.lenient(DockEdge.self, forKey: .dock, in: decoder)
             tucked = c.lenient(Bool.self, forKey: .tucked, in: decoder)
             tuckPeek = c.lenient(Bool.self, forKey: .tuckPeek, in: decoder)

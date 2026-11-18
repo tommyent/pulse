@@ -7,6 +7,6 @@ DIR="$(mktemp -d)"
 trap 'rm -rf "$DIR"' EXIT
 OUT="$DIR/grok-check"
 export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"
-swiftc -O -o "$OUT" Sources/Pulse/Models.swift Sources/Pulse/Adapters.swift Sources/Pulse/GrokLogin.swift scripts/grok-check/main.swift
+swiftc -O -o "$OUT" Sources/Pulse/Models.swift Sources/Pulse/Skin.swift Sources/Pulse/Adapters.swift Sources/Pulse/GrokLogin.swift scripts/grok-check/main.swift
 codesign -s - "$OUT" 2>/dev/null || true
 "$OUT" "$@"

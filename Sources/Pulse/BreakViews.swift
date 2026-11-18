@@ -40,26 +40,35 @@ struct PillShape: Shape {
 /// The 30-second countdown: the seconds in a ring that empties, and the break's length beside it. A click starts
 /// the break, the × skips it; otherwise it starts by itself.
 struct BreakPill: View {
+    @Environment(\.pulseSkin) private var skin
     @ObservedObject var controller: BreakController
     var tail: Edge = .trailing
     var onFrame: ((CGRect) -> Void)? = nil   // beside the rail, so the rail can tell a click here from a click away
 
     var body: some View {
         if case let .countdown(kind, endsAt) = controller.phase {
-            let bar = Color(rgb: BreakColor.pair(controller.settings.color).bar)
+            let standard = controller.settings.color == BreakColor.standard.name
+            let bar = standard ? skin.accents.breakBar?.color ?? Color(rgb: BreakColor.standard.bar) : Color(rgb: BreakColor.pair(controller.settings.color).bar)
             HStack(spacing: 6) {
                 Button { controller.startNow() } label: {
                     HStack(spacing: 9) {
                         TimelineView(.periodic(from: .now, by: 1)) { context in
                             let left = max(0, endsAt.timeIntervalSince(context.date))
                             ZStack {
-                                RingTrack(lineWidth: 4)
-                                Circle().trim(from: 0, to: left / BreakSchedule.countdown)
-                                    .stroke(bar, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                                    .rotationEffect(.degrees(-90))
-                                    .animation(.linear(duration: 1), value: left)
+                                if let groove = skin.groove {
+                                    GrooveRing(groove: groove, size: 38, colour: bar, outer: left / BreakSchedule.countdown * 100) { EmptyView() }
+                                        .animation(.linear(duration: 1), value: left)
+                                } else {
+                                    RingTrack(lineWidth: 4)
+                                    Circle().trim(from: 0, to: left / BreakSchedule.countdown)
+                                        .stroke(bar, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                                        .rotationEffect(.degrees(-90))
+                                        .animation(.linear(duration: 1), value: left)
+                                }
                                 Text("\(Int(left.rounded(.up)))")
                                     .font(.system(size: 15, weight: .semibold).monospacedDigit())
+                                    .foregroundStyle(skin.groove?.onFace.color ?? Color.primary)
+                                    .embossed(skin, size: 15)
                             }
                             .frame(width: 38, height: 38)
                             .accessibilityElement(children: .ignore)
@@ -68,6 +77,7 @@ struct BreakPill: View {
                         Text(breakLengthLabel(controller.settings.length(kind)))
                             .font(.system(size: 13, weight: .medium))
                             .fixedSize()
+                            .embossed(skin, size: 13)
                     }
                     .contentShape(Rectangle())
                 }
@@ -912,13 +922,15 @@ struct BreakHistorySection: View {
 /// The grown rail's last item: a click opens the pause menu (`OverlayController.showBreakMenu`), for a meeting that
 /// isn't a call on this Mac. No ring: while breaks are paused it carries a badge, and the menu says until when.
 struct BreakCup: View {
+    @Environment(\.pulseSkin) private var skin
     let pausedUntil: Date?
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in   // the badge goes when the pause runs out
             Image(systemName: "cup.and.saucer")
                 .font(.system(size: 19, weight: .medium))
-                .foregroundStyle(Color.primary)
+                .foregroundStyle(skin.primary)
+                .raised(skin)
                 .frame(width: 44, height: 44)
                 .overlay(alignment: .bottomTrailing) {
                     if let until = pausedUntil, until > context.date {

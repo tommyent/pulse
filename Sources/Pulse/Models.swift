@@ -13,16 +13,10 @@ enum AccountID: String, Codable, CaseIterable, Identifiable {
     }
     /// Display P3, not sRGB: the same hues as before, deep enough to hold their own next to
     /// macOS's P3 system colours on wide-gamut displays (sRGB screens clip them to their nearest).
-    var accent: Color {
-        switch self {
-        case .claude: Color(.displayP3, red: 1.0, green: 0.40, blue: 0.16)
-        case .codex: Color(.displayP3, red: 0.22, green: 0.42, blue: 1.0)
-        case .grok: Color(.displayP3, red: 1.0, green: 0.72, blue: 0.10)
-        case .antigravity: Color(.displayP3, red: 0.60, green: 0.36, blue: 1.0)   // not green: the battery's ring is
-        }
-    }
+    /// Classic's colour: the voice tint and the chat use it; rings and bars take their skin's (`PulseSkin.accent`).
+    var accent: Color { PulseSkin.classic.accent(self) }
     /// A later pool of models on one account (Antigravity's Claude and GPT) has its own colour, so its ring can't pass for the first.
-    func accent(pool: Int) -> Color { pool == 0 ? accent : Color(.displayP3, red: 0.35, green: 0.72, blue: 1.0) }
+    func accent(pool: Int) -> Color { PulseSkin.classic.accent(self, pool: pool) }
     var glyph: String {
         switch self {
         case .claude: "asterisk"

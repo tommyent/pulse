@@ -27,6 +27,7 @@ extension AgentBoard.Row {
 /// working, or once one needs you, how many do.
 struct AgentsRing: View, Animatable {
     var animatableData: CGFloat { get { size } set { size = newValue } }   // as RingView's
+    @Environment(\.pulseSkin) private var skin
     let board: AgentBoard
     var size: CGFloat = 52
     var showCount = true
@@ -37,10 +38,15 @@ struct AgentsRing: View, Animatable {
         let layout = ringItemLayout(beside: beside)
         layout {
             ZStack {
-                switch board.tone {
-                case .quiet: RingTrack(lineWidth: size * 0.12)
-                case .waiting: Circle().stroke(Color.orange, lineWidth: size * 0.12)
-                case .failed: Circle().stroke(Color.red, lineWidth: size * 0.12)
+                if let groove = skin.groove {
+                    let tone: Color? = switch board.tone { case .quiet: nil; case .waiting: .orange; case .failed: .red }
+                    GrooveRing(groove: groove, size: size, colour: tone, outer: tone == nil ? nil : 100, hub: false) { EmptyView() }
+                } else {
+                    switch board.tone {
+                    case .quiet: RingTrack(lineWidth: size * 0.12)
+                    case .waiting: Circle().stroke(Color.orange, lineWidth: size * 0.12)
+                    case .failed: Circle().stroke(Color.red, lineWidth: size * 0.12)
+                    }
                 }
                 bubbles
             }
@@ -49,7 +55,7 @@ struct AgentsRing: View, Animatable {
             .overlay(alignment: .bottomTrailing) { if held { badge("bell.slash.fill") } }
             if showCount {
                 PercentText(text: "\(board.number)", beside: beside)
-                    .foregroundStyle(Color.primary)
+                    .foregroundStyle(skin.primary)
                     .transition(.railExtra)
             }
         }
@@ -80,9 +86,7 @@ struct AgentsRing: View, Animatable {
                         }
                     }
                     .frame(width: d, height: d)
-                    .background(Color(white: 0.12), in: Circle())
-                    .overlay(Circle().strokeBorder(Color.white.opacity(0.3), lineWidth: 0.6))
-                    .background(Circle().fill(PulsePalette.surface).padding(-1))   // a dark edge, so overlapping discs read apart
+                    .background { disc }
                     .offset(x: size * centre.x, y: size * centre.y)
                     .zIndex(Double(count - i))
                 }
@@ -97,14 +101,30 @@ struct AgentsRing: View, Animatable {
             .opacity(i < shown.colour ? 1 : 0.6)
     }
 
-    private func badge(_ symbol: String) -> some View {
-        Image(systemName: symbol)
-            .font(.system(size: max(6, size * 0.15), weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: max(11, size * 0.28), height: max(11, size * 0.28))
-            .background(Color(white: 0.3), in: Circle())
-            .background(Circle().fill(PulsePalette.surface).padding(-1))
-            .accessibilityHidden(true).allowsHitTesting(false)
+    /// An agent's disc: raised off the slab in Groove; in Classic a grey disc with a light rim and a dark edge, so
+    /// overlapping discs read apart.
+    @ViewBuilder private var disc: some View {
+        if let groove = skin.groove {
+            GrooveBubble(groove: groove, fill: groove.bubbleFace)
+        } else {
+            Circle().fill(Color(white: 0.12))
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.3), lineWidth: 0.6))
+                .background(Circle().fill(PulsePalette.surface).padding(-1))
+        }
+    }
+
+    @ViewBuilder private func badge(_ symbol: String) -> some View {
+        if skin.groove != nil {
+            RingBadge(symbol: symbol, fill: Color(white: 0.3), size: size, weight: .bold, glyphScale: 0.15)
+        } else {
+            Image(systemName: symbol)
+                .font(.system(size: max(6, size * 0.15), weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: max(11, size * 0.28), height: max(11, size * 0.28))
+                .background(Color(white: 0.3), in: Circle())
+                .background(Circle().fill(PulsePalette.surface).padding(-1))
+                .accessibilityHidden(true).allowsHitTesting(false)
+        }
     }
 }
 

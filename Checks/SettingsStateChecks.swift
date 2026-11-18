@@ -109,6 +109,7 @@ enum SettingsStateChecks {
                && oldest.tucked == nil && oldest.tuckPeek == nil)
         checkUnreadableValues()
         checkTrackRendering()
+        checkSkins()
         print("Settings state checks passed: saved values preserved, Tint migrated, unreadable values cost only themselves and are kept in a copy, plain menu-grey tracks without keylines in both looks")
     }
 
@@ -206,6 +207,58 @@ enum SettingsStateChecks {
         let nowhere = AppState.Persisted.load(from: url)
         try! fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
         assert(!nowhere.canReplace && !nowhere.settings.alwaysOnTop && copies().count == count)
+    }
+
+    /// Skins are plain values with fixed keys, so a skin can later come from a JSON file; the setting picks one by name.
+    @MainActor private static func checkSkins() {
+        let p = try! JSONDecoder().decode(AppState.Persisted.self, from: Data(#"{"enabled":[],"order":[],"alwaysOnTop":true,"showOverlay":true}"#.utf8))
+        assert(p.skin == nil && PulseSkin.named(p.skin) == .classic, "a state from before skins stays Classic")
+        var groove = AppState.Persisted()
+        groove.skin = "groove"
+        let reread = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(groove))
+        assert(reread.skin == "groove" && PulseSkin.named(reread.skin) == .groove, "Groove stays picked after a relaunch")
+        assert(PulseSkin.named("a-skin-this-version-lacks") == .classic, "an unknown skin falls back to Classic")
+
+        for skin in PulseSkinSet.builtIn {
+            let json = try! JSONEncoder().encode(skin)
+            assert(try! JSONDecoder().decode(PulseSkinSet.self, from: json) == skin, "\(skin.name) survives JSON")
+            assert(skin.light == nil && skin.half(.light) == skin.dark, "dark only for now: a light appearance gets the dark half")
+        }
+        let file = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(PulseSkinSet.groove)) as! [String: Any]
+        assert(file["name"] as? String == "groove" && file["light"] == nil)
+        let object = file["dark"] as! [String: Any]
+        let accents = object["accents"] as! [String: Any], g = object["groove"] as! [String: Any]
+        assert(accents["claude"] as? String == "#CF7C5E" && accents["antigravity2"] as? String == "#79AAD2", "colours are hex strings")
+        assert((g["wall"] as? [Any])?.count == 5 && (g["wall"] as! [Any])[3] as? String == "#000000", "shadows are [x, y, blur, colour, opacity]")
+        assert((g["outer"] as? [String: Any])?["channel"] as? Double == 16, "depths are numbers")
+        // a skin file with a bad colour or shadow is refused, not drawn black
+        let broken = String(data: try! JSONEncoder().encode(PulseSkinSet.groove), encoding: .utf8)!
+        assert((try? JSONDecoder().decode(PulseSkinSet.self, from: Data(broken.replacingOccurrences(of: "#CF7C5E", with: "#CF7C5").utf8))) == nil)
+        assert((try? JSONDecoder().decode(PulseSkinSet.self, from: Data(broken.replacingOccurrences(of: "[4.4,4.4,3.2,\"#000000\",0.8]", with: "[4.4,4.4,\"#000000\",0.8]").utf8))) == nil)
+
+        // Classic's values are today's: the P3 accents to within rounding, the track exactly
+        let claude = NSColor(PulseSkin.classic.accent(.claude)).usingColorSpace(.displayP3)!
+        assert(abs(claude.redComponent - 1) < 0.002 && abs(claude.greenComponent - 0.40) < 0.002 && abs(claude.blueComponent - 0.16) < 0.002)
+        assert(PulseSkin.classic.groove == nil && AccountID.codex.accent == PulseSkin.classic.accent(.codex))
+
+        // Increase Contrast: full colours, white ink, nothing shading the colour
+        let contrast = PulseSkin.named("groove", contrast: .increased)
+        assert(contrast.accents == PulseSkin.classic.accents && contrast.groove?.wall == nil && contrast.ink.primary == "#FFFFFF")
+        assert(contrast.groove?.raise == PulseSkin.groove.groove?.raise, "the slab keeps its shape")
+
+        // A Groove ring's empty channel is its dark floor, not Classic's grey track, over a light backdrop too
+        let renderer = ImageRenderer(content: RingView(account: .claude, percent: 0, size: 52, showPercent: false).padding(8).background(Color.white)
+            .environment(\.colorScheme, .dark).environment(\.pulseSkin, .groove))
+        renderer.scale = 2
+        let image = renderer.cgImage!
+        let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
+                                bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)!
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        // mid-channel on the right: the centre of the ring plus 46.5 of its 100 units, at 2x
+        let x = Int((8 + 26 + 0.465 * 52) * 2), y = image.height / 2
+        let floor = Array(UnsafeBufferPointer(start: context.data!.assumingMemoryBound(to: UInt8.self).advanced(by: (y * image.width + x) * 4), count: 4))
+        assert(floor[3] == 255 && floor[0] < 30 && floor[1] < 30 && floor[2] < 30, "an empty Groove channel is dark and opaque: \(floor)")
     }
 
     @MainActor private static func checkTrackRendering() {

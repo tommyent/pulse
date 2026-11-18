@@ -30,8 +30,10 @@ private let brandIcons: [AccountID: NSImage] = {
 struct BrandIcon: View {
     let account: AccountID
     var size: CGFloat
+    var ink: Color? = nil   // for a one-colour logo (Grok's); nil = the primary label colour
 
     var body: some View {
+        let style = ink.map(AnyShapeStyle.init) ?? AnyShapeStyle(.primary)
         if let img = brandIcons[account] {
             Image(nsImage: img)
                 .renderingMode(img.isTemplate ? .template : .original)
@@ -39,11 +41,11 @@ struct BrandIcon: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: size, height: size)
-                .foregroundStyle(.primary)
+                .foregroundStyle(style)
         } else {
             Image(systemName: account.glyph)
                 .font(.system(size: size * 0.8, weight: .bold))
-                .foregroundStyle(.primary)
+                .foregroundStyle(style)
         }
     }
 }
@@ -60,6 +62,7 @@ extension CodexPetSession {
 
 private struct CodexPet: View, Animatable {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.pulseSkin) private var skin
     @ObservedObject private var session = CodexPetSession.shared
     var size: CGFloat
     var animatableData: CGFloat { get { size } set { size = newValue } }   // track and sprite grow together on hover
@@ -80,7 +83,10 @@ private struct CodexPet: View, Animatable {
     var body: some View {
         let still = reduceMotion || (state == .idle && !animateIdle)
         ZStack {
-            if let tint = session.voiceTint {
+            if let groove = skin.groove {
+                // the sprite stays outside the ring's drawing, so its 10 fps frames don't redraw the channel
+                GrooveRing(groove: groove, size: size, colour: session.voiceTint, outer: session.voiceTint == nil ? nil : 100) { EmptyView() }
+            } else if let tint = session.voiceTint {
                 Circle().stroke(tint, lineWidth: size * 0.12)
             } else {
                 RingTrack(lineWidth: size * 0.12)
@@ -112,7 +118,6 @@ private struct CodexPet: View, Animatable {
     }
 }
 
-private let staleOpacity = 0.5
 
 /// A cap behind a ring's logo, in gray so the arcs stay the account's colour: a lighter level rises as it's used, or falls showing what's left.
 private struct CapDisc: View {
@@ -142,6 +147,7 @@ func ringItemLayout(beside: Bool) -> AnyLayout {
 /// A ring's percentage. Beside its ring it keeps room for two digits, so the rings after it don't shift as a value
 /// crosses from 9% to 10%.
 struct PercentText: View {
+    @Environment(\.pulseSkin) private var skin
     let text: String
     let beside: Bool
 
@@ -154,6 +160,30 @@ struct PercentText: View {
         // Never squeezed: the panel takes the rail's laid-out size, so a number that could shrink would shrink to nothing
         // rather than widen the panel.
         .fixedSize()
+        .embossed(skin, size: 15)
+    }
+}
+
+/// A ring's badge in its frame's corner: the near-limit mark, the paused mic, the agents ring's tick. Flat in Classic,
+/// a raised disc in Groove.
+struct RingBadge: View {
+    @Environment(\.pulseSkin) private var skin
+    let symbol: String
+    var fill: Color = .red
+    var ink: Color = .white
+    let size: CGFloat
+    var weight: Font.Weight = .heavy
+    var glyphScale: CGFloat = 0.17
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: max(7, size * glyphScale), weight: weight))
+            .foregroundStyle(ink)
+            .frame(width: max(11, size * 0.28), height: max(11, size * 0.28))
+            .background {
+                if let groove = skin.groove { GrooveBubble(groove: groove, fill: fill) } else { Circle().fill(fill) }
+            }
+            .accessibilityHidden(true).allowsHitTesting(false)
     }
 }
 
@@ -161,6 +191,7 @@ struct RingView: View, Animatable {
     // stroke widths, icon and badge all follow the size: animated together, nothing jumps at the end of a hover's growth
     var animatableData: CGFloat { get { size } set { size = newValue } }
     @Environment(\.showsRemaining) private var remaining
+    @Environment(\.pulseSkin) private var skin
     let account: AccountID
     var pool = 0   // which of the account's rings: sets the colour
     let percent: Double?
@@ -177,38 +208,39 @@ struct RingView: View, Animatable {
         let layout = ringItemLayout(beside: beside)
         layout {
             ZStack {
-                if hasDisc {
-                    CapDisc(level: discLevel, diameter: size * 0.61)   // inside the inner track
+                if let groove = skin.groove {
+                    GrooveRing(groove: groove, size: size, colour: skin.accent(account, pool: pool),
+                               outer: percent.map(shown), inner: secondary.map(shown), twoTracks: secondary != nil,
+                               disc: hasDisc ? discLevel : nil) {
+                        BrandIcon(account: account, size: size * (secondary == nil ? 0.4 : 0.38), ink: groove.onFace.color)
+                    }
+                } else {
+                    if hasDisc {
+                        CapDisc(level: discLevel, diameter: size * 0.61)   // inside the inner track
+                    }
+                    RingTrack(lineWidth: size * 0.12)
+                    if let percent {
+                        arc(shown(percent), lineWidth: size * 0.12)
+                    }
+                    if let secondary {
+                        arc(shown(secondary), lineWidth: size * 0.07)
+                            .padding(size * 0.16)
+                    }
+                    BrandIcon(account: account, size: size * 0.4)
+                        .shadow(color: hasDisc ? .black.opacity(0.7) : .clear, radius: size * 0.025)   // keeps the logo clear of a full disc
                 }
-                RingTrack(lineWidth: size * 0.12)
-                if let percent {
-                    arc(shown(percent), lineWidth: size * 0.12)
-                }
-                if let secondary {
-                    arc(shown(secondary), lineWidth: size * 0.07)
-                        .padding(size * 0.16)
-                }
-                BrandIcon(account: account, size: size * 0.4)
-                    .shadow(color: hasDisc ? .black.opacity(0.7) : .clear, radius: size * 0.025)   // keeps the logo clear of a full disc
             }
             .frame(width: size, height: size)
             .compositingGroup()   // dims the ring as one piece, so the track doesn't show through its arcs
-            .opacity(stale ? staleOpacity : 1)
+            .opacity(stale ? skin.stale : 1)
             // Claude's accent is nearly red, so a red arc alone wouldn't read: same badge style as the pet's paused mic
             .overlay(alignment: .bottomTrailing) {
-                if nearLimit {
-                    Image(systemName: "exclamationmark")
-                        .font(.system(size: max(7, size * 0.17), weight: .heavy))
-                        .foregroundStyle(.white)
-                        .frame(width: max(11, size * 0.28), height: max(11, size * 0.28))
-                        .background(.red, in: Circle())
-                        .accessibilityHidden(true).allowsHitTesting(false)
-                }
+                if nearLimit { RingBadge(symbol: "exclamationmark", size: size) }
             }
             if showPercent {
                 PercentText(text: percent.map { "\(remaining ? 100 - Int($0) : Int($0))%" } ?? "—", beside: beside)   // 98.4 used is 98%, so 2% left
-                    .foregroundStyle(Color.primary)
-                    .opacity(stale ? staleOpacity : 1)
+                    .foregroundStyle(skin.primary)
+                    .opacity(stale ? skin.stale : 1)
                     .transition(.railExtra)
             }
         }
@@ -225,7 +257,7 @@ struct RingView: View, Animatable {
     private func arc(_ fill: Double, lineWidth: CGFloat) -> some View {
         Circle()
             .trim(from: 0, to: max(0, min(fill, 100)) / 100)
-            .stroke(account.accent(pool: pool), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+            .stroke(skin.accent(account, pool: pool), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
             .rotationEffect(.degrees(-90))
     }
 }
@@ -233,6 +265,7 @@ struct RingView: View, Animatable {
 /// The battery as the rail's last ring: green, yellow or red by charge, a bolt while plugged in.
 struct BatteryRing: View, Animatable {
     var animatableData: CGFloat { get { size } set { size = newValue } }   // as RingView's
+    @Environment(\.pulseSkin) private var skin
     let reading: BatteryReading
     let level: BatteryLevel
     var size: CGFloat = 52
@@ -242,20 +275,27 @@ struct BatteryRing: View, Animatable {
     var body: some View {
         let layout = ringItemLayout(beside: beside)
         layout {
+            let colour = level == .ok ? skin.battery : level.color
+            let symbol = Image(systemName: reading.onAC ? "bolt.fill" : "battery.\(min(100, (reading.percent + 12) / 25 * 25))percent")
+                .font(.system(size: size * (reading.onAC ? 0.34 : 0.26), weight: .semibold))
             ZStack {
-                RingTrack(lineWidth: size * 0.12)
-                Circle()
-                    .trim(from: 0, to: CGFloat(max(reading.percent, 1)) / 100)
-                    .stroke(level.color, style: StrokeStyle(lineWidth: size * 0.12, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                Image(systemName: reading.onAC ? "bolt.fill" : "battery.\(min(100, (reading.percent + 12) / 25 * 25))percent")
-                    .font(.system(size: size * (reading.onAC ? 0.34 : 0.26), weight: .semibold))
-                    .foregroundStyle(Color.primary)
+                if let groove = skin.groove {
+                    GrooveRing(groove: groove, size: size, colour: colour, outer: Double(max(reading.percent, 1))) {
+                        symbol.foregroundStyle(groove.onFace.color)
+                    }
+                } else {
+                    RingTrack(lineWidth: size * 0.12)
+                    Circle()
+                        .trim(from: 0, to: CGFloat(max(reading.percent, 1)) / 100)
+                        .stroke(colour, style: StrokeStyle(lineWidth: size * 0.12, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                    symbol.foregroundStyle(Color.primary)
+                }
             }
             .frame(width: size, height: size)
             if showPercent {
                 PercentText(text: "\(reading.percent)%", beside: beside)
-                    .foregroundStyle(level == .critical ? Color.red : Color.primary)
+                    .foregroundStyle(level == .critical ? skin.alert : skin.primary)
                     .transition(.railExtra)
             }
         }
@@ -309,31 +349,43 @@ struct BatteryCard: View {
 
 struct WindowRow: View {
     @Environment(\.showsRemaining) private var remaining
+    @Environment(\.pulseSkin) private var skin
     let window: UsageWindow
     var tint: Color = .white
+    var dim = false   // a later window of the account: its colour at half strength
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(window.label)
                 .font(.subheadline)
-                .foregroundStyle(Color.primary)
+                .foregroundStyle(skin.primary)
+                .embossed(skin, size: 11)
             if let p = window.percentUsed {
                 let left = window.showsLeft(remaining)
-                ProgressView(value: max(0, min(left ? 100 - p : p, 100)), total: 100)
-                .tint(window.isNearLimit ? .red : tint)
-                .frame(height: 6)
+                let value = max(0, min(left ? 100 - p : p, 100))
+                if let groove = skin.groove {
+                    GrooveBar(groove: groove, value: value,
+                              colour: window.isNearLimit ? skin.alert : dim ? tint.mix(with: groove.secondBarGround.color, by: 0.5) : tint)
+                        .accessibilityElement()
+                        .accessibilityValue("\(Int(value)) percent")
+                } else {
+                    ProgressView(value: value, total: 100)
+                        .tint(window.isNearLimit ? .red : tint.opacity(dim ? 0.5 : 1))
+                        .frame(height: 6)
+                }
                 HStack {
                     Text(left ? "\(100 - Int(p))% Left" : "\(Int(p))% Used").font(.caption)
-                        .foregroundStyle(window.isNearLimit ? Color.red : PulsePalette.secondary)
+                        .foregroundStyle(window.isNearLimit ? skin.alert : skin.secondary)
                     Spacer()
                     Text(resetLabel(window.resetsAt)).font(.caption)
                 }
-                .foregroundStyle(PulsePalette.secondary)
+                .foregroundStyle(skin.secondary)
+                .embossed(skin, size: 10)
                 if let forecast = forecastLabel(window.forecast) {
-                    Text(forecast).font(.caption).foregroundStyle(PulsePalette.secondary)
+                    Text(forecast).font(.caption).foregroundStyle(skin.secondary).embossed(skin, size: 10)
                 }
             } else if let reset = window.resetsAt, reset <= .now {
-                Text("Reset since the last update").font(.caption).foregroundStyle(PulsePalette.secondary)
+                Text("Reset since the last update").font(.caption).foregroundStyle(skin.secondary).embossed(skin, size: 10)
             }
         }
     }
@@ -395,6 +447,7 @@ struct ConnectButton: View {
 }
 
 struct UsageCard: View {
+    @Environment(\.pulseSkin) private var skin
     let snapshot: AccountSnapshot
     let windows: [UsageWindow]   // read by the rail's view, which redraws every refresh: an open card follows a reset passing
     var pool = 0
@@ -404,18 +457,19 @@ struct UsageCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                BrandIcon(account: snapshot.id, size: 17)
-                Text("\(snapshot.displayName) Usage").font(.headline)
+                BrandIcon(account: snapshot.id, size: 17).raised(skin)
+                Text("\(snapshot.displayName) Usage").font(.headline).embossed(skin, size: 13)
                 Spacer()
-                Text(snapshot.planLabel).font(.caption).foregroundStyle(PulsePalette.secondary)
+                Text(snapshot.planLabel).font(.caption).foregroundStyle(skin.secondary).embossed(skin, size: 10)
             }
-            .foregroundStyle(Color.primary)
+            .foregroundStyle(skin.primary)
             ForEach(Array(windows.enumerated()), id: \.element.id) { i, w in
-                WindowRow(window: w, tint: snapshot.id.accent(pool: pool).opacity(i == 0 ? 1 : 0.5))
+                WindowRow(window: w, tint: skin.accent(snapshot.id, pool: pool), dim: i > 0)
             }
             if let msg = snapshot.healthMessage {
-                Text(msg).font(.caption).foregroundStyle(PulsePalette.secondary)
+                Text(msg).font(.caption).foregroundStyle(skin.secondary)
                     .fixedSize(horizontal: false, vertical: true)   // wraps: a failure's reason is the part you need
+                    .embossed(skin, size: 10)
             }
             ConnectButton(snapshot: snapshot)
         }
@@ -759,6 +813,7 @@ struct OverlayView: View {
     @ObservedObject private var breaks = BreakController.shared
     @ObservedObject private var agents = AgentsMonitor.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast   // for the tuck ticks' colours, read here above the presentation
     @Environment(\.openSettings) private var openSettings
     @State private var exitWatch: Task<Void, Never>?
     @State private var cupFrame = CGRect.zero
@@ -953,10 +1008,11 @@ struct OverlayView: View {
                     .buttonStyle(.plain)
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { itemFrames[ringKey(id, pool: pool.index)] = $0 }
                     .overlay(alignment: tuckBand.alignment) {
+                        let skin = PulseSkin.named(state.persisted.skin, contrast: contrast)
                         let used = windows.outerArc?.percentUsed ?? 0
                         let shown = max(0, min(state.showsRemaining ? 100 - used : used, 100))
                         let spent = windows.longestLimitSpent
-                        Capsule().fill(spent ? Color.red : id.accent(pool: pool.index))
+                        Capsule().fill(spent ? Color.red : skin.accent(id, pool: pool.index))
                             .frame(width: state.dock.isVertical ? 3 : 4 + 16 * shown / 100, height: state.dock.isVertical ? 4 + 16 * shown / 100 : 3)
                             // Any other limit near its end keeps the ring's colour, with a red dot like the ring's badge
                             .overlay(alignment: state.dock.isVertical ? .top : .leading) {
@@ -966,7 +1022,7 @@ struct OverlayView: View {
                                 }
                             }
                             .offset(tuckBand.offset)
-                            .opacity(state.tuckedAway && windows.outerArc?.percentUsed != nil ? (stale ? staleOpacity : 1) : 0)
+                            .opacity(state.tuckedAway && windows.outerArc?.percentUsed != nil ? (stale ? skin.stale : 1) : 0)
                             // in only as the rail reaches its slot, so the ticks never sit on top of the rings
                             .animation(state.tuckedAway ? .easeOut(duration: 0.16).delay(0.18) : .easeOut(duration: 0.1), value: state.tuckedAway)
                             .allowsHitTesting(false)
@@ -1112,6 +1168,7 @@ struct OverlayView: View {
 
 struct MenuBarPopover: View {
     @ObservedObject var state: AppState
+    @Environment(\.pulseSkin) private var skin
     @Environment(\.openSettings) private var openSettings
     @Environment(\.dismiss) private var dismiss
 
@@ -1123,13 +1180,13 @@ struct MenuBarPopover: View {
                         if let snap = state.snapshots[id] {
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack(spacing: 6) {
-                                    BrandIcon(account: id, size: 13)
-                                    Text("\(snap.displayName) Usage").font(.headline)
+                                    BrandIcon(account: id, size: 13).raised(skin)
+                                    Text("\(snap.displayName) Usage").font(.headline).embossed(skin, size: 13)
                                 }
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(skin.primary)
                                 ForEach(Array(snap.shownWindows().pools.enumerated()), id: \.offset) { pool, windows in
                                     ForEach(Array(windows.enumerated()), id: \.element.id) { i, w in
-                                        WindowRow(window: w, tint: id.accent(pool: pool).opacity(i == 0 ? 1 : 0.5))
+                                        WindowRow(window: w, tint: skin.accent(id, pool: pool), dim: i > 0)
                                     }
                                 }
                                 if let msg = snap.healthMessage {
@@ -1203,7 +1260,7 @@ struct SettingsView: View {
     /// One tab per group. Only the layout is grouped: every value is saved where it always was.
     var body: some View {
         TabView(selection: $state.settingsTab) {
-            tab("General", "gearshape", height: 210) {
+            tab("General", "gearshape", height: 250) {
                 Section {
                     Toggle("Launch at login", isOn: Binding(
                         get: { loginItem == .enabled },
@@ -1215,12 +1272,21 @@ struct SettingsView: View {
                     if loginItem == .requiresApproval {
                         Button("Allow Pulse in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
                     }
+                    Picker("Skin", selection: Binding(get: { state.persisted.skin ?? PulseSkinSet.classic.name },
+                                                      set: { state.persisted.skin = $0 == PulseSkinSet.classic.name ? nil : $0 })) {
+                        Text("Classic").tag(PulseSkinSet.classic.name)
+                        Text("Groove").tag(PulseSkinSet.groove.name)
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityLabel("Skin")
                     Picker("Appearance", selection: $state.persisted.appearance) {
                         Text("Glass").tag(PulseAppearance.glass)
                         Text("Solid").tag(PulseAppearance.solid)
                     }
                     .pickerStyle(.segmented)
                     .accessibilityLabel("Appearance")
+                    .disabled(state.persisted.skin == PulseSkinSet.groove.name)
+                    .help(state.persisted.skin == PulseSkinSet.groove.name ? "Glass and Solid are Classic's; Groove has its own surface" : "")
                 }
             }
             tab("Accounts", "person.crop.circle", height: 360) {

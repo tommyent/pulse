@@ -12,11 +12,11 @@ extension EnvironmentValues {
     }
 }
 
+/// Classic's colours, for the views that don't change with the skin (Groove's secondary ink is the same).
 enum PulsePalette {
-    static let surface = Color(.sRGB, red: 0.07, green: 0.07, blue: 0.08, opacity: 1)
-    // Match the dark menu progress track with opaque ink, independent of glass and backdrop.
-    static let track = Color(.sRGB, red: 37.0 / 255, green: 37.0 / 255, blue: 39.0 / 255, opacity: 1)
-    static let secondary = Color(.sRGB, red: 0.9, green: 0.9, blue: 0.9, opacity: 1)
+    static let surface = PulseSkin.classic.surface.color
+    static let track = PulseSkin.classic.track.color
+    static let secondary = PulseSkin.classic.secondary
 }
 
 struct RingTrack: View {
@@ -31,9 +31,19 @@ struct RingTrack: View {
 
 struct PulseSurface<S: Shape>: View {
     @Environment(\.pulseAppearance) private var appearance
+    @Environment(\.pulseSkin) private var skin
     let shape: S
+    var floats = true   // Groove: the slab throws its own shadow; false where the window already has one
 
     var body: some View {
+        if let groove = skin.groove {
+            GrooveSlab(groove: groove, shape: shape, floats: floats)
+        } else {
+            classic
+        }
+    }
+
+    @ViewBuilder private var classic: some View {
         switch appearance {
         case .glass:
             // Keep the foreground outside glass's adaptive foreground/vibrancy treatment.
@@ -75,11 +85,35 @@ private struct PulseRim<S: Shape>: View {
 
 private struct PulsePresentation: ViewModifier {
     @ObservedObject var state: AppState
+    @Environment(\.colorSchemeContrast) private var contrast
     func body(content: Content) -> some View {
         content.preferredColorScheme(.dark)
             .background(PulseWindowBacking())
             .environment(\.pulseAppearance, state.persisted.appearance)
+            .environment(\.pulseSkin, PulseSkin.named(state.persisted.skin, contrast: contrast))
             .environment(\.appearsActive, true)
+    }
+}
+
+private struct SurfaceModifier<S: Shape>: ViewModifier {
+    @Environment(\.pulseSkin) private var skin
+    let shape: S
+    let bordered: Bool   // false: the window supplies its own rim and shadow (the menu bar popover)
+
+    func body(content: Content) -> some View {
+        content
+            .background { PulseSurface(shape: shape, floats: bordered) }
+            .overlay {
+                // Groove's slab carries its own light and edges: no gloss, no outline
+                if skin.groove == nil {
+                    ZStack {
+                        PulseLight(shape: shape)
+                        if bordered { PulseRim(shape: shape) }
+                    }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                }
+            }
     }
 }
 
@@ -101,15 +135,7 @@ private struct PulseWindowBacking: NSViewRepresentable {
 
 extension View {
     func pulseSurface<S: Shape>(in shape: S, bordered: Bool = true) -> some View {
-        background { PulseSurface(shape: shape) }
-            .overlay {
-                ZStack {
-                    PulseLight(shape: shape)
-                    if bordered { PulseRim(shape: shape) }
-                }
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
+        modifier(SurfaceModifier(shape: shape, bordered: bordered))
     }
     func pulsePresentation(_ state: AppState) -> some View { modifier(PulsePresentation(state: state)) }
 }
