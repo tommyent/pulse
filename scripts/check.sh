@@ -30,6 +30,7 @@ SPARKLE="$PWD/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x
 swiftc -F "$SPARKLE" -Xlinker -rpath -Xlinker "$SPARKLE" \
     $(find Sources/Pulse -name "*.swift" ! -name PulseApp.swift) Checks/SettingsStateChecks.swift -o "$OUT/state"
 "$OUT/state"
+./Checks/ClassicRenderChecks.sh   # Classic draws byte for byte as before skins
 swiftc Sources/Pulse/HotKey.swift Checks/VoiceShortcutChecks.swift -o "$OUT/voice-shortcut"
 "$OUT/voice-shortcut"
 swiftc Sources/Pulse/Models.swift Sources/Pulse/Skin.swift Sources/Pulse/Adapters.swift Sources/Pulse/GrokLogin.swift Sources/Pulse/HotKey.swift Checks/SecurityChecks.swift -o "$OUT/security"

@@ -4,8 +4,8 @@ import SwiftUI
 /// always had; Groove is a sculpted one (Fable's "Groove C · Inlay"). Pulse draws dark only for now, so `light` is
 /// empty until Groove's light half (Fable's "White") is built; an appearance without its own half uses `dark`.
 ///
-/// Plain Codable values with fixed key names, so a skin can come from a JSON file: colours are hex strings
-/// ("#RRGGBB", "#RRGGBBAA", "p3:#RRGGBB" for Display P3), shadows are `[x, y, blur, "#RRGGBB", opacity]` as in Fable's
+/// Plain Codable values with fixed key names, so a skin can come from a JSON file: colours are strings (`SkinColor`:
+/// hex, or exact components such as "p3:1,0.40,0.16"), shadows are `[x, y, blur, "#RRGGBB", opacity]` as in Fable's
 /// token files, sizes are numbers.
 struct PulseSkinSet: Codable, Equatable {
     var name: String
@@ -77,13 +77,14 @@ struct PulseSkin: Codable, Equatable {
     }
 
     static let classic = PulseSkin(
-        accents: Accents(claude: "p3:#FF6629", codex: "p3:#386BFF", grok: "p3:#FFB81A",
-                         antigravity: "p3:#995CFF",   // not green: the battery's ring is
-                         antigravity2: "p3:#59B8FF"),
-        surface: "#121214",
+        // exact components, not hex: Classic draws exactly as it did before skins
+        accents: Accents(claude: "p3:1,0.40,0.16", codex: "p3:0.22,0.42,1", grok: "p3:1,0.72,0.10",
+                         antigravity: "p3:0.60,0.36,1",   // not green: the battery's ring is
+                         antigravity2: "p3:0.35,0.72,1"),
+        surface: "srgb:0.07,0.07,0.08",
         // Match the dark menu progress track with opaque ink, independent of glass and backdrop.
         track: "#252527",
-        ink: Ink(primary: nil, secondary: "#E6E6E6"),
+        ink: Ink(primary: nil, secondary: "srgb:0.9,0.9,0.9"),
         stale: 0.5,
         groove: nil)
 
@@ -149,21 +150,30 @@ struct PulseSkin: Codable, Equatable {
     }
 }
 
-/// A colour as a hex string: "#RRGGBB" or "#RRGGBBAA" in sRGB, or "p3:#RRGGBB" in Display P3.
+/// A colour as a string: hex ("#RRGGBB", "#RRGGBBAA"), or exact components from 0 to 1 ("r,g,b" or "r,g,b,a"). Either
+/// may follow "srgb:" (the default) or "p3:" (Display P3): "p3:#FF6629", "srgb:0.07,0.07,0.08". Components keep values
+/// that 8-bit hex would round.
 struct SkinColor: Codable, Equatable, ExpressibleByStringLiteral {
-    let hex: String
+    let hex: String   // the string as written, hex or not
     let color: Color
 
-    init(_ hex: String) throws {
-        let p3 = hex.hasPrefix("p3:")
-        let digits = (p3 ? String(hex.dropFirst(3)) : hex).trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-        guard digits.count == 6 || digits.count == 8, let v = UInt64(digits, radix: 16) else {
-            throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "not a hex colour: \(hex)"))
+    init(_ text: String) throws {
+        func refuse() -> DecodingError { .dataCorrupted(.init(codingPath: [], debugDescription: "not a colour: \(text)")) }
+        let p3 = text.hasPrefix("p3:")
+        let body = p3 ? String(text.dropFirst(3)) : text.hasPrefix("srgb:") ? String(text.dropFirst(5)) : text
+        let parts: [Double]
+        if body.hasPrefix("#") {
+            let digits = body.dropFirst()
+            guard digits.count == 6 || digits.count == 8, digits.allSatisfy(\.isHexDigit), let v = UInt64(digits, radix: 16) else { throw refuse() }
+            let rgba = digits.count == 6 ? v << 8 | 0xFF : v
+            parts = [24, 16, 8, 0].map { Double(rgba >> $0 & 0xFF) / 255 }
+        } else {
+            let numbers = body.split(separator: ",", omittingEmptySubsequences: false).map { Double($0.trimmingCharacters(in: .whitespaces)) }
+            guard numbers.count == 3 || numbers.count == 4, numbers.allSatisfy({ $0.map { (0 ... 1).contains($0) } == true }) else { throw refuse() }
+            parts = numbers.map { $0! } + (numbers.count == 3 ? [1] : [])
         }
-        let rgba = digits.count == 6 ? v << 8 | 0xFF : v
-        func part(_ shift: UInt64) -> Double { Double(rgba >> shift & 0xFF) / 255 }
-        self.hex = hex
-        color = Color(p3 ? .displayP3 : .sRGB, red: part(24), green: part(16), blue: part(8), opacity: part(0))
+        hex = text
+        color = Color(p3 ? .displayP3 : .sRGB, red: parts[0], green: parts[1], blue: parts[2], opacity: parts[3])
     }
     init(stringLiteral hex: String) { try! self.init(hex) }   // built-in skins only
     init(from decoder: Decoder) throws { try self.init(decoder.singleValueContainer().decode(String.self)) }

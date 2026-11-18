@@ -236,10 +236,26 @@ enum SettingsStateChecks {
         assert((try? JSONDecoder().decode(PulseSkinSet.self, from: Data(broken.replacingOccurrences(of: "#CF7C5E", with: "#CF7C5").utf8))) == nil)
         assert((try? JSONDecoder().decode(PulseSkinSet.self, from: Data(broken.replacingOccurrences(of: "[4.4,4.4,3.2,\"#000000\",0.8]", with: "[4.4,4.4,\"#000000\",0.8]").utf8))) == nil)
 
-        // Classic's values are today's: the P3 accents to within rounding, the track exactly
-        let claude = NSColor(PulseSkin.classic.accent(.claude)).usingColorSpace(.displayP3)!
-        assert(abs(claude.redComponent - 1) < 0.002 && abs(claude.greenComponent - 0.40) < 0.002 && abs(claude.blueComponent - 0.16) < 0.002)
-        assert(PulseSkin.classic.groove == nil && AccountID.codex.accent == PulseSkin.classic.accent(.codex))
+        // Classic's colours are exactly the values Pulse had before skins (ClassicRenderChecks.sh compares whole renders)
+        let env = EnvironmentValues()
+        func same(_ a: Color, _ b: Color) -> Bool { a.resolve(in: env) == b.resolve(in: env) }
+        let c = PulseSkin.classic
+        assert(same(c.accent(.claude), Color(.displayP3, red: 1.0, green: 0.40, blue: 0.16)))
+        assert(same(c.accent(.codex), Color(.displayP3, red: 0.22, green: 0.42, blue: 1.0)))
+        assert(same(c.accent(.grok), Color(.displayP3, red: 1.0, green: 0.72, blue: 0.10)))
+        assert(same(c.accent(.antigravity), Color(.displayP3, red: 0.60, green: 0.36, blue: 1.0)))
+        assert(same(c.accent(.antigravity, pool: 1), Color(.displayP3, red: 0.35, green: 0.72, blue: 1.0)))
+        assert(same(c.surface.color, Color(.sRGB, red: 0.07, green: 0.07, blue: 0.08, opacity: 1)))
+        assert(same(c.track.color, Color(.sRGB, red: 37.0 / 255, green: 37.0 / 255, blue: 39.0 / 255, opacity: 1)))
+        assert(same(c.secondary, Color(.sRGB, red: 0.9, green: 0.9, blue: 0.9, opacity: 1)))
+        assert(c.groove == nil && AccountID.codex.accent == c.accent(.codex))
+        // the colour forms a skin file can use, and ones it can't
+        for good in ["#FF6629", "#FF662980", "p3:#FF6629", "srgb:0.07,0.07,0.08", "p3:1,0.40,0.16", "0.5,0.5,0.5,0.25"] {
+            assert((try? SkinColor(good)) != nil, "\(good) is a colour")
+        }
+        for bad in ["#+12345", "#FF66", "FF6629", "p3:1,0.4", "srgb:1.2,0,0", "srgb:-0.1,0,0", "p3:1,0.4,0.16,1,1", "lab:1,2,3"] {
+            assert((try? SkinColor(bad)) == nil, "\(bad) is refused")
+        }
 
         // Increase Contrast: full colours, white ink, nothing shading the colour
         let contrast = PulseSkin.named("groove", contrast: .increased)

@@ -86,7 +86,7 @@ struct AgentsRing: View, Animatable {
                         }
                     }
                     .frame(width: d, height: d)
-                    .background { disc }
+                    .modifier(AgentDisc(groove: skin.groove))
                     .offset(x: size * centre.x, y: size * centre.y)
                     .zIndex(Double(count - i))
                 }
@@ -101,15 +101,19 @@ struct AgentsRing: View, Animatable {
             .opacity(i < shown.colour ? 1 : 0.6)
     }
 
-    /// An agent's disc: raised off the slab in Groove; in Classic a grey disc with a light rim and a dark edge, so
-    /// overlapping discs read apart.
-    @ViewBuilder private var disc: some View {
-        if let groove = skin.groove {
-            GrooveBubble(groove: groove, fill: groove.bubbleFace)
-        } else {
-            Circle().fill(Color(white: 0.12))
-                .overlay(Circle().strokeBorder(Color.white.opacity(0.3), lineWidth: 0.6))
-                .background(Circle().fill(PulsePalette.surface).padding(-1))
+    /// An agent's disc: raised off the slab in Groove; in Classic a grey disc with a light rim over the icon and a dark
+    /// edge, so overlapping discs read apart.
+    private struct AgentDisc: ViewModifier {
+        let groove: PulseSkin.Groove?
+        func body(content: Content) -> some View {
+            if let groove {
+                content.background { GrooveBubble(groove: groove, fill: groove.bubbleFace) }
+            } else {
+                content
+                    .background(Color(white: 0.12), in: Circle())
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.3), lineWidth: 0.6))
+                    .background(Circle().fill(PulsePalette.surface).padding(-1))
+            }
         }
     }
 

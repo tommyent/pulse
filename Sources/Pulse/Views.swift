@@ -180,10 +180,16 @@ struct RingBadge: View {
             .font(.system(size: max(7, size * glyphScale), weight: weight))
             .foregroundStyle(ink)
             .frame(width: max(11, size * 0.28), height: max(11, size * 0.28))
-            .background {
-                if let groove = skin.groove { GrooveBubble(groove: groove, fill: fill) } else { Circle().fill(fill) }
-            }
+            .modifier(BadgeDisc(groove: skin.groove, fill: fill))
             .accessibilityHidden(true).allowsHitTesting(false)
+    }
+
+    private struct BadgeDisc: ViewModifier {
+        let groove: PulseSkin.Groove?
+        let fill: Color
+        func body(content: Content) -> some View {
+            if let groove { content.background { GrooveBubble(groove: groove, fill: fill) } } else { content.background(fill, in: Circle()) }
+        }
     }
 }
 
