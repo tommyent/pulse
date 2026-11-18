@@ -152,12 +152,49 @@ enum SecurityChecks {
         assert(out.paused, "a sign-out stays paused until Refresh, whatever agy does")
         out.manualRefresh(whileRefreshing: false)
         assert(!out.paused, "a Refresh lifts a sign-out")
+        // A killed run's log decides network or stall. agy logs "not logged into Antigravity" at every start, so only
+        // its browser sign-in's own lines count as one, and they win over network errors (a token refresh that hits
+        // the network can send agy to a sign-in).
+        let everyStart = "W1118 12:00:14.477407 52 cache.go:157] Cache(loadCodeAssistResponse): Singleflight refresh failed: error getting token source: You are not logged into Antigravity.\n"
+        let offline = everyStart + "W1117 16:52:25.926553 112832 cache.go:157] Post \"https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels\": dial tcp: lookup daily-cloudcode-pa.googleapis.com: i/o timeout\n"
+        assert(AntigravityAdapter.hungOnNetwork(Data(offline.utf8)), "a network error in the log is a network hang")
+        assert(AntigravityAdapter.hungOnNetwork(Data("Get \"https://aicode.googleapis.com/v1alpha:fetchConfig\": context deadline exceeded".utf8)))
+        assert(!AntigravityAdapter.hungOnNetwork(Data(everyStart.utf8)), "the every-start sign-in line alone is a stall")
+        assert(!AntigravityAdapter.hungOnNetwork(Data((offline + "Opening browser to authenticate with Google...\nWaiting for authentication (timeout 60s)...\n").utf8)),
+               "a real sign-in wait is a stall even with network errors")
+        assert(!AntigravityAdapter.hungOnNetwork(Data((offline + "Please visit the following URL to authorize the application:\n").utf8)))
+        assert(!AntigravityAdapter.hungOnNetwork(Data()), "no log is a stall")
+        var net = AgyPause()
+        net.passStarted(now: t0); net.update(with: agSnap(.providerError, AntigravityAdapter.networkTimeout), at: t0)
+        assert(!net.paused && !AntigravityAdapter.pausesPolling(agSnap(.providerError, AntigravityAdapter.networkTimeout)),
+               "a network timeout never pauses")
+        net.update(with: stall, at: t0 + 120); net.update(with: agSnap(.providerError, AntigravityAdapter.networkTimeout), at: t0 + 240)
+        assert(!net.paused, "a network timeout after a stall runs agy again at the next poll")
+        // A run past its timeout is killed and hands back its own agy.log; one that finishes hands back no log.
+        func agyRun(_ script: String) -> (out: Data, err: Data, log: Data, killed: Bool)? {
+            let done = DispatchSemaphore(value: 0)
+            nonisolated(unsafe) var result: (out: Data, err: Data, log: Data, killed: Bool)?
+            Task.detached {
+                result = await AntigravityAdapter.run(URL(fileURLWithPath: "/bin/sh"), ["-c", script], timeout: .seconds(1))
+                done.signal()
+            }
+            done.wait()
+            return result
+        }
+        let hung = agyRun("echo 'dial tcp: lookup example.com: i/o timeout' > agy.log; exec sleep 30")
+        assert(hung?.killed == true && AntigravityAdapter.hungOnNetwork(hung!.log), "a killed run's log is read before its folder goes")
+        let quick = agyRun("echo 'dial tcp: i/o timeout' > agy.log; echo ok")
+        assert(quick?.killed == false && quick?.log.isEmpty == true && quick.map { String(decoding: $0.out, as: UTF8.self) } == "ok\n")
+        assert(agyRun("exec sleep 30")?.log.isEmpty == true, "a killed run without a log hands back none")
         // A failure after a good report keeps the windows, shown stale with the failure's own reason.
         var good = agSnap(.ok, nil); good.windows = [UsageWindow(id: "weekly_all", label: "Weekly", percentUsed: 40, resetsAt: nil)]
         let stalled = agSnap(.providerError, AntigravityAdapter.stalled).staleKeeping(good)
         assert(stalled.health == .stale && stalled.windows.count == 1 && stalled.healthMessage?.contains("click Refresh") == true,
                "a stall after a good report still says what to do (got \(stalled.healthMessage ?? "nil"))")
         assert(good.staleKeeping(good).healthMessage?.hasPrefix("Stale — last updated") == true, "no reason, no suffix")
+        let netStale = agSnap(.providerError, AntigravityAdapter.networkTimeout).staleKeeping(good)
+        assert(netStale.health == .stale && netStale.windows.count == 1 && netStale.healthMessage?.contains("(network)") == true,
+               "a network timeout keeps the last windows, stale, with its reason (got \(netStale.healthMessage ?? "nil"))")
         print("Security checks passed: private atomic auth writes, redirect/cache policy, shortcut release and the agy usage guard")
     }
 }

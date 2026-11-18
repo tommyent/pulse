@@ -655,7 +655,9 @@ struct AgyPause {
 enum AntigravityAdapter {
     /// A run Pulse had to kill: agy may wait there for a browser sign-in it opened itself. AppState stops
     /// polling agy on this or needsAuth (`AgyPause`), so it can't open a tab every poll.
-    static let stalled = "Antigravity CLI stalled, likely waiting for sign-in. Run agy once, then click Refresh"
+    static let stalled = "Antigravity CLI stalled, maybe waiting for sign-in. Pulse checks again once agy has run, or click Refresh"
+    /// A killed run whose own log shows it hung on the network (`hungOnNetwork`): no pause, the next poll runs it.
+    static let networkTimeout = "Antigravity CLI timed out (network); Pulse tries again on its next check"
 
     static func pausesPolling(_ snap: AccountSnapshot) -> Bool { snap.health == .needsAuth || snap.detail == stalled }
 
@@ -671,7 +673,7 @@ enum AntigravityAdapter {
                                    health: .missingClient, windows: [], fetchedAt: .now, source: .cliStatus)
         guard let agy = locateBinary("agy") else { return snap }
         snap.health = .providerError
-        guard let version = await run(agy, ["--version"], timeout: .seconds(10)) else {
+        guard let version = await run(agy, ["--version"], timeout: .seconds(10)), !version.killed else {
             snap.detail = "Antigravity CLI did not start"
             return snap
         }
@@ -690,11 +692,11 @@ enum AntigravityAdapter {
         // agy's log goes in the folder `run` removes, not one more file per refresh in ~/.gemini. An older agy that refuses the flag runs without it.
         let usage = ["-p", "/usage", "--output-format", "json", "--print-timeout", "45s"]
         var answer = await run(agy, usage + ["--log-file", "agy.log"], timeout: .seconds(60))
-        if let refused = answer, String(decoding: refused.err, as: UTF8.self).contains("not defined") {
+        if let refused = answer, !refused.killed, String(decoding: refused.err, as: UTF8.self).contains("not defined") {
             answer = await run(agy, usage, timeout: .seconds(60))
         }
-        guard let report = answer else {
-            snap.detail = stalled
+        guard let report = answer, !report.killed else {
+            snap.detail = answer.map { hungOnNetwork($0.out + $0.err + $0.log) } == true ? networkTimeout : stalled
             return snap
         }
         if let json = try? JSONSerialization.jsonObject(with: report.out) as? [String: Any] {
@@ -765,9 +767,24 @@ enum AntigravityAdapter {
             .contains { text.contains($0) }
     }
 
+    /// A killed run's output and log tail: true when it hung on the network rather than on a sign-in. agy logs "not
+    /// logged into Antigravity" at the start of every session, working ones too, so only its browser sign-in's own
+    /// lines count as a sign-in. A network error can itself send agy to a sign-in, so those lines win.
+    static func hungOnNetwork(_ output: Data) -> Bool {
+        let text = String(decoding: output, as: UTF8.self).lowercased()
+        let signIn = ["waiting for authentication", "opening browser", "open browser", "authorize the application",
+                      "local browser", "select login method", "accounts.google.com/o/oauth2", "oauth callback"]
+        let network = ["i/o timeout", "context deadline exceeded", "dial tcp", "no such host", "operation timed out",
+                       "network is unreachable", "network is down", "connection refused", "connection reset",
+                       "tls handshake timeout"]
+        return !signIn.contains { text.contains($0) } && network.contains { text.contains($0) }
+    }
+
     /// Runs agy in a private temp folder with no stdin. Output goes to files, not pipes, so a full pipe
-    /// can never stall it and no thread blocks while it runs.
-    private static func run(_ agy: URL, _ args: [String], timeout: Duration) async -> (out: Data, err: Data)? {
+    /// can never stall it and no thread blocks while it runs. A run past `timeout` is killed and comes back
+    /// `killed`, with the tail of its `agy.log` (when it wrote one) for `hungOnNetwork`.
+    static func run(_ agy: URL, _ args: [String], timeout: Duration) async
+        -> (out: Data, err: Data, log: Data, killed: Bool)? {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.appending(path: "pulse-agy-\(UUID().uuidString)")
         guard (try? fm.createDirectory(at: dir, withIntermediateDirectories: false,
@@ -785,13 +802,26 @@ enum AntigravityAdapter {
         p.standardOutput = out; p.standardError = err
         guard (try? p.run()) != nil else { return nil }
         let deadline = ContinuousClock.now + timeout
+        var killed = false
         while p.isRunning {
             guard ContinuousClock.now < deadline, (try? await Task.sleep(for: .milliseconds(100))) != nil else {
                 p.terminate()
-                return nil
+                killed = true
+                for _ in 0..<10 where p.isRunning { try? await Task.sleep(for: .milliseconds(100)) }   // a second to flush its log
+                break
             }
         }
-        return ((try? Data(contentsOf: outURL)) ?? Data(), (try? Data(contentsOf: errURL)) ?? Data())
+        return ((try? Data(contentsOf: outURL)) ?? Data(), (try? Data(contentsOf: errURL)) ?? Data(),
+                killed ? tail(dir.appending(path: "agy.log")) : Data(), killed)
+    }
+
+    /// A file's last 64 KB, or nothing when it's missing.
+    private static func tail(_ url: URL) -> Data {
+        guard let h = try? FileHandle(forReadingFrom: url) else { return Data() }
+        defer { try? h.close() }
+        let end = (try? h.seekToEnd()) ?? 0
+        try? h.seek(toOffset: end > 65_536 ? end - 65_536 : 0)
+        return (try? h.readToEnd()) ?? Data()
     }
 }
 
