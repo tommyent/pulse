@@ -196,6 +196,21 @@ enum SecurityChecks {
         let busy = poll(&back, marker: { $0 < 600 ? m0 : m0 + 1 }) { $0 < 4 ? netTimeout : good0 }
         assert(busy == Array([0, 16, 48, 110, 600]) + Array(stride(from: 602, through: 24 * 60, by: 2)),
                "with the budget spent, the owner's own agy use runs it, and a good report puts polling back (\(busy.prefix(8)))")
+        // One rule for every fetch: anything but a report, a sign-out or a fetch that never reached a usage run is a
+        // failure, so an unknown reason holds agy back too.
+        func outcome(_ health: Health, _ detail: String?) -> AgyPause.Outcome { AntigravityAdapter.outcome(of: agSnap(health, detail)) }
+        assert(outcome(.providerError, AntigravityAdapter.noUsage) == .failed && outcome(.providerError, "a reason added later") == .failed
+               && outcome(.providerError, AccountSnapshot.noAnswer(.antigravity).detail) == .failed && outcome(.providerError, nil) == .failed)
+        assert(outcome(.providerError, AntigravityAdapter.networkError) == .network && outcome(.providerError, AntigravityAdapter.networkTimeout) == .network)
+        assert(outcome(.providerError, AntigravityAdapter.offline) == .noAttempt && outcome(.providerError, AntigravityAdapter.tooOld) == .noAttempt
+               && outcome(.missingClient, nil) == .noAttempt && outcome(.stale, nil) == .noAttempt)
+        assert(outcome(.needsAuth, AntigravityAdapter.signIn) == .signedOut && outcome(.ok, nil) == .report)
+        var empty = AgyPause()   // Sol's probe: "returned no usage" used to leave the gate open every poll
+        assert(poll(&empty) { _ in agSnap(.providerError, AntigravityAdapter.noUsage) } == [0, 32],
+               "a run that exits with no usage is a failure like a stall: one run half an hour on, then none")
+        var flaky = AgyPause()
+        assert(poll(&flaky) { _ in agSnap(.providerError, AntigravityAdapter.networkError) } == [0, 16, 48, 110],
+               "a quick network error spends the same budget as a network timeout")
         var lost = AgyPause()
         assert(poll(&lost) { _ in .noAnswer(.antigravity) } == [0, 32], "a fetch that never answered is taken for a stall")
         var clicked = AgyPause()
@@ -260,7 +275,19 @@ enum SecurityChecks {
         assert(early?.killed == true && early?.logComplete == true && early.map(AntigravityAdapter.cause) == .signedOut,
                "the real kill path keeps an early sign-in line: a sign-out, not the network")
         let quick = agyRun("echo 'dial tcp: i/o timeout' > agy.log; echo ok")
-        assert(quick?.killed == false && quick?.log.isEmpty == true && quick.map { String(decoding: $0.out, as: UTF8.self) } == "ok\n")
+        assert(quick?.killed == false && quick.map { String(decoding: $0.out, as: UTF8.self) } == "ok\n"
+               && quick.map(AntigravityAdapter.cause) == .network, "a run that exits by itself hands back its log too")
+        // Sol's round-3 probe: agy says it's waiting for a sign-in and exits 1 at once. That is a sign-out, read from
+        // stderr and the log, whereas the old exit-path check saw nothing and the gate stayed open every poll.
+        let quickSignIn = agyRun("""
+            printf '%s\\n' 'Opening browser to authenticate with Google...' > agy.log
+            printf '%s\\n' 'Waiting for authentication (timeout 60s)...' >&2
+            exit 1
+            """)
+        assert(quickSignIn?.killed == false && quickSignIn?.log.isEmpty == false && quickSignIn.map(AntigravityAdapter.cause) == .signedOut,
+               "a quick sign-in exit is a sign-out")
+        let exitedOffline = agyRun("echo 'dial tcp: lookup example.com: no such host' > agy.log; exit 1")
+        assert(exitedOffline.map(AntigravityAdapter.cause) == .network, "a quick exit on a network error is the network")
         assert(agyRun("exec sleep 30")?.log.isEmpty == true, "a killed run without a log hands back none")
         let late = dir.appendingPathComponent("outlived-pulse")
         let stubborn = agyRun("""
