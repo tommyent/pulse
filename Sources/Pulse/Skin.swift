@@ -246,6 +246,7 @@ struct GrooveSlab<S: Shape>: View {
                                   startPoint: .topLeading, endPoint: .bottomTrailing)
         shape.fill(fill.skinShadows(inner: groove.raise, drop: floats ? groove.drop : []))
             .overlay { shape.fill(ImagePaint(image: Grain.image, scale: 0.5)).opacity(groove.grain) }
+            .flattened(margin: 12)
     }
 }
 
@@ -287,17 +288,32 @@ private struct SkinShadows: ViewModifier {
     let scale: CGFloat
 
     func body(content: Content) -> some View {
-        shadows.reduce(AnyView(content)) { view, s in
-            AnyView(view.shadow(color: s.color(), radius: s.blur * scale / 2, x: s.x * scale, y: s.y * scale))
+        if shadows.isEmpty {
+            content
+        } else {
+            shadows.reduce(AnyView(content)) { view, s in
+                AnyView(view.shadow(color: s.color(), radius: s.blur * scale / 2, x: s.x * scale, y: s.y * scale))
+            }
+            .flattened(margin: 8)
         }
+    }
+}
+
+extension View {
+    /// Drawn once into a bitmap, `margin` points bigger than the view on every side for its shadows, and redrawn only
+    /// when the view itself changes. Live shadows are blurred again each time anything else in the window moves.
+    func flattened(margin: CGFloat) -> some View {
+        padding(margin).drawingGroup().padding(-margin)
     }
 }
 
 // MARK: - the rings
 
-/// A Groove ring drawn once per change into one layer: the channels pressed into the slab, each account's colour lying on
-/// its floor under the wall's shadow, the hub, the cap disc, and the logo or symbol standing on the hub.
-struct GrooveRing<Mark: View>: View, Animatable {
+/// A Groove ring: the channels pressed into the slab, each account's colour lying on its floor under the wall's shadow,
+/// the hub, the cap disc, and the logo or symbol standing on the hub. Three layers: what never moves under the colour,
+/// the colour, and what never moves over it. An animated value (the countdown draining, a refresh) redraws only the
+/// colour; the blurs of the channel, the wall, the hub and the logo are drawn once per change of the ring itself.
+struct GrooveRing<Mark: View>: View {
     let groove: PulseSkin.Groove
     let size: CGFloat
     var colour: Color? = nil
@@ -306,95 +322,133 @@ struct GrooveRing<Mark: View>: View, Animatable {
     var twoTracks = false
     var hub = true
     var disc: Double? = nil      // the cap disc's level, 0 to 1; nil = none
-    var raiseMark = true         // the mark stands on the hub; false = drawn flat (the pet's sprite isn't one)
+    var raiseMark = true         // the mark stands on the hub; false = drawn flat
     @ViewBuilder var mark: Mark
 
-    /// The outer colour follows an animation as a trimmed stroke does (the break's countdown drains smoothly).
-    var animatableData: Double {
-        get { outer ?? 0 }
-        set { if outer != nil { outer = newValue } }
-    }
-
     var body: some View {
-        // 20% of room around the ring: the channel reaches past the ring's frame, as Classic's stroke does
-        Canvas { ctx, box in
-            let u = size / 100
-            let c = CGPoint(x: box.width / 2, y: box.height / 2)
-            func circle(_ r: CGFloat) -> Path { Path(ellipseIn: CGRect(x: c.x - r * u, y: c.y - r * u, width: 2 * r * u, height: 2 * r * u)) }
-            func band(_ t: PulseSkin.Groove.Track) -> Path { circle(t.radius).strokedPath(StrokeStyle(lineWidth: t.channel * u)) }
-
-            let tracks = [(groove.outer, outer)] + (twoTracks ? [(groove.inner, inner)] : [])
-            for (track, fill) in tracks {
-                let channel = band(track)
-                ctx.drawShadow(channel, groove.pressLip, u)
-                ctx.fill(channel, with: .color(groove.floor.color))
-                for s in groove.pressInner { ctx.innerShadow(channel, s, u) }
-                if let fill, fill > 0, let colour {
-                    var lit = ctx
-                    lit.clip(to: channel)
-                    let arc = circle(track.radius).trimmedPath(from: 0, to: min(fill, 100) / 100)
-                        .applying(CGAffineTransform(translationX: -c.x, y: -c.y).concatenating(.init(rotationAngle: -.pi / 2))
-                            .concatenating(.init(translationX: c.x, y: c.y)))
-                    let tube = arc.strokedPath(StrokeStyle(lineWidth: track.tube * u, lineCap: .round))
-                    var glow = lit
-                    let bleed = groove.tubeBleed
-                    glow.addFilter(.shadow(color: bleed.color(accent: colour), radius: bleed.blur * u / 2, x: bleed.x * u, y: bleed.y * u, options: .shadowOnly))
-                    glow.fill(tube, with: .color(colour))
-                    lit.fill(tube, with: .color(colour))
-                    lit.innerShadow(tube, groove.tubeInner, u)
+        let geometry = RingGeometry(groove: groove, size: size, twoTracks: twoTracks)
+        ZStack {
+            Canvas { ctx, box in
+                let g = geometry.at(box)
+                for channel in g.channels {
+                    ctx.drawShadow(channel, groove.pressLip, g.u)
+                    ctx.fill(channel, with: .color(groove.floor.color))
+                    for s in groove.pressInner { ctx.innerShadow(channel, s, g.u) }
                 }
-                if let wall = groove.wall { ctx.innerShadow(channel, wall, u) }
             }
-
-            if hub {
-                let dome = circle(twoTracks ? groove.hubDouble : groove.hubSingle)
-                ctx.fill(dome, with: .radialGradient(Gradient(stops: [.init(color: groove.faceTop.color, location: 0),
-                                                                      .init(color: groove.face.color, location: 0.6),
-                                                                      .init(color: groove.faceBottom.color, location: 1)]),
-                                                     center: CGPoint(x: c.x - 12 * u, y: c.y - 16 * u), startRadius: 0, endRadius: 46 * u))
-                for s in groove.dome { ctx.innerShadow(dome, s, u) }
+            if let colour {
+                GrooveColour(geometry: geometry, colour: colour, outer: outer ?? 0, inner: inner ?? 0)
             }
-            if let disc {
-                let rd = (twoTracks ? groove.hubDouble : groove.hubSingle) - 2.5
-                let well = circle(rd)
-                ctx.drawShadow(well, groove.pressLip, u)
-                ctx.fill(well, with: .color(groove.discFloor))
-                var level = ctx
-                level.clip(to: well)
-                let h = 2 * rd * u * max(0, min(disc, 1))
-                level.fill(Path(CGRect(x: c.x - rd * u, y: c.y + rd * u - h, width: 2 * rd * u, height: h)),
-                           with: .linearGradient(Gradient(colors: [.white.opacity(0.42), .white.opacity(0.2)]),
-                                                 startPoint: CGPoint(x: c.x, y: c.y - rd * u), endPoint: CGPoint(x: c.x, y: c.y + rd * u)))
-                for s in groove.pressInner { ctx.innerShadow(well, s, u) }
-            }
-
-            if let symbol = ctx.resolveSymbol(id: 0) {
-                if raiseMark {
-                    for s in groove.logoDrop {
-                        var shade = ctx
-                        shade.addFilter(.shadow(color: s.color(), radius: s.blur * u / 2, x: s.x * u, y: s.y * u, options: .shadowOnly))
-                        shade.draw(symbol, at: c)
+            Canvas { ctx, box in
+                let g = geometry.at(box)
+                if let wall = groove.wall { for channel in g.channels { ctx.innerShadow(channel, wall, g.u) } }
+                let u = g.u, c = g.centre
+                if hub {
+                    let dome = g.circle(twoTracks ? groove.hubDouble : groove.hubSingle)
+                    ctx.fill(dome, with: .radialGradient(Gradient(stops: [.init(color: groove.faceTop.color, location: 0),
+                                                                          .init(color: groove.face.color, location: 0.6),
+                                                                          .init(color: groove.faceBottom.color, location: 1)]),
+                                                         center: CGPoint(x: c.x - 12 * u, y: c.y - 16 * u), startRadius: 0, endRadius: 46 * u))
+                    for s in groove.dome { ctx.innerShadow(dome, s, u) }
+                }
+                if let disc {
+                    let rd = (twoTracks ? groove.hubDouble : groove.hubSingle) - 2.5
+                    let well = g.circle(rd)
+                    ctx.drawShadow(well, groove.pressLip, u)
+                    ctx.fill(well, with: .color(groove.discFloor))
+                    var level = ctx
+                    level.clip(to: well)
+                    let h = 2 * rd * u * max(0, min(disc, 1))
+                    level.fill(Path(CGRect(x: c.x - rd * u, y: c.y + rd * u - h, width: 2 * rd * u, height: h)),
+                               with: .linearGradient(Gradient(colors: [.white.opacity(0.42), .white.opacity(0.2)]),
+                                                     startPoint: CGPoint(x: c.x, y: c.y - rd * u), endPoint: CGPoint(x: c.x, y: c.y + rd * u)))
+                    for s in groove.pressInner { ctx.innerShadow(well, s, u) }
+                }
+                if let symbol = ctx.resolveSymbol(id: 0) {
+                    if raiseMark {
+                        for s in groove.logoDrop {
+                            var shade = ctx
+                            shade.addFilter(.shadow(color: s.color(), radius: s.blur * u / 2, x: s.x * u, y: s.y * u, options: .shadowOnly))
+                            shade.draw(symbol, at: c)
+                        }
                     }
-                }
-                ctx.draw(symbol, at: c)
-                if raiseMark {
-                    ctx.drawLayer { layer in
-                        layer.clipToLayer { $0.draw(symbol, at: c) }
-                        for s in groove.logoInner {
-                            var edge = layer
-                            edge.addFilter(.shadow(color: s.color(), radius: s.blur * u / 2, x: s.x * u, y: s.y * u, options: [.invertsAlpha, .shadowOnly]))
-                            edge.draw(symbol, at: c)
+                    ctx.draw(symbol, at: c)
+                    if raiseMark {
+                        ctx.drawLayer { layer in
+                            layer.clipToLayer { $0.draw(symbol, at: c) }
+                            for s in groove.logoInner {
+                                var edge = layer
+                                edge.addFilter(.shadow(color: s.color(), radius: s.blur * u / 2, x: s.x * u, y: s.y * u, options: [.invertsAlpha, .shadowOnly]))
+                                edge.draw(symbol, at: c)
+                            }
                         }
                     }
                 }
+            } symbols: {
+                mark.tag(0)
             }
-        } symbols: {
-            mark.tag(0)
         }
+        // 20% of room around the ring: the channel reaches past the ring's frame, as Classic's stroke does
         .frame(width: size * 1.2, height: size * 1.2)
         .frame(width: size, height: size)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+/// Where a ring's channels lie, in a box 1.2 times the ring's size.
+private struct RingGeometry {
+    let groove: PulseSkin.Groove
+    let size: CGFloat
+    let twoTracks: Bool
+
+    struct Placed {
+        let u: CGFloat   // a ring unit
+        let centre: CGPoint
+        let tracks: [PulseSkin.Groove.Track]
+        func circle(_ r: CGFloat) -> Path {
+            Path(ellipseIn: CGRect(x: centre.x - r * u, y: centre.y - r * u, width: 2 * r * u, height: 2 * r * u))
+        }
+        func channel(_ t: PulseSkin.Groove.Track) -> Path { circle(t.radius).strokedPath(StrokeStyle(lineWidth: t.channel * u)) }
+        var channels: [Path] { tracks.map(channel) }
+    }
+
+    func at(_ box: CGSize) -> Placed {
+        Placed(u: size / 100, centre: CGPoint(x: box.width / 2, y: box.height / 2),
+               tracks: [groove.outer] + (twoTracks ? [groove.inner] : []))
+    }
+}
+
+/// The colour on the channels' floors, the only layer an animated value redraws.
+private struct GrooveColour: View, Animatable {
+    let geometry: RingGeometry
+    let colour: Color
+    var outer: Double
+    var inner: Double
+
+    var animatableData: AnimatablePair<Double, Double> {
+        get { AnimatablePair(outer, inner) }
+        set { outer = newValue.first; inner = newValue.second }
+    }
+
+    var body: some View {
+        Canvas { ctx, box in
+            let g = geometry.at(box), u = g.u, c = g.centre, groove = geometry.groove
+            for (track, fill) in zip(g.tracks, [outer, inner]) where fill > 0 {
+                var lit = ctx
+                lit.clip(to: g.channel(track))
+                let arc = g.circle(track.radius).trimmedPath(from: 0, to: min(fill, 100) / 100)
+                    .applying(CGAffineTransform(translationX: -c.x, y: -c.y).concatenating(.init(rotationAngle: -.pi / 2))
+                        .concatenating(.init(translationX: c.x, y: c.y)))
+                let tube = arc.strokedPath(StrokeStyle(lineWidth: track.tube * u, lineCap: .round))
+                var glow = lit
+                let bleed = groove.tubeBleed
+                glow.addFilter(.shadow(color: bleed.color(accent: colour), radius: bleed.blur * u / 2, x: bleed.x * u, y: bleed.y * u, options: .shadowOnly))
+                glow.fill(tube, with: .color(colour))
+                lit.fill(tube, with: .color(colour))
+                lit.innerShadow(tube, groove.tubeInner, u)
+            }
+        }
     }
 }
 
@@ -422,6 +476,7 @@ struct GrooveBubble: View {
 
     var body: some View {
         Circle().fill(fill.skinShadows(inner: groove.bubbleInner, drop: [groove.bubbleDrop]))
+            .flattened(margin: 3)
     }
 }
 
@@ -446,5 +501,6 @@ struct GrooveBar: View {
                 }
                 .padding(inset)
             }
+            .flattened(margin: 4)
     }
 }
