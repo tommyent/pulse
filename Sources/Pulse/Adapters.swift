@@ -673,8 +673,9 @@ enum AntigravityAdapter {
                                    health: .missingClient, windows: [], fetchedAt: .now, source: .cliStatus)
         guard let agy = locateBinary("agy") else { return snap }
         snap.health = .providerError
-        guard let version = await run(agy, ["--version"], timeout: .seconds(10)), !version.killed else {
-            snap.detail = "Antigravity CLI did not start"
+        let version = await run(agy, ["--version"], timeout: .seconds(10))
+        guard let version, !version.killed else {
+            snap.detail = version?.survived == true ? stalled : "Antigravity CLI did not start"
             return snap
         }
         guard supportsUsageReport(String(decoding: version.out, as: UTF8.self)) else {
@@ -696,7 +697,8 @@ enum AntigravityAdapter {
             answer = await run(agy, usage, timeout: .seconds(60))
         }
         guard let report = answer, !report.killed else {
-            snap.detail = answer.map { hungOnNetwork($0.out + $0.err + $0.log) } == true ? networkTimeout : stalled
+            // a child that outlived SIGKILL is a stall whatever its log says
+            snap.detail = answer.map { !$0.survived && hungOnNetwork($0.out + $0.err + $0.log) } == true ? networkTimeout : stalled
             return snap
         }
         if let json = try? JSONSerialization.jsonObject(with: report.out) as? [String: Any] {
@@ -780,48 +782,91 @@ enum AntigravityAdapter {
         return !signIn.contains { text.contains($0) } && network.contains { text.contains($0) }
     }
 
-    /// Runs agy in a private temp folder with no stdin. Output goes to files, not pipes, so a full pipe
-    /// can never stall it and no thread blocks while it runs. A run past `timeout` is killed and comes back
-    /// `killed`, with the tail of its `agy.log` (when it wrote one) for `hungOnNetwork`.
-    static func run(_ agy: URL, _ args: [String], timeout: Duration) async
-        -> (out: Data, err: Data, log: Data, killed: Bool)? {
+    /// One agy run. `killed`: it passed its timeout and Pulse ended it. `survived`: something in its process group was
+    /// still there after SIGKILL, so nothing it left behind can be trusted.
+    struct Run {
+        var out = Data(), err = Data(), log = Data()
+        var killed = false, survived = false
+    }
+
+    /// Runs agy in a private temp folder with no stdin, in a process group of its own. Output goes to files, not
+    /// pipes, so a full pipe can never stall it and no thread blocks while it runs. A run past `timeout` gets SIGTERM
+    /// (agy flushes its log), then SIGKILL for the whole group, and `run` returns only once agy is reaped and the group
+    /// is empty, or as `survived` when it never empties; the temp folder goes after that. A killed run hands back its
+    /// `agy.log`, when it wrote one.
+    static func run(_ agy: URL, _ args: [String], timeout: Duration) async -> Run? {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.appending(path: "pulse-agy-\(UUID().uuidString)")
         guard (try? fm.createDirectory(at: dir, withIntermediateDirectories: false,
                                        attributes: [.posixPermissions: 0o700])) != nil else { return nil }
         defer { try? fm.removeItem(at: dir) }
         let outURL = dir.appending(path: "out"), errURL = dir.appending(path: "err")
-        guard fm.createFile(atPath: outURL.path, contents: nil), fm.createFile(atPath: errURL.path, contents: nil),
-              let out = try? FileHandle(forWritingTo: outURL), let err = try? FileHandle(forWritingTo: errURL)
-        else { return nil }
-        let p = Process()
-        p.executableURL = agy
-        p.arguments = args
-        p.currentDirectoryURL = dir
-        p.standardInput = FileHandle.nullDevice
-        p.standardOutput = out; p.standardError = err
-        guard (try? p.run()) != nil else { return nil }
+        guard let pid = spawnInOwnGroup(agy, args, in: dir, out: outURL, err: errURL) else { return nil }
+        var result = Run()
         let deadline = ContinuousClock.now + timeout
-        var killed = false
-        while p.isRunning {
-            guard ContinuousClock.now < deadline, (try? await Task.sleep(for: .milliseconds(100))) != nil else {
-                p.terminate()
-                killed = true
-                for _ in 0..<10 where p.isRunning { try? await Task.sleep(for: .milliseconds(100)) }   // a second to flush its log
-                break
-            }
+        var exited = reaped(pid)
+        while !exited, ContinuousClock.now < deadline, !Task.isCancelled {
+            await nap()
+            exited = reaped(pid)
         }
-        return ((try? Data(contentsOf: outURL)) ?? Data(), (try? Data(contentsOf: errURL)) ?? Data(),
-                killed ? tail(dir.appending(path: "agy.log")) : Data(), killed)
+        if !exited {
+            result.killed = true
+            if !(await end(group: pid, with: SIGTERM, within: .seconds(1))) {
+                result.survived = !(await end(group: pid, with: SIGKILL, within: .seconds(2)))
+            }
+            result.log = (try? Data(contentsOf: dir.appending(path: "agy.log"))) ?? Data()
+        }
+        result.out = (try? Data(contentsOf: outURL)) ?? Data()
+        result.err = (try? Data(contentsOf: errURL)) ?? Data()
+        return result
     }
 
-    /// A file's last 64 KB, or nothing when it's missing.
-    private static func tail(_ url: URL) -> Data {
-        guard let h = try? FileHandle(forReadingFrom: url) else { return Data() }
-        defer { try? h.close() }
-        let end = (try? h.seekToEnd()) ?? 0
-        try? h.seek(toOffset: end > 65_536 ? end - 65_536 : 0)
-        return (try? h.readToEnd()) ?? Data()
+    /// posix_spawn rather than Process: Process can't give the child a process group of its own, and agy's
+    /// descendants must be killable with it. Only stdin, stdout and stderr are inherited.
+    private static func spawnInOwnGroup(_ exe: URL, _ args: [String], in dir: URL, out: URL, err: URL) -> pid_t? {
+        var actions: posix_spawn_file_actions_t?
+        var attr: posix_spawnattr_t?
+        posix_spawn_file_actions_init(&actions); defer { posix_spawn_file_actions_destroy(&actions) }
+        posix_spawnattr_init(&attr); defer { posix_spawnattr_destroy(&attr) }
+        posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+        posix_spawn_file_actions_addopen(&actions, 1, out.path, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
+        posix_spawn_file_actions_addopen(&actions, 2, err.path, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
+        posix_spawn_file_actions_addchdir(&actions, dir.path)
+        var all = sigset_t(), none = sigset_t()
+        sigfillset(&all); sigemptyset(&none)
+        posix_spawnattr_setsigdefault(&attr, &all)   // Pulse's own ignored signals don't carry over
+        posix_spawnattr_setsigmask(&attr, &none)
+        posix_spawnattr_setpgroup(&attr, 0)
+        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT
+                                              | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
+        let argv = ([exe.path] + args).map { strdup($0) } + [nil]
+        defer { argv.forEach { free($0) } }
+        var pid: pid_t = 0
+        return posix_spawn(&pid, exe.path, &actions, &attr, argv, environ) == 0 ? pid : nil
+    }
+
+    /// agy has exited and been reaped, now or before.
+    private static func reaped(_ pid: pid_t) -> Bool {
+        var status: Int32 = 0
+        let r = waitpid(pid, &status, WNOHANG)
+        return r == pid || (r == -1 && errno == ECHILD)
+    }
+
+    /// Signals agy's whole group, then waits for agy to be reaped and the group to empty. The group's id stays agy's
+    /// pid until it's empty, so this can't reach anyone else's process.
+    private static func end(group pid: pid_t, with signal: Int32, within limit: Duration) async -> Bool {
+        kill(-pid, signal)
+        let deadline = ContinuousClock.now + limit
+        repeat {
+            if reaped(pid), kill(-pid, 0) != 0 { return true }   // ESRCH: nobody left in the group
+            await nap()
+        } while ContinuousClock.now < deadline
+        return false
+    }
+
+    /// A tenth of a second, even in a cancelled task, where `Task.sleep` returns at once: ending agy must wait for it.
+    private static func nap() async {
+        if Task.isCancelled { usleep(100_000) } else { try? await Task.sleep(for: .milliseconds(100)) }
     }
 }
 

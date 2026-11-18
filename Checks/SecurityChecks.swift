@@ -170,22 +170,46 @@ enum SecurityChecks {
                "a network timeout never pauses")
         net.update(with: stall, at: t0 + 120); net.update(with: agSnap(.providerError, AntigravityAdapter.networkTimeout), at: t0 + 240)
         assert(!net.paused, "a network timeout after a stall runs agy again at the next poll")
-        // A run past its timeout is killed and hands back its own agy.log; one that finishes hands back no log.
-        func agyRun(_ script: String) -> (out: Data, err: Data, log: Data, killed: Bool)? {
+        // A run past its timeout is killed and hands back its own agy.log; one that finishes hands back no log. `run`
+        // returns only once the stand-in and everything it started are gone, whatever they do with SIGTERM.
+        func agyRun(_ script: String, timeout: Duration = .seconds(1), cancelAfter: TimeInterval? = nil) -> AntigravityAdapter.Run? {
             let done = DispatchSemaphore(value: 0)
-            nonisolated(unsafe) var result: (out: Data, err: Data, log: Data, killed: Bool)?
-            Task.detached {
-                result = await AntigravityAdapter.run(URL(fileURLWithPath: "/bin/sh"), ["-c", script], timeout: .seconds(1))
+            nonisolated(unsafe) var result: AntigravityAdapter.Run?
+            let task = Task.detached {
+                result = await AntigravityAdapter.run(URL(fileURLWithPath: "/bin/sh"), ["-c", script], timeout: timeout)
                 done.signal()
             }
+            if let cancelAfter { Thread.sleep(forTimeInterval: cancelAfter); task.cancel() }
             done.wait()
             return result
         }
+        func pids(_ run: AntigravityAdapter.Run?) -> [pid_t] {
+            String(decoding: run?.out ?? Data(), as: UTF8.self).split(separator: "\n").compactMap { pid_t($0) }
+        }
+        func gone(_ pid: pid_t) -> Bool { kill(pid, 0) != 0 && errno == ESRCH }
         let hung = agyRun("echo 'dial tcp: lookup example.com: i/o timeout' > agy.log; exec sleep 30")
-        assert(hung?.killed == true && AntigravityAdapter.hungOnNetwork(hung!.log), "a killed run's log is read before its folder goes")
+        assert(hung?.killed == true && hung?.survived == false && AntigravityAdapter.hungOnNetwork(hung!.log),
+               "a killed run's log is read before its folder goes")
         let quick = agyRun("echo 'dial tcp: i/o timeout' > agy.log; echo ok")
         assert(quick?.killed == false && quick?.log.isEmpty == true && quick.map { String(decoding: $0.out, as: UTF8.self) } == "ok\n")
         assert(agyRun("exec sleep 30")?.log.isEmpty == true, "a killed run without a log hands back none")
+        let late = dir.appendingPathComponent("outlived-pulse")
+        let stubborn = agyRun("""
+            trap '' TERM; echo $$; (sleep 30; echo late > '\(late.path)') & echo $!
+            echo 'dial tcp: i/o timeout' > agy.log; sleep 30; echo late > '\(late.path)'
+            """)
+        assert(stubborn?.killed == true && stubborn?.survived == false && pids(stubborn).count == 2,
+               "a child that ignores SIGTERM is killed (\(String(describing: stubborn)))")
+        assert(pids(stubborn).allSatisfy(gone), "run returns only after the child and its descendant are gone")
+        Thread.sleep(forTimeInterval: 0.5)
+        assert(!fm.fileExists(atPath: late.path), "nothing in agy's group outlives its run")
+        let flushed = agyRun("trap 'echo \"dial tcp: i/o timeout\" >> agy.log; exit 0' TERM; echo starting > agy.log; sleep 30 & wait")
+        assert(flushed?.killed == true && String(decoding: flushed?.log ?? Data(), as: UTF8.self).contains("dial tcp"),
+               "a line agy writes as SIGTERM lands is in the log Pulse reads")
+        let started = ContinuousClock.now
+        let cancelled = agyRun("echo $$; exec sleep 30", timeout: .seconds(30), cancelAfter: 0.3)
+        assert(cancelled?.killed == true && ContinuousClock.now - started < .seconds(5) && pids(cancelled).allSatisfy(gone),
+               "a cancelled fetch still ends agy and waits for it")
         // A failure after a good report keeps the windows, shown stale with the failure's own reason.
         var good = agSnap(.ok, nil); good.windows = [UsageWindow(id: "weekly_all", label: "Weekly", percentUsed: 40, resetsAt: nil)]
         let stalled = agSnap(.providerError, AntigravityAdapter.stalled).staleKeeping(good)
