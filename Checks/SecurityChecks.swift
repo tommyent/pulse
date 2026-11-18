@@ -283,6 +283,28 @@ enum SecurityChecks {
         assert(stalled.health == .stale && stalled.windows.count == 1 && stalled.healthMessage?.contains("click Refresh") == true,
                "a stall after a good report still says what to do (got \(stalled.healthMessage ?? "nil"))")
         assert(good.staleKeeping(good).healthMessage?.hasPrefix("Stale — last updated") == true, "no reason, no suffix")
+        // At launch AppState hands AgyPause the saved snapshot, round-tripped through snapshots.json as it is on disk.
+        func relaunched(_ saved: AccountSnapshot, marker: Date? = m0) throws -> AgyPause {
+            var p = AgyPause()
+            p.update(with: try JSONDecoder().decode(AccountSnapshot.self, from: JSONEncoder().encode(saved)), now: t0, marker: marker)
+            return p
+        }
+        var afterStall = try relaunched(stalled)
+        assert(afterStall.paused, "a stall saved over old windows still holds agy back after a relaunch")
+        afterStall.passStarted(now: at(120), marker: m0)
+        assert(afterStall.paused)
+        afterStall.passStarted(now: at(30 * 60), marker: m0)
+        assert(!afterStall.paused, "and it gets its one timed run, counted from the launch")
+        var afterSignOut = try relaunched(agSnap(.needsAuth, AntigravityAdapter.signIn))
+        afterSignOut.passStarted(now: at(86_400), marker: m0 + 1)
+        assert(afterSignOut.paused, "a saved sign-out waits for a Refresh after a relaunch")
+        var cachedGood = good; cachedGood.health = .stale   // what init makes of a good snapshot
+        var afterGood = try relaunched(cachedGood)
+        afterGood.passStarted(now: at(1), marker: m0)
+        assert(!afterGood.paused, "a good snapshot from before the quit runs agy at launch")
+        var afterOutage = try relaunched(agSnap(.providerError, AntigravityAdapter.networkTimeout).staleKeeping(good))
+        afterOutage.passStarted(now: at(14 * 60), marker: m0)
+        assert(afterOutage.paused, "a saved network timeout waits its 15 minutes from the launch")
         let netStale = agSnap(.providerError, AntigravityAdapter.networkTimeout).staleKeeping(good)
         assert(netStale.health == .stale && netStale.windows.count == 1 && netStale.healthMessage?.contains("(network)") == true,
                "a network timeout keeps the last windows, stale, with its reason (got \(netStale.healthMessage ?? "nil"))")

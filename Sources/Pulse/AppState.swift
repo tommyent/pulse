@@ -189,6 +189,8 @@ final class AppState: ObservableObject {
                                                 from: Data(contentsOf: Self.snapshotsURL))) ?? [:]
         for k in cached.keys where cached[k]?.health == .ok { cached[k]?.health = .stale }
         snapshots = cached
+        // a sign-out or killed run saved before the quit holds agy back after the launch too; the budget starts over
+        if let saved = cached[.antigravity] { agy.update(with: saved, marker: AntigravityAdapter.sessionMarker()) }
         if cached[.claude]?.source == .officialUsagePage { ClaudeWeb.connected = true }   // signed in before this was remembered
         if let first = enabledAccounts.first { selected = first }
 
