@@ -850,7 +850,7 @@ enum AntigravityAdapter {
     /// Runs agy in a private temp folder with no stdin, in a process group of its own. Output goes to files, not
     /// pipes, so a full pipe can never stall it and no thread blocks while it runs. A run past `timeout` gets SIGTERM
     /// (agy flushes its log), then SIGKILL for the whole group, and `run` returns only once agy is reaped and the group
-    /// is empty, or as `survived` when it never empties; the temp folder goes after that. Every run hands back its
+    /// is empty, or as `survived` when it isn't; the temp folder goes after that. Every run hands back its
     /// `agy.log`, when it wrote one, for `cause(of:)`.
     static func run(_ agy: URL, _ args: [String], timeout: Duration) async -> Run? {
         let fm = FileManager.default
@@ -862,16 +862,23 @@ enum AntigravityAdapter {
         guard let pid = spawnInOwnGroup(agy, args, in: dir, out: outURL, err: errURL) else { return nil }
         var result = Run()
         let deadline = ContinuousClock.now + timeout
-        var exited = reaped(pid)
-        while !exited, ContinuousClock.now < deadline, !Task.isCancelled {
-            await nap()
-            exited = reaped(pid)
-        }
-        if !exited {
+        while leader(pid) == .running, ContinuousClock.now < deadline, !Task.isCancelled { await nap() }
+        if leader(pid) == .running {
+            // agy stays unreaped (a zombie once it exits) until the last group signal: its pid, and so the group's
+            // id, can't be handed to another process before then
             result.killed = true
-            if !(await end(group: pid, with: SIGTERM, within: .seconds(1))) {
-                result.survived = !(await end(group: pid, with: SIGKILL, within: .seconds(2)))
+            kill(-pid, SIGTERM)   // agy flushes its log
+            await waitFor(within: .seconds(1)) { leader(pid) != .running }
+            if leader(pid) != .gone { kill(-pid, SIGKILL) }
+            await waitFor(within: .seconds(2)) { leader(pid) != .running }
+            if leader(pid) == .running {
+                result.survived = true   // left unreaped, so its id stays reserved
+            } else {
+                reap(pid)
+                result.survived = !(await waitFor(within: .seconds(2)) { groupGone(pid) })
             }
+        } else {
+            reap(pid)   // exited by itself: anything it left running in its group, such as an updater, finishes
         }
         (result.log, result.logComplete) = readLog(dir.appending(path: "agy.log"))
         result.out = (try? Data(contentsOf: outURL)) ?? Data()
@@ -917,23 +924,33 @@ enum AntigravityAdapter {
         return (data, false)
     }
 
-    /// agy has exited and been reaped, now or before.
-    private static func reaped(_ pid: pid_t) -> Bool {
-        var status: Int32 = 0
-        let r = waitpid(pid, &status, WNOHANG)
-        return r == pid || (r == -1 && errno == ECHILD)
+    enum Leader { case running, exited, gone }
+
+    /// agy's own state, seen without reaping it (`WNOWAIT`): `exited` is a zombie still holding its pid; `gone` means
+    /// it isn't Pulse's child to wait for any more, so its pid may already be someone else's and is never signalled.
+    private static func leader(_ pid: pid_t) -> Leader {
+        var info = siginfo_t()
+        guard waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 else { return .gone }
+        return info.si_pid == pid ? .exited : .running
     }
 
-    /// Signals agy's whole group, then waits for agy to be reaped and the group to empty. The group's id stays agy's
-    /// pid until it's empty, so this can't reach anyone else's process.
-    private static func end(group pid: pid_t, with signal: Int32, within limit: Duration) async -> Bool {
-        kill(-pid, signal)
+    private static func reap(_ pid: pid_t) {
+        var status: Int32 = 0
+        waitpid(pid, &status, WNOHANG)
+    }
+
+    /// Nobody is left in agy's group. Only ESRCH says so; EPERM or any other error counts as someone still there.
+    private static func groupGone(_ pid: pid_t) -> Bool { kill(-pid, 0) == -1 && errno == ESRCH }
+
+    /// Waits up to `limit` for `done`, checking every tenth of a second.
+    @discardableResult
+    private static func waitFor(within limit: Duration, _ done: () -> Bool) async -> Bool {
         let deadline = ContinuousClock.now + limit
-        repeat {
-            if reaped(pid), kill(-pid, 0) != 0 { return true }   // ESRCH: nobody left in the group
+        while !done() {
+            guard ContinuousClock.now < deadline else { return false }
             await nap()
-        } while ContinuousClock.now < deadline
-        return false
+        }
+        return true
     }
 
     /// A tenth of a second, even in a cancelled task, where `Task.sleep` returns at once: ending agy must wait for it.

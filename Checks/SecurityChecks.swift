@@ -314,6 +314,17 @@ enum SecurityChecks {
         assert(pids(stubborn).allSatisfy(gone), "run returns only after the child and its descendant are gone")
         Thread.sleep(forTimeInterval: 0.5)
         assert(!fm.fileExists(atPath: late.path), "nothing in agy's group outlives its run")
+        // Sol's round-3 case: agy dies at SIGTERM while a descendant that ignores it holds the group. agy stays unreaped
+        // until the group's SIGKILL, so that signal can only reach this group, and the descendant gets it.
+        let orphan = dir.appendingPathComponent("outlived-its-leader")
+        let leaderFirst = agyRun("""
+            (trap '' TERM; sleep 30; echo late > '\(orphan.path)') & echo $!
+            echo 'dial tcp: i/o timeout' > agy.log; exec sleep 30
+            """)
+        assert(leaderFirst?.killed == true && leaderFirst?.survived == false && pids(leaderFirst).count == 1
+               && pids(leaderFirst).allSatisfy(gone), "a descendant left holding the group after agy exits still gets SIGKILL")
+        Thread.sleep(forTimeInterval: 0.5)
+        assert(!fm.fileExists(atPath: orphan.path))
         let flushed = agyRun("trap 'echo \"dial tcp: i/o timeout\" >> agy.log; exit 0' TERM; echo starting > agy.log; sleep 30 & wait")
         assert(flushed?.killed == true && String(decoding: flushed?.log ?? Data(), as: UTF8.self).contains("dial tcp"),
                "a line agy writes as SIGTERM lands is in the log Pulse reads")
