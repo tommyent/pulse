@@ -26,6 +26,11 @@ enum SettingsStateChecks {
         assert(p.breakSettings == nil && p.breaks == BreakSettings())
         assert(p.agentSettings == nil && p.agents == AgentSettings() && !p.agents.showOnRail, "a state from before the agents ring leaves it off")
         assert(p.hiddenPools == nil, "a state from before pool switches shows every pool")
+        assert(p.agyHold == nil, "a state from before the Antigravity hold holds nothing back")
+        var held = AppState.Persisted()
+        held.agyHold = AgyPause.Hold(network: true, spent: 2)
+        let heldBack = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(held))
+        assert(heldBack.agyHold == AgyPause.Hold(network: true, spent: 2), "the Antigravity hold survives a save and a load")
         var switched = AppState.Persisted()
         switched.hiddenPools = ["antigravity.Claude and GPT"]
         let reread = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(switched))

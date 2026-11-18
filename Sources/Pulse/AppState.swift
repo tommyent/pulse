@@ -36,6 +36,7 @@ final class AppState: ObservableObject {
         }
 
         var agentSettings: AgentSettings?   // nil = defaults
+        var agyHold: AgyPause.Hold?   // nil = none: Antigravity polling held back by a sign-out or failed runs
         var agents: AgentSettings {
             get { agentSettings ?? AgentSettings() }
             set { agentSettings = newValue }
@@ -73,6 +74,7 @@ final class AppState: ObservableObject {
             batterySettings = c.lenient(BatterySettings.self, forKey: .batterySettings, in: decoder)
             breakSettings = c.lenient(BreakSettings.self, forKey: .breakSettings, in: decoder)
             agentSettings = c.lenient(AgentSettings.self, forKey: .agentSettings, in: decoder)
+            agyHold = c.lenient(AgyPause.Hold.self, forKey: .agyHold, in: decoder)
         }
 
         /// The shortcut to hold for the agents card and, when the chosen one can't be used, why. None is held while
@@ -163,7 +165,7 @@ final class AppState: ObservableObject {
     @Published var menuOpen = false
     @Published var settingsTab = "General"   // Break settings… opens Settings at Breaks
     private var refreshRequested = false
-    private var agy = AgyPause()   // agy signed out or stalled: a manual refresh, or for a stall agy's own use, runs it again
+    private var agy = AgyPause() { didSet { if persisted.agyHold != agy.hold { persisted.agyHold = agy.hold } } }
     private let fetches = ProviderFetches { await fetchSnapshot($0) }
     private var canSave = true   // false: saving now could erase settings Pulse couldn't read or keep a copy of
 
@@ -189,8 +191,8 @@ final class AppState: ObservableObject {
                                                 from: Data(contentsOf: Self.snapshotsURL))) ?? [:]
         for k in cached.keys where cached[k]?.health == .ok { cached[k]?.health = .stale }
         snapshots = cached
-        // a sign-out or killed run saved before the quit holds agy back after the launch too; the budget starts over
-        if let saved = cached[.antigravity] { agy.update(with: saved, marker: AntigravityAdapter.sessionMarker()) }
+        // a sign-out or failed runs from before the quit hold agy back after the launch too
+        agy = AgyPause(restoring: saved.agyHold, marker: AntigravityAdapter.sessionMarker())
         if cached[.claude]?.source == .officialUsagePage { ClaudeWeb.connected = true }   // signed in before this was remembered
         if let first = enabledAccounts.first { selected = first }
 

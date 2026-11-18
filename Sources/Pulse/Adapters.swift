@@ -2,6 +2,7 @@ import Foundation
 import Security
 import WebKit
 import OSLog
+import Synchronization
 
 // MARK: - Shared helpers
 
@@ -649,6 +650,23 @@ struct AgyPause {
     private var spent = 0   // runs Pulse allowed itself since then without new activity
     private var timed = false   // this pass is one of them
     private var lastRead: Date?   // the last successful read of agy's activity marker; a failed (nil) read keeps it
+
+    /// What survives a relaunch, saved in Pulse's settings apart from the card's snapshot (which an offline skip
+    /// rewrites): a sign-out, or a failure with what's left of its budget. Its waits start again from the launch.
+    struct Hold: Codable, Equatable {
+        var signedOut = false, network = false, spent = 0
+    }
+    var hold: Hold? {
+        signedOut ? Hold(signedOut: true) : failure.map { Hold(network: $0.network, spent: spent) }
+    }
+    init() {}
+    init(restoring hold: Hold?, now: Instant = .now, marker: Date?) {
+        lastRead = marker
+        guard let hold else { return }
+        if hold.signedOut { signedOut = true } else { failure = (now, hold.network, marker); spent = hold.spent }
+        paused = true
+    }
+
     mutating func manualRefresh(whileRefreshing: Bool) {
         paused = false; signedOut = false; failure = nil; spent = 0
         if whileRefreshing { retry = true }
@@ -703,7 +721,6 @@ enum AntigravityAdapter {
         case (.ok, _): .report
         case (.needsAuth, _): .signedOut
         case (.missingClient, _), (_, offline?), (_, tooOld?): .noAttempt
-        case (.stale, nil): .noAttempt   // only a saved good snapshot, loaded at launch, is stale with no reason
         case (_, networkTimeout?), (_, networkError?): .network
         default: .failed
         }
@@ -859,7 +876,9 @@ enum AntigravityAdapter {
                                        attributes: [.posixPermissions: 0o700])) != nil else { return nil }
         defer { try? fm.removeItem(at: dir) }
         let outURL = dir.appending(path: "out"), errURL = dir.appending(path: "err")
-        guard let pid = spawnInOwnGroup(agy, args, in: dir, out: outURL, err: errURL) else { return nil }
+        // nothing starts for a fetch already given up on, or while an earlier run's group may still be there
+        guard !Task.isCancelled, survivorsGone(),
+              let pid = spawnInOwnGroup(agy, args, in: dir, out: outURL, err: errURL) else { return nil }
         var result = Run()
         let deadline = ContinuousClock.now + timeout
         while leader(pid) == .running, ContinuousClock.now < deadline, !Task.isCancelled { await nap() }
@@ -877,6 +896,7 @@ enum AntigravityAdapter {
                 reap(pid)
                 result.survived = !(await waitFor(within: .seconds(2)) { groupGone(pid) })
             }
+            if result.survived { survivors.withLock { _ = $0.insert(pid) } }
         } else {
             reap(pid)   // exited by itself: anything it left running in its group, such as an updater, finishes
         }
@@ -886,24 +906,43 @@ enum AntigravityAdapter {
         return result
     }
 
+    /// Groups of runs that came back `survived`. No agy starts until every one is confirmed gone.
+    static let survivors = Mutex<Set<pid_t>>([])
+
+    private static func survivorsGone() -> Bool {
+        survivors.withLock { groups in
+            groups = groups.filter { pid in
+                if leader(pid) == .exited { reap(pid) }   // its group, while it has anyone in it, keeps the id reserved
+                return leader(pid) == .running || !groupGone(pid)
+            }
+            return groups.isEmpty
+        }
+    }
+
     /// posix_spawn rather than Process: Process can't give the child a process group of its own, and agy's
-    /// descendants must be killable with it. Only stdin, stdout and stderr are inherited.
-    private static func spawnInOwnGroup(_ exe: URL, _ args: [String], in dir: URL, out: URL, err: URL) -> pid_t? {
+    /// descendants must be killable with it. Only stdin, stdout and stderr are inherited. If any part of that can't
+    /// be set up, nothing starts.
+    static func spawnInOwnGroup(_ exe: URL, _ args: [String], in dir: URL, out: URL, err: URL) -> pid_t? {
         var actions: posix_spawn_file_actions_t?
         var attr: posix_spawnattr_t?
-        posix_spawn_file_actions_init(&actions); defer { posix_spawn_file_actions_destroy(&actions) }
-        posix_spawnattr_init(&attr); defer { posix_spawnattr_destroy(&attr) }
-        posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
-        posix_spawn_file_actions_addopen(&actions, 1, out.path, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
-        posix_spawn_file_actions_addopen(&actions, 2, err.path, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
-        posix_spawn_file_actions_addchdir(&actions, dir.path)
+        guard posix_spawn_file_actions_init(&actions) == 0 else { return nil }
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        guard posix_spawnattr_init(&attr) == 0 else { return nil }
+        defer { posix_spawnattr_destroy(&attr) }
         var all = sigset_t(), none = sigset_t()
         sigfillset(&all); sigemptyset(&none)
-        posix_spawnattr_setsigdefault(&attr, &all)   // Pulse's own ignored signals don't carry over
-        posix_spawnattr_setsigmask(&attr, &none)
-        posix_spawnattr_setpgroup(&attr, 0)
-        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT
-                                              | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
+        let setup = [
+            posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0),
+            posix_spawn_file_actions_addopen(&actions, 1, out.path, O_WRONLY | O_CREAT | O_TRUNC, 0o600),
+            posix_spawn_file_actions_addopen(&actions, 2, err.path, O_WRONLY | O_CREAT | O_TRUNC, 0o600),
+            posix_spawn_file_actions_addchdir(&actions, dir.path),
+            posix_spawnattr_setsigdefault(&attr, &all),   // Pulse's own ignored signals don't carry over
+            posix_spawnattr_setsigmask(&attr, &none),
+            posix_spawnattr_setpgroup(&attr, 0),
+            posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT
+                                                  | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK)),
+        ]
+        guard setup.allSatisfy({ $0 == 0 }) else { return nil }
         let argv = ([exe.path] + args).map { strdup($0) } + [nil]
         defer { argv.forEach { free($0) } }
         var pid: pid_t = 0

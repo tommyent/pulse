@@ -218,7 +218,7 @@ enum SecurityChecks {
                && outcome(.providerError, AccountSnapshot.noAnswer(.antigravity).detail) == .failed && outcome(.providerError, nil) == .failed)
         assert(outcome(.providerError, AntigravityAdapter.networkError) == .network && outcome(.providerError, AntigravityAdapter.networkTimeout) == .network)
         assert(outcome(.providerError, AntigravityAdapter.offline) == .noAttempt && outcome(.providerError, AntigravityAdapter.tooOld) == .noAttempt
-               && outcome(.missingClient, nil) == .noAttempt && outcome(.stale, nil) == .noAttempt)
+               && outcome(.missingClient, nil) == .noAttempt && outcome(.stale, nil) == .failed)
         assert(outcome(.needsAuth, AntigravityAdapter.signIn) == .signedOut && outcome(.ok, nil) == .report)
         var empty = AgyPause()   // Sol's probe: "returned no usage" used to leave the gate open every poll
         assert(poll(&empty) { _ in agSnap(.providerError, AntigravityAdapter.noUsage) } == [0, 32],
@@ -338,28 +338,73 @@ enum SecurityChecks {
         assert(stalled.health == .stale && stalled.windows.count == 1 && stalled.healthMessage?.contains("click Refresh") == true,
                "a stall after a good report still says what to do (got \(stalled.healthMessage ?? "nil"))")
         assert(good.staleKeeping(good).healthMessage?.hasPrefix("Stale — last updated") == true, "no reason, no suffix")
-        // At launch AppState hands AgyPause the saved snapshot, round-tripped through snapshots.json as it is on disk.
-        func relaunched(_ saved: AccountSnapshot, marker: Date? = m0) throws -> AgyPause {
-            var p = AgyPause()
-            p.update(with: try JSONDecoder().decode(AccountSnapshot.self, from: JSONEncoder().encode(saved)), now: t0, marker: marker)
-            return p
+        // A relaunch: AppState saves the gate's own hold in state.json and restores it at launch, round-tripped here
+        // through JSON as it is on disk. The card's snapshot plays no part, so an offline skip can't rewrite it.
+        func relaunched(_ before: AgyPause, marker: Date? = m0) throws -> AgyPause {
+            let saved = try JSONDecoder().decode(AgyPause.Hold?.self, from: JSONEncoder().encode(before.hold))
+            return AgyPause(restoring: saved, now: t0, marker: marker)
         }
-        var afterStall = try relaunched(stalled)
-        assert(afterStall.paused, "a stall saved over old windows still holds agy back after a relaunch")
+        var stalledOnce = AgyPause(); stalledOnce.update(with: stall, now: t0, marker: m0)
+        var afterStall = try relaunched(stalledOnce)
+        assert(afterStall.paused, "a stall still holds agy back after a relaunch")
         afterStall.passStarted(now: at(120), marker: m0)
         assert(afterStall.paused)
         afterStall.passStarted(now: at(30 * 60), marker: m0)
         assert(!afterStall.paused, "and it gets its one timed run, counted from the launch")
-        var afterSignOut = try relaunched(agSnap(.needsAuth, AntigravityAdapter.signIn))
+        var spentAll = AgyPause()
+        _ = poll(&spentAll) { _ in stall }
+        var afterSpent = try relaunched(spentAll)
+        afterSpent.passStarted(now: at(86_400), marker: m0)
+        assert(afterSpent.paused, "a budget spent before the quit stays spent after it")
+        var signedOutOnce = AgyPause(); signedOutOnce.update(with: agSnap(.needsAuth, AntigravityAdapter.signIn), now: t0, marker: m0)
+        var afterSignOut = try relaunched(signedOutOnce)
         afterSignOut.passStarted(now: at(86_400), marker: m0 + 1)
         assert(afterSignOut.paused, "a saved sign-out waits for a Refresh after a relaunch")
-        var cachedGood = good; cachedGood.health = .stale   // what init makes of a good snapshot
-        var afterGood = try relaunched(cachedGood)
+        var afterGood = try relaunched(AgyPause())
         afterGood.passStarted(now: at(1), marker: m0)
-        assert(!afterGood.paused, "a good snapshot from before the quit runs agy at launch")
-        var afterOutage = try relaunched(agSnap(.providerError, AntigravityAdapter.networkTimeout).staleKeeping(good))
+        assert(!afterGood.paused && AgyPause().hold == nil, "with nothing held, agy runs at launch")
+        // Sol's round-3 probe: a network failure's timed run ends at the offline skip twice, which rewrites the card's
+        // reason; the hold is untouched, so the relaunch still waits.
+        var skippedTwice = AgyPause()
+        skippedTwice.update(with: netTimeout, now: t0, marker: m0)
+        skippedTwice.passStarted(now: at(960), marker: m0); assert(!skippedTwice.paused)
+        skippedTwice.update(with: skipped, now: at(960), marker: m0)
+        skippedTwice.passStarted(now: at(960), marker: m0)
+        skippedTwice.update(with: skipped, now: at(960), marker: m0)
+        assert(skippedTwice.hold == AgyPause.Hold(network: true, spent: 0))
+        var afterOutage = try relaunched(skippedTwice)
         afterOutage.passStarted(now: at(14 * 60), marker: m0)
-        assert(afterOutage.paused, "a saved network timeout waits its 15 minutes from the launch")
+        assert(afterOutage.paused, "after offline skips, a relaunch still waits the network failure's 15 minutes")
+        // Nothing starts for a fetch already cancelled, or when its isolation can't be set up.
+        let neverRan = dir.appendingPathComponent("never-ran")
+        let done = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var preCancelled: AntigravityAdapter.Run? = AntigravityAdapter.Run()
+        Task.detached {
+            withUnsafeCurrentTask { $0?.cancel() }
+            preCancelled = await AntigravityAdapter.run(URL(fileURLWithPath: "/bin/sh"),
+                                                        ["-c", "echo ran > '\(neverRan.path)'; exec sleep 30"], timeout: .seconds(30))
+            done.signal()
+        }
+        done.wait()
+        Thread.sleep(forTimeInterval: 0.3)
+        assert(preCancelled == nil && !fm.fileExists(atPath: neverRan.path), "a cancelled fetch never spawns agy")
+        let nowhere = dir.appendingPathComponent("no-such-folder")
+        for (out, cwd) in [(nowhere.appendingPathComponent("out"), dir), (dir.appendingPathComponent("out"), nowhere)] {
+            let pid = AntigravityAdapter.spawnInOwnGroup(URL(fileURLWithPath: "/bin/sh"), ["-c", "echo ran > '\(neverRan.path)'"],
+                                                         in: cwd, out: out, err: dir.appendingPathComponent("err"))
+            Thread.sleep(forTimeInterval: 0.3)
+            assert(pid == nil && !fm.fileExists(atPath: neverRan.path), "a spawn whose output or folder can't be set up starts nothing")
+        }
+        // A run that came back `survived` leaves its group in the registry: no agy starts until that group is gone.
+        // (Nothing here can outlive SIGKILL, so a live group stands in for one.)
+        let lingering = AntigravityAdapter.spawnInOwnGroup(URL(fileURLWithPath: "/bin/sh"), ["-c", "exec sleep 30"], in: dir,
+                                                           out: dir.appendingPathComponent("out2"), err: dir.appendingPathComponent("err2"))!
+        AntigravityAdapter.survivors.withLock { _ = $0.insert(lingering) }
+        assert(agyRun("echo ok") == nil, "no run starts while a survivor's group is still there")
+        kill(-lingering, SIGKILL)
+        Thread.sleep(forTimeInterval: 0.3)
+        assert(agyRun("echo ok").map { String(decoding: $0.out, as: UTF8.self) } == "ok\n"
+               && AntigravityAdapter.survivors.withLock { $0.isEmpty }, "once it's gone, runs start again")
         let netStale = agSnap(.providerError, AntigravityAdapter.networkTimeout).staleKeeping(good)
         assert(netStale.health == .stale && netStale.windows.count == 1 && netStale.healthMessage?.contains("(network)") == true,
                "a network timeout keeps the last windows, stale, with its reason (got \(netStale.healthMessage ?? "nil"))")
