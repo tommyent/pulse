@@ -1567,12 +1567,16 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 
 /// Settings' sidebar: every pane, ↑ and ↓ to move, the theme's window behind it. Drawn here rather than by a List,
 /// whose selection takes the application's appearance, not the window's: in Groove White it was a black bar over
-/// black text while Settings wasn't key. The chosen row is the accent colour with white text, in every theme.
+/// black text while Settings wasn't key. The chosen row is the accent colour, its label black or white, whichever
+/// reads better on that accent (white on the default blue is only 3.8:1).
 struct SettingsSidebar: View {
     @Binding var selection: SettingsPane
+    var accent: Color = .accentColor   // the chosen row's fill; the checks pin one
     @FocusState private var focused: Bool
+    @Environment(\.self) private var environment
 
     var body: some View {
+        let fill = accent.resolve(in: environment)
         VStack(alignment: .leading, spacing: 2) {
             ForEach(SettingsPane.allCases) { pane in
                 let chosen = pane == selection
@@ -1584,8 +1588,8 @@ struct SettingsSidebar: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .foregroundStyle(chosen ? AnyShapeStyle(Color.white) : AnyShapeStyle(.primary))
-                        .background(chosen ? Color.accentColor : .clear, in: RoundedRectangle(cornerRadius: 6))
+                        .foregroundStyle(chosen ? AnyShapeStyle(Self.ink(on: fill)) : AnyShapeStyle(.primary))
+                        .background(chosen ? accent : .clear, in: RoundedRectangle(cornerRadius: 6))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -1604,6 +1608,12 @@ struct SettingsSidebar: View {
         .onAppear { focused = true }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Settings panes")
+    }
+
+    /// Black or white, whichever has more contrast on `fill`; one of them always reaches 4.5:1.
+    static func ink(on fill: Color.Resolved) -> Color {
+        let l = 0.2126 * Double(fill.linearRed) + 0.7152 * Double(fill.linearGreen) + 0.0722 * Double(fill.linearBlue)
+        return 1.05 / (l + 0.05) >= (l + 0.05) / 0.05 ? .white : .black
     }
 }
 

@@ -231,13 +231,14 @@ enum SettingsStateChecks {
         assert(Array(walked.prefix(8)) == SettingsPane.allCases && walked.last == .breaks, "↓ reaches every pane: \(walked.map(\.title))")
         assert(SettingsPane.breaks.moved(by: -7) == .general && SettingsPane.general.moved(by: -1) == .general)
 
-        // the sidebar in an offscreen window (never shown): the pane opened by name is the one row drawn in the accent
-        // colour, each lower down the list in order. SwiftUI builds no accessibility tree and takes no clicks in a window
+        // the sidebar in an offscreen window (never shown): the pane set (as Break settings… sets Breaks) is the one row
+        // drawn in the accent colour, each lower down the list in order. SwiftUI builds no accessibility tree and takes no clicks in a window
         // that isn't on screen, so clicking every row and VoiceOver's reading of them are checked in the app (on m1).
         final class Box: ObservableObject { @Published var pane = SettingsPane.general }
         struct Host: View {
             @ObservedObject var box: Box
-            var body: some View { SettingsSidebar(selection: $box.pane).frame(height: SettingsPane.height).background(Color.black) }
+            // a fixed accent (pure blue) for the geometry: the real one is whatever the Mac's is, tested for contrast below
+            var body: some View { SettingsSidebar(selection: $box.pane, accent: Color(rgb: 0x0000FF)).frame(height: SettingsPane.height).background(Color.black) }
         }
         _ = NSApplication.shared
         let box = Box()
@@ -272,6 +273,30 @@ enum SettingsStateChecks {
         let gaps = zip(centres.dropFirst(), centres).map { $0 - $1 }
         assert(gaps.allSatisfy { $0 > 0 && abs($0 - gaps[0]) <= 1 }, "each pane's row is the next one down: \(centres)")
         window.close()
+
+        // the chosen row's label on every macOS accent, in light and dark: at least 4.5:1 (white on the default blue is
+        // 3.8:1, on green and orange about 2.2:1, so the label is black there). The fill doesn't change with the
+        // window's key state: Color.accentColor is the same either way.
+        func contrast(_ a: Color.Resolved, _ b: Color.Resolved) -> Double {
+            func l(_ c: Color.Resolved) -> Double { 0.2126 * Double(c.linearRed) + 0.7152 * Double(c.linearGreen) + 0.0722 * Double(c.linearBlue) }
+            return (max(l(a), l(b)) + 0.05) / (min(l(a), l(b)) + 0.05)
+        }
+        let accents: [(String, NSColor)] = [("blue", .systemBlue), ("green", .systemGreen), ("orange", .systemOrange), ("red", .systemRed),
+                                            ("purple", .systemPurple), ("pink", .systemPink), ("yellow", .systemYellow), ("graphite", .systemGray),
+                                            ("this Mac's accent", .controlAccentColor), ("m1's measured blue", NSColor(srgbRed: 62 / 255, green: 123 / 255, blue: 1, alpha: 1))]
+        for scheme in [ColorScheme.light, .dark] {
+            var env = EnvironmentValues()
+            env.colorScheme = scheme
+            NSAppearance(named: scheme == .light ? .aqua : .darkAqua)!.performAsCurrentDrawingAppearance {
+                for (name, accent) in accents {
+                    let fill = Color(nsColor: accent.usingColorSpace(.sRGB)!).resolve(in: env)
+                    let ink = SettingsSidebar.ink(on: fill).resolve(in: env)
+                    assert(contrast(ink, fill) >= 4.5, "the chosen row on \(name) in \(scheme): \(contrast(ink, fill))")
+                }
+            }
+        }
+
+
     }
 
     /// Skins are plain values with fixed keys, so a skin can later come from a JSON file; the setting picks one by name.
