@@ -111,6 +111,7 @@ enum SettingsStateChecks {
         checkTrackRendering()
         checkSkins()
         ThemeChecks.run()
+        checkSettingsPanes()
         print("Settings state checks passed: saved values preserved, Tint migrated, unreadable values cost only themselves and are kept in a copy, plain menu-grey tracks without keylines in both looks")
     }
 
@@ -208,6 +209,62 @@ enum SettingsStateChecks {
         let nowhere = AppState.Persisted.load(from: url)
         try! fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
         assert(!nowhere.canReplace && !nowhere.settings.alwaysOnTop && copies().count == count)
+    }
+
+    /// Settings' sidebar: every pane is there, in order, with a symbol that exists; a pane opened by name (Break
+    /// settings… opens Breaks) selects its row; and a row chosen in the list opens its pane.
+    @MainActor private static func checkSettingsPanes() {
+        assert(SettingsPane.allCases.map(\.title) == ["General", "Appearance", "Accounts", "Rings", "Battery", "Codex pet", "Agents", "Breaks"])
+        for pane in SettingsPane.allCases { assert(NSImage(systemSymbolName: pane.symbol, accessibilityDescription: nil) != nil, "\(pane.symbol) exists") }
+        assert(SettingsPane(named: "Breaks") == .breaks && SettingsPane(named: "Agents") == .agents && SettingsPane(named: "nonsense") == .general)
+
+        // ↓ from General reaches every pane in order and stops at Breaks; ↑ goes back and stops at General
+        var walked = [SettingsPane.general]
+        for _ in 0 ..< 10 { walked.append(walked.last!.moved(by: 1)) }
+        assert(Array(walked.prefix(8)) == SettingsPane.allCases && walked.last == .breaks, "↓ reaches every pane: \(walked.map(\.title))")
+        assert(SettingsPane.breaks.moved(by: -7) == .general && SettingsPane.general.moved(by: -1) == .general)
+
+        // the sidebar in an offscreen window (never shown): the pane opened by name is the one row drawn in the accent
+        // colour, each lower down the list in order. SwiftUI builds no accessibility tree and takes no clicks in a window
+        // that isn't on screen, so clicking every row and VoiceOver's reading of them are checked in the app (on m1).
+        final class Box: ObservableObject { @Published var pane = SettingsPane.general }
+        struct Host: View {
+            @ObservedObject var box: Box
+            var body: some View { SettingsSidebar(selection: $box.pane).frame(height: SettingsPane.height).background(Color.black) }
+        }
+        _ = NSApplication.shared
+        let box = Box()
+        let host = NSHostingView(rootView: Host(box: box))
+        host.frame = NSRect(x: 0, y: 0, width: SettingsPane.sidebarWidth, height: SettingsPane.height)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        func settle() { for _ in 0 ..< 6 { RunLoop.main.run(until: Date().addingTimeInterval(0.03)); host.layoutSubtreeIfNeeded() } }
+        /// The rows drawn in the accent colour, as ranges of points from the top, read down a column inside the rows.
+        func highlighted() -> [ClosedRange<Int>] {
+            let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
+            host.cacheDisplay(in: host.bounds, to: rep)
+            let scale = Double(rep.pixelsHigh) / Double(host.bounds.height)
+            var runs: [ClosedRange<Int>] = [], start: Int?
+            for y in 0 ..< Int(host.bounds.height) {
+                let c = rep.colorAt(x: Int(14 * scale), y: Int(Double(y) * scale))?.usingColorSpace(.sRGB)
+                let accent = (c?.blueComponent ?? 0) > 0.6 && (c?.redComponent ?? 1) < 0.4
+                if accent, start == nil { start = y }
+                if !accent, let s = start { runs.append(s ... y - 1); start = nil }
+            }
+            return runs
+        }
+        settle()
+        var centres: [Int] = []
+        for pane in SettingsPane.allCases {
+            box.pane = pane   // opened by name, as Break settings… does
+            settle()
+            let runs = highlighted()
+            assert(runs.count == 1, "\(pane.title): one row drawn as chosen, not \(runs)")
+            centres.append((runs[0].lowerBound + runs[0].upperBound) / 2)
+        }
+        let gaps = zip(centres.dropFirst(), centres).map { $0 - $1 }
+        assert(gaps.allSatisfy { $0 > 0 && abs($0 - gaps[0]) <= 1 }, "each pane's row is the next one down: \(centres)")
+        window.close()
     }
 
     /// Skins are plain values with fixed keys, so a skin can later come from a JSON file; the setting picks one by name.

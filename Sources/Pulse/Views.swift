@@ -1057,7 +1057,7 @@ struct OverlayView: View {
                 let paused = breaks.pausedUntil.map { "Paused until \($0.formatted(date: .omitted, time: .shortened))" }
                 Button {
                     onBreakMenu?(cupFrame) {
-                        state.settingsTab = "Breaks"
+                        state.settingsTab = .breaks
                         showSettings(openSettings)
                     }
                 } label: {
@@ -1253,7 +1253,9 @@ struct MenuBarPopover: View {
     NSApp.activate(ignoringOtherApps: true)
     openSettings()
     DispatchQueue.main.async {
-        NSApp.windows.first { $0.title.contains("Settings") || $0.title.contains("Pulse") }?.orderFrontRegardless()
+        // SwiftUI's Settings window: by its identifier (its title is the pane's name now)
+        NSApp.windows.first { $0.identifier?.rawValue == "com_apple_SwiftUI_Settings_window" || SettingsPane(rawValue: $0.title) != nil }?
+            .orderFrontRegardless()
     }
 }
 
@@ -1372,10 +1374,27 @@ struct SettingsView: View {
     // owned by macOS, not state.json, so a change in System Settings → Login Items shows here too
     @State private var loginItem = SMAppService.mainApp.status
 
-    /// One tab per group. Only the layout is grouped: every value is saved where it always was.
+    /// A sidebar of panes, the chosen one beside it. Only the layout is grouped: every value is saved where it always was.
     var body: some View {
-        TabView(selection: $state.settingsTab) {
-            tab("General", "gearshape", height: 160) {
+        HStack(spacing: 0) {
+            SettingsSidebar(selection: $state.settingsTab)
+            Divider()
+            pane(state.settingsTab)
+                .frame(width: SettingsPane.paneWidth)
+        }
+        .frame(height: SettingsPane.height)
+        .navigationTitle(state.settingsTab.title)
+        .onAppear {
+            loginItem = SMAppService.mainApp.status
+            agents.findRex()   // a Rex installed since launch
+        }
+    }
+
+    /// A pane's content, as it was in its tab.
+    @ViewBuilder private func pane(_ pane: SettingsPane) -> some View {
+        switch pane {
+        case .general:
+            form {
                 Section {
                     Toggle("Launch at login", isOn: Binding(
                         get: { loginItem == .enabled },
@@ -1389,10 +1408,12 @@ struct SettingsView: View {
                     }
                 }
             }
-            tab("Appearance", "paintpalette", height: 330) {
+        case .appearance:
+            form {
                 AppearanceSettings(choice: $state.persisted.themeChoice, themes: ThemeStore.shared)
             }
-            tab("Accounts", "person.crop.circle", height: 360) {
+        case .accounts:
+            form {
                 Section {
                     ForEach(AccountID.allCases) { id in
                         LabeledContent {
@@ -1462,7 +1483,8 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(PulsePalette.secondary)
                 }
             }
-            tab("Rings", "circle.circle", height: 300) {
+        case .rings:
+            form {
                 Section {
                     Toggle("Show usage rings on desktop", isOn: $state.persisted.showOverlay)
                         .accessibilityLabel("Show usage rings on desktop")
@@ -1478,10 +1500,12 @@ struct SettingsView: View {
                         .help("Rings, bars and percentages show what's left of each limit instead of what's used, emptying as you use it.")
                 }
             }
-            tab("Battery", "battery.75percent", height: 540) {
+        case .battery:
+            form {
                 Section { BatterySettingsSection(settings: $state.persisted.battery) }
             }
-            tab("Codex pet", "pawprint", height: 290) {
+        case .codexPet:
+            form {
                 Section {
                     Toggle("Show the Codex pet", isOn: state.showPetBinding)
                         .accessibilityLabel("Show the Codex pet")
@@ -1493,28 +1517,101 @@ struct SettingsView: View {
                         .help("Ask again for future command and folder-access requests. Current task grants expire when that task ends.")
                 }
             }
-            tab("Agents", "person.2", height: 830) {
+        case .agents:
+            form {
                 AgentSettingsSection(settings: $state.persisted.agents, rexFound: agents.rexFound,
                                      shortcut: state.agentsHotKeyBinding, shortcutNote: agents.shortcutNote)
             }
-            tab("Breaks", "cup.and.saucer", height: 720) {
+        case .breaks:
+            form {
                 BreakSettingsSection(settings: $state.persisted.breaks)
             }
         }
-        .onAppear {
-            loginItem = SMAppService.mainApp.status
-            agents.findRex()   // a Rex installed since launch
-        }
     }
 
-    private func tab<Content: View>(_ title: String, _ symbol: String, height: CGFloat,
-                                    @ViewBuilder _ content: () -> Content) -> some View {
+    private func form<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         Form { content() }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
-            .frame(width: 460, height: height)
-            .tabItem { Label(title, systemImage: symbol) }
-            .tag(title)
+    }
+}
+
+/// Settings' panes, in the sidebar's order: each one's name (also the window's title) and symbol.
+enum SettingsPane: String, CaseIterable, Identifiable {
+    case general = "General", appearance = "Appearance", accounts = "Accounts", rings = "Rings", battery = "Battery", codexPet = "Codex pet", agents = "Agents", breaks = "Breaks"
+
+    var id: Self { self }
+    var title: String { rawValue }
+    var symbol: String {
+        switch self {
+        case .general: "gearshape"
+        case .appearance: "paintpalette"
+        case .accounts: "person.crop.circle"
+        case .rings: "circle.circle"
+        case .battery: "battery.75percent"
+        case .codexPet: "pawprint"
+        case .agents: "person.2"
+        case .breaks: "cup.and.saucer"
+        }
+    }
+
+    /// The pane a name opens; an unknown name is General.
+    init(named name: String) { self = Self(rawValue: name) ?? .general }
+
+    static let sidebarWidth: CGFloat = 190
+    static let paneWidth: CGFloat = 460
+    /// The window's height: the tallest pane's (Agents) as it was in its tab, so none is cut off; the others scroll
+    /// if they ever grow past it.
+    static let height: CGFloat = 830
+}
+
+/// Settings' sidebar: every pane, ↑ and ↓ to move, the theme's window behind it. Drawn here rather than by a List,
+/// whose selection takes the application's appearance, not the window's: in Groove White it was a black bar over
+/// black text while Settings wasn't key. The chosen row is the accent colour with white text, in every theme.
+struct SettingsSidebar: View {
+    @Binding var selection: SettingsPane
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(SettingsPane.allCases) { pane in
+                let chosen = pane == selection
+                Button {
+                    selection = pane
+                    focused = true
+                } label: {
+                    Label(pane.title, systemImage: pane.symbol)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .foregroundStyle(chosen ? AnyShapeStyle(Color.white) : AnyShapeStyle(.primary))
+                        .background(chosen ? Color.accentColor : .clear, in: RoundedRectangle(cornerRadius: 6))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(pane.title)
+                .accessibilityAddTraits(chosen ? .isSelected : [])
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .frame(width: SettingsPane.sidebarWidth)
+        .focusable()
+        .focused($focused)
+        .focusEffectDisabled()
+        .onKeyPress(.upArrow) { selection = selection.moved(by: -1); return .handled }
+        .onKeyPress(.downArrow) { selection = selection.moved(by: 1); return .handled }
+        .onAppear { focused = true }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Settings panes")
+    }
+}
+
+extension SettingsPane {
+    /// The pane `offset` rows away, stopping at the first and the last.
+    func moved(by offset: Int) -> SettingsPane {
+        let all = Self.allCases, i = all.firstIndex(of: self)! + offset
+        return all[max(0, min(all.count - 1, i))]
     }
 }
 
