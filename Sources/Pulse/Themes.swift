@@ -287,6 +287,7 @@ extension PulseThemeFile {
         sample.author = "a"
         sample.look.glass = true
         sample.look.liquid = true
+        sample.look.halo = [[0, 0, 4, "#000000", 0.6]]
         sample.look.groove?.porthole = PulseSkin.grooveBlack.groove?.porthole
         var keys = Set<[String]>()
         collectKeys(try! JSONSerialization.jsonObject(with: JSONEncoder().encode(sample)), []) { keys.insert($0) }
@@ -415,6 +416,7 @@ extension PulseThemeFile {
             out.append("appearance: a flat theme (no groove) uses Classic's drawing, which is dark only; give it a dark surface, or groove")
         }
         if look.glass != nil, look.groove != nil { out.append("glass: for a flat theme only; a theme with groove draws its own slab") }
+        if look.halo != nil, look.liquid != true { out.append("halo: for a liquid theme only") }
         out += look.problems("", appearance: scheme, warnings: &warnings)
         return (out, warnings)
     }
@@ -437,6 +439,7 @@ extension PulseSkin {
             for (i, s) in list.enumerated() { shadow("\(path)[\(i)]", s, reach: reach, blur: blur) }
         }
         range("stale", stale, 0 ... 1)
+        if let halo { shadows("halo", halo, reach: 8, blur: 16) }
 
         // the contrast floor
         let assumedInk: SkinColor = appearance == .dark ? "#FFFFFF" : "#000000"   // the system's label colour

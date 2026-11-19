@@ -122,6 +122,7 @@ are refused, so a typo can't pass silently.
 | `surface` | colour | a flat theme's rail, cards and popover; unused by a Groove theme, whose panels draw `groove.slab` (set it to the slab's colour) |
 | `glass` | true, optional | a flat theme's panels on untinted dark Liquid Glass instead of `surface` (Classic Glass); flat themes only |
 | `liquid` | true, optional | prototype: a flat theme's panels are the system's clear Liquid Glass with nothing over it, light or dark (`appearance`); `ink` and `accents` alone must read on whatever is behind, and `surface` only stands for it in the contrast checks |
+| `halo` | shadow list, optional | prototype, `liquid` themes only: soft shadows in points (offsets to ±8, blur to 16) behind everything on the glass, text, rings and icons, so the ink reads on either side of what shows through; e.g. `[0, 0, 3, "#000000", 0.6]` behind white text |
 | `track` | colour | a flat theme's empty ring track |
 | `ink.primary` | colour, optional | numbers and titles; left out: the system's label colour |
 | `ink.secondary` | colour | captions |

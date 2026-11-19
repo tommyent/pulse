@@ -82,6 +82,7 @@ struct PulseSkin: Codable, Equatable {
     var glass: Bool? = nil   // a flat look's panels: untinted dark Liquid Glass instead of `surface` (Classic Glass)
     var groove: Groove?      // nil = flat: Classic's surface, tracks and text
     var liquid: Bool? = nil  // prototype: a flat look's panels are Apple's clear Liquid Glass with the content inside, no veil; `ink` and `accents` alone do the reading
+    var halo: [SkinShadow]? = nil   // prototype, liquid only: soft shadows behind everything inside the glass (text, rings, icons), in points
 
     struct Accents: Codable, Equatable {
         var claude, codex, grok, antigravity: SkinColor

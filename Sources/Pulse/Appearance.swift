@@ -145,7 +145,10 @@ private struct SurfaceModifier<S: Shape>: ViewModifier {
         if skin.liquid == true {
             // prototype: the content inside the system's clear glass (the most transparent, the strongest lensing at its edges;
             // .regular frosts it grey), which draws its own edge and light and adapts to what's behind
-            content.glassEffect(.clear, in: shape)
+            // the theme's halo behind everything on it, so its ink reads on either side of what the glass shows; live shadows,
+            // not flattened like Groove's, since a bitmap would lose the AppKit controls inside (the card's bars)
+            (skin.halo ?? []).reduce(AnyView(content)) { view, s in AnyView(view.shadow(color: s.color(), radius: s.blur / 2, x: s.x, y: s.y)) }
+                .glassEffect(.clear, in: shape)
         } else {
             painted(content)
         }

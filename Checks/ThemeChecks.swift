@@ -222,6 +222,13 @@ enum ThemeChecks {
         expectRefused(.classicSolid, "appearance", "light", mentioning: ["appearance", "dark only"])
         expectRefused(.classicSolid, "surface", "#F4F4F4", mentioning: ["appearance", "dark only"])   // "any" reads as light: a flat light theme
         expectRefused(.groove, "glass", true, mentioning: ["glass", "flat theme only"])
+        // the glass prototype's halo: liquid themes only, a bounded shadow list
+        expectRefused(.classicSolid, "halo", [[0, 0, 3, "#000000", 0.6]], mentioning: ["halo", "liquid theme only"])
+        var liquid = PulseThemeFile.classicSolid
+        liquid.look.liquid = true
+        expectRefused(liquid, "halo", [[0, 0, 40, "#000000", 0.6]], mentioning: ["halo[0] blur", "outside"])
+        liquid.look.halo = [[0, 0, 3, "#000000", 0.6], [0, 0, 10, "#000000", 0.35]]
+        assert(ThemeStore.decode(ThemeStore.file(liquid)) == .success(liquid), "a liquid theme's halo round-trips")
         // author and description: optional, kept, bounded
         var credited = PulseThemeFile.groove
         credited.author = "Someone"
