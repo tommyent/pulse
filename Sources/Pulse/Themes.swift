@@ -286,6 +286,7 @@ extension PulseThemeFile {
         var sample = PulseThemeFile.grooveWhite
         sample.author = "a"
         sample.look.glass = true
+        sample.look.liquid = true
         sample.look.groove?.porthole = PulseSkin.grooveBlack.groove?.porthole
         var keys = Set<[String]>()
         collectKeys(try! JSONSerialization.jsonObject(with: JSONEncoder().encode(sample)), []) { keys.insert($0) }
@@ -410,7 +411,7 @@ extension PulseThemeFile {
         text("name", name, max: 40)
         text("author", author, max: 80)
         text("description", description, max: 300, lines: true)
-        if look.groove == nil, scheme == .light {
+        if look.groove == nil, look.liquid != true, scheme == .light {
             out.append("appearance: a flat theme (no groove) uses Classic's drawing, which is dark only; give it a dark surface, or groove")
         }
         if look.glass != nil, look.groove != nil { out.append("glass: for a flat theme only; a theme with groove draws its own slab") }

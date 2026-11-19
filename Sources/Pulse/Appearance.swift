@@ -53,6 +53,8 @@ struct PulseSurface<S: Shape>: View {
     var body: some View {
         if let groove = skin.groove {
             GrooveSlab(groove: groove, shape: shape, floats: floats)
+        } else if skin.liquid == true {
+            Color.clear.glassEffect(.clear, in: shape)   // prototype: Settings' background; panels put their content inside (SurfaceModifier)
         } else {
             classic
         }
@@ -140,6 +142,16 @@ private struct SurfaceModifier<S: Shape>: ViewModifier {
     let bordered: Bool   // false: the window supplies its own rim and shadow (the menu bar popover)
 
     func body(content: Content) -> some View {
+        if skin.liquid == true {
+            // prototype: the content inside the system's clear glass (the most transparent, the strongest lensing at its edges;
+            // .regular frosts it grey), which draws its own edge and light and adapts to what's behind
+            content.glassEffect(.clear, in: shape)
+        } else {
+            painted(content)
+        }
+    }
+
+    private func painted(_ content: Content) -> some View {
         content
             .background { PulseSurface(shape: shape, floats: bordered) }
             .overlay {
