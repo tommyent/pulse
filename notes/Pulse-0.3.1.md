@@ -3,4 +3,4 @@ Pulse used far more memory than it should, up to about 1.3 GB, because of how th
 - In a test that draws the pet's animation frames, memory went from 1,304 MB to 53 MB. The decoded image copies went from 1,274 MB to none.
 - The pet now takes about 25 MB: one 13 MB picture sheet and 11 MB for drawing.
 
-For Apple silicon Macs on macOS 26 or later. To check the download, run `shasum -a 256 -c Pulse-0.3.1.dmg.sha256` in the folder that holds both files.
+For Apple silicon Macs; tested on macOS 27. To check the download, run `shasum -a 256 -c Pulse-0.3.1.dmg.sha256` in the folder that holds both files.

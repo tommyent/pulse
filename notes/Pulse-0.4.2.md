@@ -6,4 +6,4 @@ A slimmer rail along the top and bottom, a card for the battery, and Solid's ori
 - **A clearer tick when the rail is tucked away.** A ring's tick turns red only when the account's longest limit, usually its week, is nearly used up. Any other limit near its end keeps the ring's colour and adds a red dot.
 - **A smaller download.** The Halloween film has left the app now that Halloween is over. Thanksgiving's still plays.
 
-For Apple silicon Macs on macOS 26 or later. To check the download, run `shasum -a 256 -c Pulse-0.4.2.dmg.sha256` in the folder that holds both files.
+For Apple silicon Macs; tested on macOS 26 and 27. To check the download, run `shasum -a 256 -c Pulse-0.4.2.dmg.sha256` in the folder that holds both files.
