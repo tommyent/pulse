@@ -35,7 +35,6 @@ struct PulseTheme: Equatable, Identifiable {
     private(set) var finished = 0             // the last folder job whose results are published
     private var stream: FSEventStreamRef?
     private var pending: DispatchWorkItem?
-    private var appearanceWatch: NSKeyValueObservation?
 
     init(folder: URL) { self.folder = folder }
 
@@ -51,29 +50,44 @@ struct PulseTheme: Equatable, Identifiable {
 
     // MARK: the folder
 
-    /// At launch: the examples and the guide into the folder, every file read, the folder watched. The application's
-    /// appearance is dark for a theme without a light half, as Pulse always was, and the system's otherwise, read back
-    /// from it.
+    /// At launch: the examples and the guide into the folder, every file read, the folder watched, the system's
+    /// appearance followed, and the chosen theme's id mirrored. The application itself stays dark (`NSApp.appearance`,
+    /// set at launch as always); only Pulse's own themed windows take a theme's appearance (`PulsePresentation`), so
+    /// other windows (the Grok sign-in, the Codex approval alerts) keep the dark they always had.
     func start(_ state: AppState) {
         writeExamples()
         reload()
         watch()
-        appearanceWatch = NSApp.observe(\.effectiveAppearance, options: [.initial, .new]) { app, _ in
-            let dark = app.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            MainActor.assumeIsolated { ThemeStore.shared.setSystem(dark ? .dark : .light) }
+        followSystem()
+        follow(state.$persisted.map(\.skin))
+    }
+
+    /// The chosen theme's id, as a publisher gives it. Only the id: a view resolves it against `themes` when it draws,
+    /// so a reload that adds or removes a light half is read from the new list, never the one before it.
+    func follow<P: Publisher>(_ skin: P) where P.Output == String?, P.Failure == Never {
+        followed = skin.removeDuplicates().sink { [weak self] id in
+            MainActor.assumeIsolated { if self?.selected != id { self?.selected = id } }
         }
-        followed = state.$persisted.map(\.skin).removeDuplicates().combineLatest($themes)
-            .sink { [weak self] id, _ in
-                guard let self else { return }
-                if selected != id { selected = id }
-                let follows = theme(id).set.light != nil
-                if (NSApp.appearance == nil) != follows { NSApp.appearance = follows ? nil : NSAppearance(named: .darkAqua) }
-            }
     }
     private var followed: AnyCancellable?
     @Published private(set) var selected: String?   // the theme in use, as state.json names it
 
     func setSystem(_ scheme: ColorScheme) { if systemScheme != scheme { systemScheme = scheme } }
+
+    /// The system's appearance, from its own setting: `NSApp`'s effective appearance is Pulse's dark, not the system's.
+    private func followSystem() {
+        readSystem()
+        systemWatch = DistributedNotificationCenter.default().addObserver(forName: .init("AppleInterfaceThemeChangedNotification"),
+                                                                         object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.readSystem() }
+        }
+    }
+    private func readSystem() {
+        CFPreferencesAppSynchronize(kCFPreferencesAnyApplication)
+        let style = CFPreferencesCopyAppValue("AppleInterfaceStyle" as CFString, kCFPreferencesAnyApplication) as? String
+        setSystem(style == "Dark" ? .dark : .light)
+    }
+    private var systemWatch: NSObjectProtocol?
 
     /// Writes the examples and the guide in the background (`ThemeFolder.writeExamples`). Returns the job's number:
     /// `finished` reaches it once done.

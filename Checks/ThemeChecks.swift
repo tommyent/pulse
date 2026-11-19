@@ -1,4 +1,5 @@
 // Theme files: built into SettingsStateChecks (it builds every source but PulseApp.swift) and run from its main.
+import Combine
 import SwiftUI
 
 enum ThemeChecks {
@@ -10,6 +11,7 @@ enum ThemeChecks {
         checkFolder()
         checkOwnership()
         checkBounded()
+        checkLightHalfLive()
         checkAppearance()
         print("Theme checks passed: built-ins round-trip, every refusal on the list, the contrast floor, the guide's example and keys, last good, .error files, live reload, built-in names, appearance")
     }
@@ -310,6 +312,34 @@ enum ThemeChecks {
         let errors = try! fm.contentsOfDirectory(atPath: folder.path).filter { $0.hasSuffix(".error") }
         assert(!errors.contains { $0.hasPrefix("many-") }, "no .error for a file past the cap: \(errors.sorted())")
         assert(errors.count <= 11, "at most 10 .error files written, beside the pipe: \(errors.sorted())")
+    }
+
+    /// A light half added and removed while the theme is in use: the theme's appearance comes from the new list each
+    /// time, and the application's own appearance stays dark throughout (Sol's review of 4f91bdb: the sink read the
+    /// list from before the reload, and cleared `NSApp.appearance` for every window).
+    @MainActor static func checkLightHalfLive() {
+        _ = NSApplication.shared
+        NSApp.appearance = NSAppearance(named: .darkAqua)   // as PulseApp sets it at launch
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appending(path: "pulse-theme-live-\(UUID().uuidString)").resolvingSymlinksInPath()
+        defer { try? fm.removeItem(at: folder) }
+        try! fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        let store = ThemeStore(folder: folder), file = folder.appending(path: "selected.json")
+        store.setSystem(.light)
+        store.follow(Just<String?>("selected"))
+        var steps: [(light: Bool, scheme: ColorScheme, app: NSAppearance.Name?)] = []
+        for set in [PulseSkinSet.classic, .groove, .classic] {
+            try! ThemeStore.file(set).write(to: file)
+            settle(store, store.reload())
+            assert(waitUntil { (store.theme("selected").set.light != nil) == (set.light != nil) }, "the reload is published")
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            steps.append((set.light != nil, store.scheme("selected"), NSApp.appearance?.name))
+        }
+        for step in steps {
+            assert(step.scheme == (step.light ? .light : .dark), "a light half added or removed is read from the new list: \(steps)")
+            assert(step.app == .darkAqua, "the application stays dark; only Pulse's themed windows follow the theme: \(steps)")
+        }
+        assert(store.skin("selected") == .classic)
     }
 
     @MainActor static func checkAppearance() {

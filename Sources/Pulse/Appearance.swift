@@ -91,7 +91,7 @@ private struct PulsePresentation: ViewModifier {
     func body(content: Content) -> some View {
         // dark, unless the theme has a light half: then the system's appearance
         content.preferredColorScheme(themes.scheme(state.persisted.skin))
-            .background(PulseWindowBacking())
+            .background(PulseWindowBacking(scheme: themes.scheme(state.persisted.skin)))
             .environment(\.pulseAppearance, state.persisted.appearance)
             .environment(\.pulseSkin, themes.skin(state.persisted.skin, contrast: contrast))
             .environment(\.appearsActive, true)
@@ -139,9 +139,14 @@ private struct SurfaceModifier<S: Shape>: ViewModifier {
     }
 }
 
-// Native scenes otherwise keep an opaque window backing underneath the chosen surface.
+// Native scenes otherwise keep an opaque window backing underneath the chosen surface. The backing also gives its
+// window the theme's appearance, so AppKit's own colours and controls in Pulse's themed windows follow the theme,
+// while the application, and every other window, keeps Pulse's dark.
 private struct PulseWindowBacking: NSViewRepresentable {
+    let scheme: ColorScheme
+
     final class BackingView: NSView {
+        var scheme = ColorScheme.dark
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             clearBacking()
@@ -149,10 +154,12 @@ private struct PulseWindowBacking: NSViewRepresentable {
         func clearBacking() {
             window?.isOpaque = false
             window?.backgroundColor = .clear
+            let name: NSAppearance.Name = scheme == .light ? .aqua : .darkAqua
+            if window?.appearance?.name != name { window?.appearance = NSAppearance(named: name) }
         }
     }
-    func makeNSView(context: Context) -> BackingView { BackingView() }
-    func updateNSView(_ view: BackingView, context: Context) { view.clearBacking() }
+    func makeNSView(context: Context) -> BackingView { let view = BackingView(); view.scheme = scheme; return view }
+    func updateNSView(_ view: BackingView, context: Context) { view.scheme = scheme; view.clearBacking() }
 }
 
 extension View {
