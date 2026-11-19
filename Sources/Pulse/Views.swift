@@ -1,3 +1,4 @@
+import os
 import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
@@ -1248,15 +1249,49 @@ struct MenuBarPopover: View {
     }
 }
 
-/// Opens Settings in front: Pulse is an accessory app, so without activation the window opens behind everything.
+private let settingsLog = Logger(subsystem: "io.github.tommyent.pulse", category: "settings")
+
+/// The Settings window, as Settings' own view finds it (`SettingsWindowReader`): what `showSettings` brings forward,
+/// rather than a window looked up by title or identifier.
+@MainActor enum SettingsWindow {
+    static weak var current: NSWindow?
+}
+
+/// Opens Settings in front. Pulse is an accessory app, and macOS may not let it become active (another app in front, a
+/// system dialog up), so the window SwiftUI opens is then raised directly, once its view reports it, for up to a
+/// second. Each step is logged: `log show --predicate 'subsystem == "io.github.tommyent.pulse" AND category == "settings"'`.
 @MainActor func showSettings(_ openSettings: OpenSettingsAction) {
-    NSApp.activate(ignoringOtherApps: true)
+    NSApp.activate()
     openSettings()
-    DispatchQueue.main.async {
-        // SwiftUI's Settings window: by its identifier (its title is the pane's name now)
-        NSApp.windows.first { $0.identifier?.rawValue == "com_apple_SwiftUI_Settings_window" || SettingsPane(rawValue: $0.title) != nil }?
-            .orderFrontRegardless()
+    settingsLog.notice("open: active \(NSApp.isActive), window \(SettingsWindow.current.map { "visible \($0.isVisible) key \($0.isKeyWindow)" } ?? "none")")
+    raiseSettings(tries: 20)
+}
+
+@MainActor private func raiseSettings(tries: Int) {
+    if let window = SettingsWindow.current, window.isVisible {
+        window.orderFrontRegardless()
+        window.makeKey()
+        settingsLog.notice("raised: active \(NSApp.isActive), key \(window.isKeyWindow), after \(20 - tries) tries")
+        return
     }
+    guard tries > 0 else {
+        settingsLog.error("not shown: active \(NSApp.isActive), window \(SettingsWindow.current.map { "visible \($0.isVisible)" } ?? "none")")
+        return
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { raiseSettings(tries: tries - 1) }
+}
+
+/// Tells `SettingsWindow` which window Settings' view is in, each time it moves into one.
+private struct SettingsWindowReader: NSViewRepresentable {
+    final class Reader: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            MainActor.assumeIsolated { SettingsWindow.current = window }
+        }
+    }
+    func makeNSView(context: Context) -> Reader { Reader() }
+    func updateNSView(_ view: Reader, context: Context) {}
 }
 
 /// Settings › Appearance: when Pulse is light or dark, a theme for each, and the theme files (Import…, Export…, a file
@@ -1383,6 +1418,7 @@ struct SettingsView: View {
                 .frame(width: SettingsPane.paneWidth)
         }
         .frame(height: SettingsPane.height)
+        .background(SettingsWindowReader())
         .navigationTitle(state.settingsTab.title)
         .onAppear {
             loginItem = SMAppService.mainApp.status
