@@ -70,21 +70,47 @@ struct PulseTheme: Equatable, Identifiable {
 
     func setSystem(_ scheme: ColorScheme) { if systemScheme != scheme { systemScheme = scheme } }
 
+    /// Built-ins whose file Pulse left alone at launch, and why (shown in that file's `.error`).
+    private var keptEdits: [String: String] = [:]
+
     /// The built-ins as files to copy, and the guide. A built-in's file that differs from what this version ships (an
-    /// edit, or an older version's) is kept aside as `<name>.json.replaced-<time>` first, so nothing typed is lost.
-    func writeExamples() {
+    /// edit, or an older version's) is first moved aside as `<name>.json.replaced-<time>`; if that move fails (the name
+    /// is taken, the folder is read-only) the edit stays where it is and the file isn't rewritten. Pulse replaces only
+    /// regular files: a link or a folder under one of these names is left as it is.
+    @discardableResult func writeExamples() -> [String: String] {
         let fm = FileManager.default
+        var kept: [String: String] = [:]
         try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
         for (id, set) in PulseSkinSet.builtIn {
             let url = folder.appending(path: "\(id).json"), shipped = Self.file(set)
-            guard let old = try? Data(contentsOf: url) else { try? shipped.write(to: url, options: .atomic); continue }
-            guard old != shipped else { continue }
+            guard Self.exists(url) else { try? shipped.write(to: url, options: .atomic); continue }
+            guard Self.isRegularFile(url) else { kept[id] = "it isn't a regular file (a link or a folder), so Pulse leaves it alone"; continue }
+            guard (try? Data(contentsOf: url)) != shipped else { continue }
             let stamp = Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false)).replacingOccurrences(of: ":", with: "")
-            try? fm.moveItem(at: url, to: folder.appending(path: "\(id).json.replaced-\(stamp)"))
+            let aside = folder.appending(path: "\(id).json.replaced-\(stamp)")
+            do { try fm.moveItem(at: url, to: aside) } catch {   // moveItem never replaces an existing file
+                kept[id] = "Pulse couldn't move your edit aside to \(aside.lastPathComponent) (\(error.localizedDescription)), so it left the file as it is"
+                continue
+            }
             try? shipped.write(to: url, options: .atomic)
         }
         let guide = folder.appending(path: Self.guideName), text = Data(ThemeGuide.text.utf8)
-        if (try? Data(contentsOf: guide)) != text { try? text.write(to: guide, options: .atomic) }
+        if !Self.exists(guide) || (Self.isRegularFile(guide) && (try? Data(contentsOf: guide)) != text) { try? text.write(to: guide, options: .atomic) }
+        keptEdits = kept
+        return kept
+    }
+
+    nonisolated static func exists(_ url: URL) -> Bool { (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil }
+    /// A regular file itself, not a link to one (attributesOfItem doesn't follow links).
+    nonisolated static func isRegularFile(_ url: URL) -> Bool {
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType == .typeRegular
+    }
+    /// The first line of every `.error` Pulse writes; a `.error` file without it isn't Pulse's.
+    nonisolated static func errorHeader(_ id: String) -> String { "\(id).json can't be used" }
+    /// An `<id>.error` Pulse wrote: a regular file starting with Pulse's first line for that id.
+    nonisolated static func isOurError(_ url: URL, id: String) -> Bool {
+        guard isRegularFile(url), let data = try? Data(contentsOf: url) else { return false }
+        return String(decoding: data.prefix(200), as: UTF8.self).hasPrefix(errorHeader(id))
     }
 
     /// Every theme file read and checked again; what changed is published, nothing else.
@@ -97,8 +123,9 @@ struct PulseTheme: Equatable, Identifiable {
         for id in files {
             let url = folder.appending(path: "\(id).json")
             if let builtIn = PulseSkinSet.builtIn.first(where: { $0.id == id }) {
-                if (try? Data(contentsOf: url)) != Self.file(builtIn.set) {
-                    issues[id] = "\(id).json is Pulse's own \(builtIn.set.name), written as an example: edits to it never apply, and the next launch puts it back (keeping your copy beside it). Copy it under a new name to make a theme of your own."
+                if !Self.isRegularFile(url) || (try? Data(contentsOf: url)) != Self.file(builtIn.set) {
+                    let next = keptEdits[id].map { "At launch \($0)." } ?? "The next launch puts it back, keeping your copy beside it as \(id).json.replaced-<time>."
+                    issues[id] = "\(id).json is Pulse's own \(builtIn.set.name), written as an example: edits to it never apply. \(next) Copy it under a new name to make a theme of your own."
                 }
                 continue
             }
@@ -117,14 +144,18 @@ struct PulseTheme: Equatable, Identifiable {
             }
         }
         for id in lastGood.keys where !files.contains(id) { lastGood[id] = nil }
-        // .error files: written where something is wrong, removed where nothing is (a fixed or removed file)
+        // .error files: Pulse's own only. Written where something is wrong, removed where nothing is (a fixed or removed
+        // file); any other `.error` entry (someone's file, a folder, a link) is never touched, and Settings still shows the problem.
         for name in names where name.hasSuffix(".error") {
-            let id = String(name.dropLast(6))
-            if issues[id] == nil { try? fm.removeItem(at: folder.appending(path: name)) }
+            let id = String(name.dropLast(6)), url = folder.appending(path: name)
+            if issues[id] == nil, Self.isOurError(url, id: id) { try? fm.removeItem(at: url) }
         }
         for (id, text) in issues {
-            let url = folder.appending(path: "\(id).error"), shown = lastGood[id] == nil ? "Classic" : "its last good version"
-            let data = Data("\(id).json can't be used, so Pulse draws \(shown) instead. Fix it and Pulse reads it again by itself; \(Self.guideName) here describes every key.\n\n\(text)\n".utf8)
+            let builtIn = PulseSkinSet.builtIn.first { $0.id == id }?.set.name
+            let url = folder.appending(path: "\(id).error")
+            let shown = builtIn.map { "its own \($0)" } ?? (lastGood[id] == nil ? "Classic" : "its last good version")
+            let data = Data("\(Self.errorHeader(id)), so Pulse draws \(shown) instead. Fix it and Pulse reads it again by itself; \(Self.guideName) here describes every key.\n\n\(text)\n".utf8)
+            guard !Self.exists(url) || Self.isOurError(url, id: id) else { continue }
             if (try? Data(contentsOf: url)) != data { try? data.write(to: url, options: .atomic) }
         }
         let all = PulseSkinSet.builtIn.map { PulseTheme(id: $0.id, set: $0.set, builtIn: true) } + found

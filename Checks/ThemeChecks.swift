@@ -8,6 +8,7 @@ enum ThemeChecks {
         checkContrastFloor()
         checkGuide()
         checkFolder()
+        checkOwnership()
         checkAppearance()
         print("Theme checks passed: built-ins round-trip, every refusal on the list, the contrast floor, the guide's example and keys, last good, .error files, live reload, built-in names, appearance")
     }
@@ -184,6 +185,61 @@ enum ThemeChecks {
         store.reload()
         assert(store.themes.count == 3 + ThemeStore.maxThemes, "\(store.themes.count) themes listed")
         assert(store.problems.values.filter { $0.contains("at most \(ThemeStore.maxThemes)") }.count == 1, "the 51st file is reported, not read")
+    }
+
+    /// Pulse removes and replaces only what it wrote (Sol's review of 4f91bdb: an unrelated `.error` file, a `.error`
+    /// folder, and an edited built-in whose backup name was taken were all lost).
+    @MainActor static func checkOwnership() {
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appending(path: "pulse-theme-owned-\(UUID().uuidString)").resolvingSymlinksInPath()
+        defer { try? fm.removeItem(at: folder) }
+        let store = ThemeStore(folder: folder)
+        store.writeExamples()
+        // someone else's .error file and a .error folder: kept through reloads, fixed or not
+        let unrelated = folder.appending(path: "unrelated.error"), notes = folder.appending(path: "notes.error")
+        try! Data("disposable file".utf8).write(to: unrelated)
+        try! fm.createDirectory(at: notes, withIntermediateDirectories: false)
+        try! Data("disposable note".utf8).write(to: notes.appending(path: "note.txt"))
+        // a .error file Pulse didn't write, beside a broken theme: left as it is, the problem still in Settings
+        let theirs = folder.appending(path: "mine.error")
+        try! Data("my own notes about mine.json".utf8).write(to: theirs)
+        try! Data("{}".utf8).write(to: folder.appending(path: "mine.json"))
+        store.reload()
+        store.reload()
+        assert(try! Data(contentsOf: unrelated) == Data("disposable file".utf8), "an unrelated .error file is kept")
+        assert(try! Data(contentsOf: notes.appending(path: "note.txt")) == Data("disposable note".utf8), "a .error folder is kept")
+        assert(try! Data(contentsOf: theirs) == Data("my own notes about mine.json".utf8), "a .error Pulse didn't write isn't overwritten")
+        assert(store.problems["mine"] != nil, "the problem is still shown")
+        try! fm.removeItem(at: folder.appending(path: "mine.json"))
+        store.reload()
+        assert(fm.fileExists(atPath: theirs.path), "nor removed once its theme is gone")
+
+        // an edited built-in whose backup names are all taken: the edit stays, and the reason is shown
+        let groove = folder.appending(path: "groove.json"), edit = Data("the user's original edit".utf8)
+        try! edit.write(to: groove)
+        let now = Date()
+        for offset in -2 ... 10 {
+            let stamp = now.addingTimeInterval(Double(offset)).formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false))
+                .replacingOccurrences(of: ":", with: "")
+            try! Data("an older backup".utf8).write(to: folder.appending(path: "groove.json.replaced-\(stamp)"))
+        }
+        store.writeExamples()
+        assert(try! Data(contentsOf: groove) == edit, "the edit isn't overwritten when it can't be moved aside")
+        store.reload()
+        assert(store.problems["groove"]?.contains("couldn't move your edit aside") == true, "and Settings says why: \(store.problems)")
+        assert(store.theme("groove").set == .groove, "the built-in still draws")
+        // a folder or a link under a built-in's or the guide's name: left alone
+        try! fm.removeItem(at: groove)
+        try! fm.createDirectory(at: groove, withIntermediateDirectories: false)
+        let guide = folder.appending(path: "AGENTS.md"), elsewhere = folder.appending(path: "elsewhere.md")
+        try! fm.removeItem(at: guide)
+        try! Data("not Pulse's".utf8).write(to: elsewhere)
+        try! fm.createSymbolicLink(at: guide, withDestinationURL: elsewhere)
+        store.writeExamples()
+        var isDir: ObjCBool = false
+        assert(fm.fileExists(atPath: groove.path, isDirectory: &isDir) && isDir.boolValue, "a folder named groove.json is left alone")
+        assert(try! fm.destinationOfSymbolicLink(atPath: guide.path) == elsewhere.path && (try! Data(contentsOf: elsewhere)) == Data("not Pulse's".utf8),
+               "a linked AGENTS.md isn't replaced or written through")
     }
 
     @MainActor static func checkAppearance() {
