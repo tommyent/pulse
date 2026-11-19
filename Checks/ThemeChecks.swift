@@ -231,7 +231,12 @@ enum ThemeChecks {
         expectRefused(.classicSolid, "liquidMaterial", "regular", mentioning: ["liquidMaterial", "liquid theme only"])
         expectRefused(liquid, "liquidMaterial", "frosted", mentioning: ["liquidMaterial"])
         liquid.look.halo = [[0, 0, 3, "#000000", 0.6], [0, 0, 10, "#000000", 0.35]]
+        expectRefused(.classicSolid, "backdrop", "desktop", mentioning: ["backdrop", "liquid theme only"])
+        for name in ["../secret.png", "/tmp/a.png", ".hidden.png", "notes.txt", "a:b.png"] {
+            expectRefused(liquid, "backdrop", name, mentioning: ["backdrop", "no path"])
+        }
         liquid.look.wash = "srgb:0.56,0.63,1,0.16"
+        liquid.look.backdrop = "Glass Abstract.png"
         for material in [nil, PulseSkin.LiquidMaterial.clear, .regular, .ultraThin] {
             liquid.look.liquidMaterial = material
             assert(ThemeStore.decode(ThemeStore.file(liquid)) == .success(liquid), "a liquid theme's halo, wash and \(String(describing: material)) round-trip")

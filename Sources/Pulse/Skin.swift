@@ -85,6 +85,13 @@ struct PulseSkin: Codable, Equatable {
     var halo: [SkinShadow]? = nil   // prototype, liquid only: soft shadows behind everything inside the glass (text, rings, icons), in points
     var liquidMaterial: LiquidMaterial? = nil   // prototype, liquid only: nil = clear
     var wash: SkinColor? = nil      // prototype, liquid only: a colour, alpha included, laid on the glass under the content
+    var backdrop: String? = nil     // prototype, liquid only: "desktop", or a picture beside the theme file, drawn under the glass
+
+    /// A backdrop picture's name: a file directly in the Themes folder, never a path.
+    static func isBackdropFileName(_ name: String) -> Bool {
+        name.count <= 80 && !name.hasPrefix(".") && !name.contains("/") && !name.contains(":")
+            && ["png", "jpg", "jpeg", "heic"].contains((name as NSString).pathExtension.lowercased())
+    }
 
     /// What a liquid theme's panels are made of: Liquid Glass .clear or .regular, or the older blur with no bending.
     enum LiquidMaterial: String, Codable { case clear, regular, ultraThin }

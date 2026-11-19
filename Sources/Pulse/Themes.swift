@@ -290,6 +290,7 @@ extension PulseThemeFile {
         sample.look.halo = [[0, 0, 4, "#000000", 0.6]]
         sample.look.liquidMaterial = .ultraThin
         sample.look.wash = "#FFFFFF"
+        sample.look.backdrop = "desktop"
         sample.look.groove?.porthole = PulseSkin.grooveBlack.groove?.porthole
         var keys = Set<[String]>()
         collectKeys(try! JSONSerialization.jsonObject(with: JSONEncoder().encode(sample)), []) { keys.insert($0) }
@@ -419,7 +420,8 @@ extension PulseThemeFile {
         }
         if look.glass != nil, look.groove != nil { out.append("glass: for a flat theme only; a theme with groove draws its own slab") }
         if look.liquid != true {
-            for (key, set) in [("halo", look.halo != nil), ("liquidMaterial", look.liquidMaterial != nil), ("wash", look.wash != nil)] where set {
+            for (key, set) in [("halo", look.halo != nil), ("liquidMaterial", look.liquidMaterial != nil), ("wash", look.wash != nil),
+                                   ("backdrop", look.backdrop != nil)] where set {
                 out.append("\(key): for a liquid theme only")
             }
         }
@@ -446,6 +448,9 @@ extension PulseSkin {
         }
         range("stale", stale, 0 ... 1)
         if let halo { shadows("halo", halo, reach: 8, blur: 16) }
+        if let backdrop, backdrop != "desktop", !PulseSkin.isBackdropFileName(backdrop) {
+            out.append("\(at)backdrop: \"desktop\", or the file name of a picture in the Themes folder (.png, .jpg, .heic; no path)")
+        }
 
         // the contrast floor
         let assumedInk: SkinColor = appearance == .dark ? "#FFFFFF" : "#000000"   // the system's label colour
