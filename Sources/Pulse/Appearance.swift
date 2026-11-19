@@ -163,6 +163,11 @@ extension View {
     }
 }
 
+extension View {
+    /// Prototype: the break screen and its countdown keep no backdrop until the owner has seen them plain (desk-lead, 2026-11-19).
+    func withoutBackdrop() -> some View { transformEnvironment(\.pulseSkin) { $0.backdrop = nil } }
+}
+
 /// Prototype: a liquid theme's `backdrop`, "desktop" (the Mac's desktop picture, blurred) or a picture's file name in
 /// the Themes folder. Read once per file, downsampled, and kept; a picture that can't be read draws nothing.
 @MainActor enum ThemeBackdrop {
