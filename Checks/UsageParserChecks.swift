@@ -82,6 +82,11 @@ enum UsageParserChecks {
         assert(monthly[0].resetsAt == now.addingTimeInterval(3600))
 
         assert(CodexAdapter.windows(from: json(#"{"plan_type":"plus","rate_limit":null}"#)).isEmpty)
-        print("Usage parser checks passed: Claude with and without a session window, Codex's windows whichever way round")
+        // the card's reason without numbers keeps the status: offline, rate limited, a server error
+        assert(ClaudeAdapter.unavailable(0) == "Claude didn't answer: offline or timed out")
+        assert(ClaudeAdapter.unavailable(429).contains("rate limiting") && ClaudeAdapter.unavailable(429).contains("HTTP 429"))
+        assert(ClaudeAdapter.unavailable(503).contains("server had an error (HTTP 503)"))
+        assert(ClaudeAdapter.unavailable(403) == "Claude answered HTTP 403")
+        print("Usage parser checks passed: Claude with and without a session window, Codex's windows whichever way round, Claude's reason without numbers")
     }
 }

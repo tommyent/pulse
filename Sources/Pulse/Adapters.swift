@@ -139,10 +139,10 @@ enum ClaudeAdapter {
                 ClaudeKeychain.shared.forget()   // token rotated or expired: re-read next poll, use the web session now
             } else if status == 0 || status == 429 || status >= 500 {
                 snap.health = .providerError     // offline or throttled: keep last good windows; the web session is not consulted
-                snap.detail = status == 0 ? "Claude unreachable" : "Claude answered HTTP \(status)"
+                snap.detail = unavailable(status)
                 return snap
-            } else if status != 200 {
-                failure = "Claude answered HTTP \(status)"
+            } else {
+                failure = unavailable(status)    // 200 here: an answer without limits Pulse knows
             }
         }
 
@@ -159,6 +159,7 @@ enum ClaudeAdapter {
             snap.source = .officialUsagePage
             snap.windows = windows(from: usage)
             snap.health = snap.windows.isEmpty ? .providerError : .ok
+            if snap.windows.isEmpty { snap.detail = "claude.ai's usage page had no limits Pulse knows" }
             return snap
         }
         // A page that never loaded says nothing about the sign-in, so the last numbers stay.
@@ -170,6 +171,18 @@ enum ClaudeAdapter {
             snap.detail = failure
         }
         return snap
+    }
+
+    /// Why the card has no numbers when Claude's usage endpoint answers without them: in words, with the HTTP status,
+    /// so a rate limit can be told from an outage afterwards. Pulse asks again at its next refresh.
+    static func unavailable(_ status: Int) -> String {
+        switch status {
+        case 0: "Claude didn't answer: offline or timed out"
+        case 200: "Claude's answer had no limits Pulse knows"
+        case 429: "Claude is rate limiting usage checks (HTTP 429); Pulse tries again shortly"
+        case 500...: "Claude's server had an error (HTTP \(status)); Pulse tries again shortly"
+        default: "Claude answered HTTP \(status)"
+        }
     }
 
     /// The profile's own plan name ("Ultra" on 2026-11-03), else the company. Tier IDs are not translated into plan
