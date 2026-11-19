@@ -216,7 +216,6 @@ enum SettingsStateChecks {
     @MainActor private static func checkSettingsPanes() {
         assert(SettingsPane.allCases.map(\.title) == ["General", "Appearance", "Accounts", "Rings", "Battery", "Codex pet", "Agents", "Breaks"])
         for pane in SettingsPane.allCases { assert(NSImage(systemSymbolName: pane.symbol, accessibilityDescription: nil) != nil, "\(pane.symbol) exists") }
-        assert(SettingsPane(named: "Breaks") == .breaks && SettingsPane(named: "Agents") == .agents && SettingsPane(named: "nonsense") == .general)
 
         // captions take the theme's secondary ink: Classic's grey in Classic, as before; dark grey on Groove White
         var env = EnvironmentValues()
@@ -305,6 +304,34 @@ enum SettingsStateChecks {
             assert(layout.sizeThatFits(in: CGSize(width: width, height: room)).height <= room, "\(room) pt of room: \(layout.sizeThatFits(in: CGSize(width: width, height: room)))")
         }
 
+        // results people come back to (a theme import, a test push) outlive the pane they were shown in: the pane is
+        // rebuilt each time it's chosen, so they're kept in SettingsResults, which a rebuilt pane reads
+        let results = SettingsResults.shared
+        final class Panes: ObservableObject { @Published var pane = SettingsPane.appearance }
+        struct Switcher: View {
+            @ObservedObject var panes: Panes
+            let store: ThemeStore
+            var body: some View {
+                SettingsLayout(selection: $panes.pane) {
+                    switch panes.pane {
+                    case .appearance: Form { AppearanceSettings(choice: .constant(ThemeChoice()), themes: store) }
+                    default: Form { BatterySettingsSection(settings: .constant(BatterySettings())) }
+                    }
+                }
+            }
+        }
+        let panes = Panes(), store = ThemeStore(folder: FileManager.default.temporaryDirectory.appending(path: "panes-\(UUID().uuidString)"))
+        let switcher = NSHostingView(rootView: Switcher(panes: panes, store: store))
+        switcher.frame = NSRect(x: 0, y: 0, width: width, height: SettingsPane.height)
+        let switchWindow = NSWindow(contentRect: switcher.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        switchWindow.contentView = switcher
+        func spin() { for _ in 0 ..< 6 { RunLoop.main.run(until: Date().addingTimeInterval(0.03)); switcher.layoutSubtreeIfNeeded() } }
+        spin()
+        results.themeImport = "Imported Ember as ember.json."
+        results.testPush = "Sent"
+        for pane in [SettingsPane.battery, .appearance, .battery, .appearance] { panes.pane = pane; spin() }
+        assert(results.themeImport == "Imported Ember as ember.json." && results.testPush == "Sent", "results survive pane switches")
+        switchWindow.close()
     }
 
     /// Skins are plain values with fixed keys, so a skin can later come from a JSON file; the setting picks one by name.

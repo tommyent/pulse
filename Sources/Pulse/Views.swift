@@ -1311,12 +1311,21 @@ private struct SettingsWindowReader: NSViewRepresentable {
     func updateNSView(_ view: Reader, context: Context) {}
 }
 
+/// What Settings just did that people come back to read (a theme or sound import, a test push): kept here rather than
+/// in a pane, since a pane is built afresh each time it's chosen in the sidebar.
+@MainActor final class SettingsResults: ObservableObject {
+    static let shared = SettingsResults()
+    @Published var themeImport: String?
+    @Published var soundImport = ""
+    @Published var testPush = ""
+}
+
 /// Settings › Appearance: when Pulse is light or dark, a theme for each, and the theme files (Import…, Export…, a file
 /// dropped here, and what's wrong with any that can't be used).
 struct AppearanceSettings: View {
     @Binding var choice: ThemeChoice
     @ObservedObject var themes: ThemeStore
-    @State private var message: String?
+    @ObservedObject private var results = SettingsResults.shared
 
     var body: some View {
         Section {
@@ -1346,7 +1355,7 @@ struct AppearanceSettings: View {
                 }
             } label: {
                 Text("Theme files")
-                if let message { Text(message) }
+                if let message = results.themeImport { Text(message) }
                 let ids = themes.problems.keys.sorted()
                 ForEach(ids.prefix(5), id: \.self) { id in
                     let first = themes.problems[id]?.split(separator: "\n").first.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "- ")) } ?? ""
@@ -1362,13 +1371,13 @@ struct AppearanceSettings: View {
                 }
                 if hard.count > max(0, 5 - ids.count) { Text("⚠︎ and \(hard.count - max(0, 5 - ids.count)) more themes that are hard to read in places").foregroundStyle(alert) }
                 if let notice = themes.notice { Text("⚠︎ \(notice)").foregroundStyle(alert) }
-                if themes.problems.isEmpty, themes.warnings.isEmpty, themes.notice == nil, message == nil {
+                if themes.problems.isEmpty, themes.warnings.isEmpty, themes.notice == nil, results.themeImport == nil {
                     Text("One JSON file per theme: import one or drop it here. \(ThemeStore.guideName) in the folder describes the format")
                 }
             }
         }
         .dropDestination(for: URL.self) { urls, _ in
-            for url in urls { themes.importTheme(url) { message = $0 } }
+            for url in urls { themes.importTheme(url) { results.themeImport = $0 } }
             return !urls.isEmpty
         }
     }
@@ -1397,7 +1406,7 @@ struct AppearanceSettings: View {
         panel.message = "Choose theme files to copy into Pulse's Themes folder"
         panel.begin { response in
             guard response == .OK else { return }
-            MainActor.assumeIsolated { for url in panel.urls { themes.importTheme(url) { message = $0 } } }
+            MainActor.assumeIsolated { for url in panel.urls { themes.importTheme(url) { results.themeImport = $0 } } }
         }
     }
 
@@ -1414,7 +1423,7 @@ struct AppearanceSettings: View {
                 do { try data.write(to: url, options: .atomic); result = "Exported \(name) to \(url.lastPathComponent)." } catch {
                     result = "\(name) wasn't exported: \(error.localizedDescription)"
                 }
-                DispatchQueue.main.async { message = result }
+                DispatchQueue.main.async { results.themeImport = result }
             }
         }
     }
@@ -1619,9 +1628,6 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         }
     }
 
-    /// The pane a name opens; an unknown name is General.
-    init(named name: String) { self = Self(rawValue: name) ?? .general }
-
     static let sidebarWidth: CGFloat = 190
     static let paneWidth: CGFloat = 460
     /// The window's height: the tallest pane's (Agents) as it was in its tab, so none is cut off. It's the preferred
@@ -1637,7 +1643,8 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 /// Settings' sidebar: every pane, ↑ and ↓ to move, the theme's window behind it. Drawn here rather than by a List,
 /// whose selection takes the application's appearance, not the window's: in Groove White it was a black bar over
 /// black text while Settings wasn't key. The chosen row is the accent colour, its label black or white, whichever
-/// reads better on that accent (white on the default blue is only 3.8:1).
+/// reads better on that accent (white on the default blue is only 3.8:1); with the keyboard in the list, a ring
+/// marks it.
 struct SettingsSidebar: View {
     @Binding var selection: SettingsPane
     var accent: Color = .accentColor   // the chosen row's fill; the checks pin one
@@ -1659,6 +1666,12 @@ struct SettingsSidebar: View {
                         .padding(.vertical, 6)
                         .foregroundStyle(chosen ? AnyShapeStyle(Self.ink(on: fill)) : AnyShapeStyle(.primary))
                         .background(chosen ? accent : .clear, in: RoundedRectangle(cornerRadius: 6))
+                        .overlay {
+                            if chosen, focused {
+                                RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 3)
+                                    .padding(-3)
+                            }
+                        }
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -1671,7 +1684,7 @@ struct SettingsSidebar: View {
         .frame(width: SettingsPane.sidebarWidth)
         .focusable()
         .focused($focused)
-        .focusEffectDisabled()
+        .focusEffectDisabled()   // the ring above marks it, around the chosen row
         .onKeyPress(.upArrow) { selection = selection.moved(by: -1); return .handled }
         .onKeyPress(.downArrow) { selection = selection.moved(by: 1); return .handled }
         .onAppear { focused = true }
@@ -1699,9 +1712,8 @@ struct BatterySettingsSection: View {
     @Binding var settings: BatterySettings
     @ObservedObject private var battery = BatteryMonitor.shared
     @State private var sounds: [String] = []
-    @State private var importNote = ""
+    @ObservedObject private var results = SettingsResults.shared
     @State private var pushoverReady = false
-    @State private var pushNote = ""
 
     var body: some View {
         if battery.reading == nil {
@@ -1741,11 +1753,11 @@ struct BatterySettingsSection: View {
                 guard panel.runModal() == .OK else { return }
                 let rejected = BatterySounds.importFiles(panel.urls)
                 sounds = BatterySounds.all().map(\.name)
-                importNote = rejected.isEmpty ? "" : "Couldn't import \(rejected.joined(separator: ", "))"
+                results.soundImport = rejected.isEmpty ? "" : "Couldn't import \(rejected.joined(separator: ", "))"
             }
         } label: {
             Text("Your own sounds")
-            Text(importNote.isEmpty ? "Any audio file macOS plays. Copied into Pulse's folder." : importNote)
+            Text(results.soundImport.isEmpty ? "Any audio file macOS plays. Copied into Pulse's folder." : results.soundImport)
         }
         Toggle(isOn: Binding(get: { pushoverReady && b.pushover }, set: { settings.pushover = $0 })) {
             Text("Push to your phone when critical")
@@ -1755,10 +1767,10 @@ struct BatterySettingsSection: View {
         .accessibilityLabel("Push to your phone when critical")
         .disabled(!pushoverReady)
         if pushoverReady {
-            LabeledContent(pushNote) {
+            LabeledContent(results.testPush) {
                 Button("Send Test Push") {
-                    pushNote = "Sending…"
-                    Task { pushNote = await BatteryAlerts.push(title: "Pulse test", message: "Battery alerts will reach you here.") ?? "Sent" }
+                    results.testPush = "Sending…"
+                    Task { results.testPush = await BatteryAlerts.push(title: "Pulse test", message: "Battery alerts will reach you here.") ?? "Sent" }
                 }
             }
         }
