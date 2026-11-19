@@ -8,7 +8,7 @@ enum ThemeGuide {
 
 This folder holds Pulse's themes, one JSON file per theme. Pulse reads every
 `*.json` here, lists the good ones in Settings › General › Skin, and reads a
-file again within a second of it changing: the theme in use redraws without a
+file again within about a second, after edits to it stop: the theme in use redraws without a
 relaunch. A theme is data only: colours, sizes and shadows. No code, no
 images, no network.
 
@@ -19,13 +19,16 @@ write a file here. Start from the closest example and change values.
 
 | File | What it is |
 |---|---|
-| `classic.json`, `groove.json`, `groove-black.json` | Pulse's own themes, as examples to copy. They are built into Pulse and always there; these copies are rewritten at each launch, and edits to them never apply (an edited copy is kept beside it as `<name>.json.replaced-<time>`). Copy one under a new name to make your own. |
+| `classic.json`, `groove.json`, `groove-black.json` | Pulse's own themes, as examples to copy. They are built into Pulse and always there; these copies are rewritten at each launch, and edits to them never apply (an edited copy is first moved beside it as `<name>.json.replaced-<time>`; if it can't be moved, it stays as it is and its `.error` says why). Copy one under a new name to make your own. |
 | `<name>.json` | a theme. `<name>` is its id: what Pulse saves as the chosen theme. Rename the file and it is a different theme. |
 | `<name>.error` | written by Pulse when `<name>.json` can't be used: every problem, with the key it is in. Removed once the file is fixed or gone. **Check for it after every edit.** |
 | `AGENTS.md` | this guide |
 
-Limits: a file is at most 64 KB, and Pulse reads at most 50 theme files
-(in order of name).
+Limits: a theme is a regular file (a link, a pipe or a folder is refused) of
+at most 64 KB. Pulse reads at most 50 theme files, in order of name; one past
+that isn't read, draws Classic if chosen, and Settings says so once for them
+all. Pulse writes at most 10 `.error` files at a time, and never touches a
+`.error` entry it didn't write.
 
 **A file that fails any check never draws.** Pulse keeps showing the last
 good version of that theme from this run (or Classic, if it had none) and
@@ -74,7 +77,7 @@ are refused, so a typo can't pass silently.
 | `accents.antigravity2` | colour | an account's later pool of models (Antigravity's Claude and GPT) |
 | `accents.battery` | colour, optional | the battery ring at a normal charge; left out: the system's green. Low and critical stay the system's yellow and red |
 | `accents.breakBar` | colour, optional | the break countdown's ring, for the default break colour |
-| `surface` | colour | a flat theme's rail, cards and popover when Settings › General › Appearance is Solid (Glass is the system's); for a Groove theme, the slab's colour |
+| `surface` | colour | a flat theme's rail, cards and popover when Settings › General › Appearance is Solid (Glass is the system's); unused by a Groove theme, whose panels draw `groove.slab` (set it to the slab's colour) |
 | `track` | colour | a flat theme's empty ring track |
 | `ink.primary` | colour, optional | numbers and titles; left out: the system's label colour |
 | `ink.secondary` | colour | captions |
@@ -104,8 +107,8 @@ hub with the logo standing on it; text embossed and icons raised.
 | `tubeInner` | shadow | ring units | an inner shadow on the colour |
 | `wall` | shadow, optional | ring units | the channel wall's shadow across the colour; left out or `null`: none |
 | `dome` | shadow list | ring units | inner shadows of the hub |
-| `bubbleDrop` | shadow | ring units, offset and blur to 4 | an agent's disc's shadow |
-| `bubbleInner` | shadow list | ring units | an agent's disc's inner shadows |
+| `bubbleDrop` | shadow | points, offset and blur to 4 | an agent's disc's shadow |
+| `bubbleInner` | shadow list | points | an agent's disc's inner shadows |
 | `logoDrop` | shadow list | ring units, offset and blur to 8 | the logo standing on the hub |
 | `logoInner` | shadow list | ring units | the logo's lit and shaded edges |
 | `onFace` | colour | | marks on a hub (Grok's logo, symbols, a ring's text) |

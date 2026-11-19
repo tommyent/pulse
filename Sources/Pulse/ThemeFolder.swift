@@ -126,7 +126,7 @@ enum ThemeFolder {
         var scan = Scan()
         let listing = names(folder)
         let files = listing.names.filter { $0.hasSuffix(".json") }.map { String($0.dropLast(5)) }.sorted()
-        var read = 0, skipped: [String] = []
+        var readIDs: Set<String> = [], skipped: [String] = []
         for id in files {
             let url = folder.appending(path: "\(id).json")
             if let builtIn = PulseSkinSet.builtIn.first(where: { $0.id == id }) {
@@ -136,8 +136,8 @@ enum ThemeFolder {
                 }
                 continue
             }
-            guard read < ThemeStore.maxThemes else { skipped.append(id); continue }
-            read += 1
+            guard readIDs.count < ThemeStore.maxThemes else { skipped.append(id); continue }
+            readIDs.insert(id)
             switch load(url) {
             case .success(let set):
                 cache.lastGood[id] = set
@@ -147,12 +147,13 @@ enum ThemeFolder {
                 if let good = cache.lastGood[id] { scan.found.append(PulseTheme(id: id, set: good)) }
             }
         }
-        for id in cache.lastGood.keys where !files.contains(id) { cache.lastGood[id] = nil }
+        // the cache holds files read in this pass only: at most `maxThemes`, and a file past the cap is not drawn from it
+        cache.lastGood = cache.lastGood.filter { readIDs.contains($0.key) }
         var notes: [String] = []
         if listing.more { notes.append("The Themes folder has more than \(maxEntries) entries; Pulse looked at the first \(maxEntries) it was given.") }
         if !skipped.isEmpty {
             let named = skipped.prefix(3).map { "\($0).json" }.joined(separator: ", ")
-            notes.append("Pulse reads at most \(ThemeStore.maxThemes) theme files, in order of name; \(skipped.count) more aren't read (\(named)\(skipped.count > 3 ? ", …" : "")).")
+            notes.append("Pulse reads at most \(ThemeStore.maxThemes) theme files, in order of name; \(skipped.count) more aren't read (\(named)\(skipped.count > 3 ? ", …" : "")), and one of those chosen in Settings draws Classic.")
         }
         scan.notice = notes.isEmpty ? nil : notes.joined(separator: " ")
 

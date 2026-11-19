@@ -33,7 +33,7 @@ struct PulseTheme: Equatable, Identifiable {
     private let cache = ThemeFolder.Cache()   // touched on `io` only
     private var asked = 0
     private(set) var finished = 0             // the last folder job whose results are published
-    private var stream: FSEventStreamRef?
+    nonisolated(unsafe) private var stream: FSEventStreamRef?   // main actor only; read by deinit, when nothing else can
     private var pending: DispatchWorkItem?
 
     init(folder: URL) { self.folder = folder }
@@ -129,18 +129,53 @@ struct PulseTheme: Equatable, Identifiable {
     }
 
     /// FSEvents on the folder: the system tells Pulse when something in it changes, and nothing runs in between.
-    func watch() {
-        guard stream == nil else { return }
-        var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(), retain: nil, release: nil, copyDescription: nil)
+    /// The stream holds this box, not the store: a callback after the store is gone finds nothing to call.
+    private final class WatchBox {
+        weak var store: ThemeStore?
+        init(_ store: ThemeStore) { self.store = store }
+    }
+
+    /// Whether the folder is watched: false if the stream couldn't be made or started (Pulse then reads it at launch only).
+    @discardableResult func watch() -> Bool {
+        guard stream == nil else { return true }
+        let box = Unmanaged.passRetained(WatchBox(self))
+        defer { box.release() }   // the stream keeps its own reference through `retain`
+        var context = FSEventStreamContext(version: 0, info: box.toOpaque(),
+                                           retain: { info in UnsafeRawPointer(Unmanaged<WatchBox>.fromOpaque(info!).retain().toOpaque()) },
+                                           release: { info in Unmanaged<WatchBox>.fromOpaque(info!).release() },
+                                           copyDescription: nil)
         let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
-            let store = Unmanaged<ThemeStore>.fromOpaque(info!).takeUnretainedValue()
-            MainActor.assumeIsolated { store.scheduleReload() }
+            let box = Unmanaged<WatchBox>.fromOpaque(info!).takeUnretainedValue()
+            MainActor.assumeIsolated { box.store?.scheduleReload() }
         }
         guard let s = FSEventStreamCreate(nil, callback, &context, [folder.path] as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-                                          0.2, FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents)) else { return }
+                                          0.2, FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents)) else { return false }
         FSEventStreamSetDispatchQueue(s, .main)
-        FSEventStreamStart(s)
+        guard FSEventStreamStart(s) else {
+            FSEventStreamInvalidate(s)
+            FSEventStreamRelease(s)
+            return false
+        }
         stream = s
+        return true
+    }
+
+    /// The stream stopped, invalidated and released together, and any reload still waiting cancelled.
+    func stopWatching() {
+        pending?.cancel()
+        pending = nil
+        guard let s = stream else { return }
+        stream = nil
+        FSEventStreamStop(s)
+        FSEventStreamInvalidate(s)
+        FSEventStreamRelease(s)
+    }
+
+    deinit {
+        guard let s = stream else { return }
+        FSEventStreamStop(s)
+        FSEventStreamInvalidate(s)
+        FSEventStreamRelease(s)
     }
 
     // MARK: one file
@@ -166,30 +201,33 @@ struct PulseTheme: Equatable, Identifiable {
         }
     }
 
-    /// Every key the format has, from the built-ins with each optional value filled (Groove Black's porthole in
-    /// Groove's light half): the dark and light halves share one list.
-    nonisolated static let knownKeys: Set<String> = {
+    /// Every key path the format has, as components, from the built-ins with each optional value filled (Groove
+    /// Black's porthole in Groove's light half): the dark and light halves share one list.
+    nonisolated static let knownKeys: Set<[String]> = {
         var sample = PulseSkinSet.groove
         sample.light?.groove?.porthole = PulseSkin.grooveBlack.groove?.porthole
-        var keys = Set<String>()
-        collectKeys(try! JSONSerialization.jsonObject(with: JSONEncoder().encode(sample)), "", into: &keys)
+        var keys = Set<[String]>()
+        collectKeys(try! JSONSerialization.jsonObject(with: JSONEncoder().encode(sample)), []) { keys.insert($1) }
         return keys
     }()
 
-    nonisolated private static func collectKeys(_ object: Any, _ path: String, into keys: inout Set<String>, found: ((String, String) -> Void)? = nil) {
+    /// Each key in a JSON object, as written and with a top-level "light" read as "dark". Components, never a joined
+    /// string, so a key with dots in it can't pass for a nested one.
+    nonisolated private static func collectKeys(_ object: Any, _ path: [String], _ found: ([String], [String]) -> Void) {
         guard let dict = object as? [String: Any] else { return }
         for (key, value) in dict {
-            let shown = path.isEmpty ? key : "\(path).\(key)"
-            let general = path.isEmpty && key == "light" ? "dark" : shown.replacingOccurrences(of: "light.", with: "dark.", options: .anchored)
-            keys.insert(general)
-            found?(shown, general)
-            collectKeys(value, shown, into: &keys, found: found)
+            let shown = path + [key]
+            let general = shown.first == "light" ? ["dark"] + shown.dropFirst() : shown
+            found(shown, general)
+            collectKeys(value, shown, found)
         }
     }
 
     nonisolated private static func unknownKeys(_ raw: Any) -> [String] {
-        var unknown: [String] = [], seen = Set<String>()
-        collectKeys(raw, "", into: &seen) { shown, general in if !knownKeys.contains(general) { unknown.append(shown) } }
+        var unknown: [String] = []
+        collectKeys(raw, []) { shown, general in
+            if !knownKeys.contains(general) { unknown.append(shown.map { $0.contains(".") ? "\"\($0)\"" : $0 }.joined(separator: ".")) }
+        }
         return unknown.sorted()
     }
 

@@ -12,8 +12,9 @@ enum ThemeChecks {
         checkOwnership()
         checkBounded()
         checkLightHalfLive()
+        checkCapAndWatch()
         checkAppearance()
-        print("Theme checks passed: built-ins round-trip, every refusal on the list, the contrast floor, the guide's example and keys, last good, .error files, live reload, built-in names, appearance")
+        print("Theme checks passed: built-ins round-trip, every refusal on the list, the contrast floor on gradients and the counter, the guide's example and keys, last good, .error files, live reload, built-in names, only Pulse's files touched, bounded reads off the main thread, a light half added and removed live with the app staying dark, the cap and the cache, the watch's teardown, appearance")
     }
 
     // MARK: helpers
@@ -100,6 +101,10 @@ enum ThemeChecks {
         // the format itself
         expectRefused(.groove, "dark.groove.slabtop", "#000000", mentioning: ["dark.groove.slabtop", "not a key"])
         expectRefused(.groove, "light.groove.flor", "#000000", mentioning: ["light.groove.flor", "not a key"])
+        // a root key with dots in it isn't the nested key it spells (Sol's review of 4f91bdb)
+        var dotted = try! JSONSerialization.jsonObject(with: ThemeStore.file(.classic)) as! [String: Any]
+        dotted["dark.ink.primary"] = "an unknown root key that flattens to a known path"
+        assert(refusal(try! JSONSerialization.data(withJSONObject: dotted), "a dotted root key").contains("\"dark.ink.primary\": not a key"))
         expectRefused(.groove, "dark.groove.floor", nil, mentioning: ["dark.groove.floor", "missing"])
         expectRefused(.groove, "dark.stale", "half", mentioning: ["dark.stale", "a number"])
         expectRefused(.groove, "name", "  ", mentioning: ["name"])
@@ -150,7 +155,7 @@ enum ThemeChecks {
         guard case .success(let ember) = ThemeStore.decode(guideExample) else { fatalError("the guide's example is refused: \(refusal(guideExample, "guide"))") }
         assert(ember.name == "Ember" && ember.dark.groove == nil && ember.light == nil)
         for key in ThemeStore.knownKeys {
-            let last = key.split(separator: ".").last!
+            let last = key.last!
             assert(ThemeGuide.text.contains(last), "the guide describes \(key)")
         }
     }
@@ -167,7 +172,8 @@ enum ThemeChecks {
         assert(store.themes.map(\.id) == ["classic", "groove", "groove-black"] && store.problems.isEmpty, "the examples are the built-ins: \(store.problems)")
 
         let ember = folder.appending(path: "ember.json"), error = folder.appending(path: "ember.error")
-        store.watch()
+        assert(store.watch())
+        defer { store.stopWatching() }
         // live reload: a new file, then an edit, picked up without a call
         try! guideExample.write(to: ember)
         assert(waitUntil { store.theme("ember").id == "ember" }, "a new theme file is listed by itself")
@@ -340,6 +346,35 @@ enum ThemeChecks {
             assert(step.app == .darkAqua, "the application stays dark; only Pulse's themed windows follow the theme: \(steps)")
         }
         assert(store.skin("selected") == .classic)
+    }
+
+    /// A good theme pushed past the cap draws Classic and the notice says so, with no `.error` of its own; the cache
+    /// holds only files read in the pass. The watch starts, stops, and outlives its store without reaching it.
+    @MainActor static func checkCapAndWatch() {
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appending(path: "pulse-theme-cap-\(UUID().uuidString)").resolvingSymlinksInPath()
+        defer { try? fm.removeItem(at: folder) }
+        try! fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        let cache = ThemeFolder.Cache()
+        try! ThemeStore.file(.groove).write(to: folder.appending(path: "zzz.json"))
+        assert(ThemeFolder.scan(folder, cache: cache).found.map(\.id) == ["zzz"])
+        for i in 0 ..< ThemeStore.maxThemes { try! ThemeStore.file(.classic).write(to: folder.appending(path: String(format: "a-%03d.json", i))) }
+        let scan = ThemeFolder.scan(folder, cache: cache)
+        assert(!scan.found.contains { $0.id == "zzz" } && scan.issues["zzz"] == nil, "a file past the cap isn't drawn from the cache")
+        assert(scan.notice?.contains("zzz.json") == true && scan.notice?.contains("draws Classic") == true, String(describing: scan.notice))
+        assert(cache.lastGood.count == ThemeStore.maxThemes && cache.lastGood["zzz"] == nil, "the cache holds what was read: \(cache.lastGood.count)")
+        assert(!fm.fileExists(atPath: folder.appending(path: "zzz.error").path))
+
+        // the watch: started, then stopped; and a watched store let go of while the folder keeps changing
+        let store = ThemeStore(folder: folder)
+        assert(store.watch(), "the FSEvents stream starts")
+        store.stopWatching()
+        do {
+            let gone = ThemeStore(folder: folder)
+            assert(gone.watch())
+        }
+        for i in 0 ..< 5 { try! ThemeStore.file(.classic).write(to: folder.appending(path: "late-\(i).json")) }
+        RunLoop.main.run(until: Date().addingTimeInterval(1.5))   // events for a released store: nothing to call, no crash
     }
 
     @MainActor static func checkAppearance() {
