@@ -134,12 +134,16 @@ one, and a porthole around the outer channel.
 Pulse refuses a theme that would be hard to read, with the thresholds Fable's
 Groove designs were measured against (WCAG contrast ratios):
 
-- **Text, 4.5:1**, on `groove.slab` (a flat theme: on `surface`):
+- **Text, 4.5:1**, on every colour of the slab's gradient: `groove.slab`,
+  `groove.slabTop` and `groove.slabBottom` (a flat theme: on `surface`):
   `ink.primary` (the system's white in dark or black in light when left out),
   `ink.secondary`, `ink.alert`, and `ink.primary` at the `stale` opacity.
+- **The agents' counter ("+3"), 4.5:1**: `groove.bubbleInk` on
+  `groove.bubble`, or Pulse's defaults for whichever is left out.
 - **A ring's or a bar's colour, 3:1**: every colour in `accents`, on
   `groove.floor` and on `groove.barFloor` (a flat theme: on `surface`).
-- **Marks on a hub, 3:1**: `groove.onFace` on `groove.face`.
+- **Marks on a hub, 3:1**: `groove.onFace` on `groove.face`,
+  `groove.faceTop` and `groove.faceBottom`.
 
 These colours must be opaque. Not held to the floor, as in Pulse's own
 themes: the providers' logos (brand marks), an empty channel against the slab

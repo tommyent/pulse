@@ -255,14 +255,17 @@ extension PulseSkin {
                 out.append("\(at).\(path) \(c.hex) on \(at).\(groundPath) \(ground.hex): \(r.formatted(.number.precision(.fractionLength(2)))):1, \(what) needs \(needed.formatted()):1")
             }
         }
-        let ground = groove.map { ("groove.slab", $0.slab) } ?? ("surface", surface)
-        for (path, c) in [("ink.primary", ink.primary), ("ink.secondary", ink.secondary), ("ink.alert", ink.alert)] {
-            if let c { floor(path, c, on: ground.0, ground.1, 4.5, "text") }
-        }
-        if primaryInk.alpha == 1, ground.1.alpha == 1 {   // a number from an earlier refresh, drawn at `stale`
-            let faded = primaryInk.over(ground.1, opacity: stale)
-            let r = faded.contrast(with: ground.1)
-            if r < 4.5 { out.append("\(at).stale: ink at \(stale.formatted()) on \(at).\(ground.0) is \(r.formatted(.number.precision(.fractionLength(2)))):1, text needs 4.5:1") }
+        // text lies anywhere on the slab, so on every colour of its gradient: its middle and both ends
+        let grounds = groove.map { [("groove.slab", $0.slab), ("groove.slabTop", $0.slabTop), ("groove.slabBottom", $0.slabBottom)] }
+            ?? [("surface", surface)]
+        for (groundPath, ground) in grounds {
+            for (path, c) in [("ink.primary", ink.primary), ("ink.secondary", ink.secondary), ("ink.alert", ink.alert)] {
+                if let c { floor(path, c, on: groundPath, ground, 4.5, "text") }
+            }
+            if primaryInk.alpha == 1, ground.alpha == 1 {   // a number from an earlier refresh, drawn at `stale`
+                let r = primaryInk.over(ground, opacity: stale).contrast(with: ground)
+                if r < 4.5 { out.append("\(at).stale: ink at \(stale.formatted()) on \(at).\(groundPath) is \(r.formatted(.number.precision(.fractionLength(2)))):1, text needs 4.5:1") }
+            }
         }
         let colours: [(String, SkinColor?)] = [("claude", accents.claude), ("codex", accents.codex), ("grok", accents.grok),
                                                ("antigravity", accents.antigravity), ("antigravity2", accents.antigravity2),
@@ -274,7 +277,14 @@ extension PulseSkin {
         }
 
         guard let g = groove else { return out }
-        floor("groove.onFace", g.onFace, on: "groove.face", g.face, 3, "a mark on the hub")
+        for (path, face) in [("groove.face", g.face), ("groove.faceTop", g.faceTop), ("groove.faceBottom", g.faceBottom)] {
+            floor("groove.onFace", g.onFace, on: path, face, 3, "a mark on the hub")
+        }
+        // the agents ring's "+3", on its own disc; left out, the two are Pulse's light grey on the face lifted 9% toward
+        // white (blended here in sRGB, close to the perceptual mix that draws it)
+        let disc = g.bubble ?? (g.face.alpha == 1 ? (try! SkinColor("#FFFFFF")).over(g.face, opacity: 0.09) : g.face)
+        floor(g.bubbleInk == nil ? "groove.bubbleInk (left out: light grey)" : "groove.bubbleInk", g.bubbleInk ?? "srgb:0.87,0.87,0.87",
+              on: g.bubble == nil ? "groove.bubble (left out: the face lifted)" : "groove.bubble", disc, 4.5, "text")
 
         // sizes and the rings' geometry, in ring units: 100 is the ring's size, and it draws in a box of 120
         range("groove.grain", g.grain, 0 ... 1)

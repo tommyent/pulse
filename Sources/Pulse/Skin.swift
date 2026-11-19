@@ -221,8 +221,9 @@ struct PulseSkin: Codable, Equatable {
 }
 
 extension PulseSkin.Ink {
-    /// Fable's ink for a light slab.
-    static let light = PulseSkin.Ink(primary: "#1A1B1E", secondary: "#3C3F45", alert: "#BF2318")
+    /// Fable's ink for a light slab. The alert red is Fable's #BF2318 darkened (same hue) to #B12116, which reads at
+    /// 4.75:1 on the slab's darker end, where #BF2318 gave 4.24.
+    static let light = PulseSkin.Ink(primary: "#1A1B1E", secondary: "#3C3F45", alert: "#B12116")
 }
 
 /// A colour as a string: hex ("#RRGGBB", "#RRGGBBAA"), or exact components from 0 to 1 ("r,g,b" or "r,g,b,a"). Either

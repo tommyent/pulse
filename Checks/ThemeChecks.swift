@@ -123,6 +123,23 @@ enum ThemeChecks {
         expectRefused(.groove, "dark.accents.codex", "#2A3A66", mentioning: ["dark.accents.codex", "dark.groove.barFloor"])
         expectRefused(.groove, "dark.groove.onFace", "#2B2D32", mentioning: ["dark.groove.onFace", "a mark on the hub"])
         expectRefused(.groove, "dark.ink.secondary", "#E6E6E640", mentioning: ["must be opaque"])
+        // Sol's two 1:1 cases on 4f91bdb: text on both ends of the slab's gradient, and the agents' "+3" on its disc
+        var ends = PulseSkinSet.groove
+        let ink = ends.dark.ink.primary!
+        ends.dark.groove!.slabTop = ink
+        ends.dark.groove!.slabBottom = ink
+        let endsText = refusal(ThemeStore.file(ends), "ink on both gradient ends")
+        assert(endsText.contains("dark.groove.slabTop") && endsText.contains("dark.groove.slabBottom") && endsText.contains("1.00:1"), endsText)
+        var counter = PulseSkinSet.groove
+        counter.dark.groove!.bubble = "#000000"
+        counter.dark.groove!.bubbleInk = "#000000"
+        let counterText = refusal(ThemeStore.file(counter), "the counter on its disc")
+        assert(counterText.contains("dark.groove.bubbleInk #000000 on dark.groove.bubble #000000: 1.00:1"), counterText)
+        // the hub's gradient, and the counter's defaults on a face they can't be read on
+        expectRefused(.groove, "dark.groove.faceTop", "#F5F5F7", mentioning: ["dark.groove.onFace", "dark.groove.faceTop"])
+        expectRefused(.groove, "dark.groove.face", "#DEDEDE", mentioning: ["groove.bubbleInk (left out: light grey)"])
+        // Fable's #BF2318 alert reads 4.24:1 on White's darker slab end; White's is deepened to pass
+        expectRefused(.groove, "light.ink.alert", "#BF2318", mentioning: ["light.ink.alert", "light.groove.slabBottom"])
         // a flat theme is held to its surface
         expectRefused(.classic, "dark.accents.codex", "#202060", mentioning: ["dark.accents.codex", "dark.surface"])
     }
