@@ -63,27 +63,43 @@ enum ThemeFolder {
         return lstat(url.path, &info) == 0 ? info.st_mode & S_IFMT : nil
     }
 
-    /// Up to `max` names in the folder (hidden ones left out), and whether there were more.
+    /// The names among the folder's first `max` entries, hidden ones read but left out, and whether there were more.
     static func names(_ folder: URL, max: Int = maxEntries) -> (names: [String], more: Bool) {
         guard let dir = opendir(folder.path) else { return ([], false) }
         defer { closedir(dir) }
-        var out: [String] = []
+        var out: [String] = [], seen = 0
         while let entry = readdir(dir) {
+            seen += 1   // every entry counts, hidden ones too
+            if seen > max { return (out, true) }
             let name = withUnsafeBytes(of: entry.pointee.d_name) { String(decoding: $0.prefix(Int(entry.pointee.d_namlen)), as: UTF8.self) }
-            if name.hasPrefix(".") { continue }
-            if out.count == max { return (out, true) }
-            out.append(name)
+            if !name.hasPrefix(".") { out.append(name) }
         }
         return (out, false)
     }
 
-    /// The first line of every `.error` Pulse writes; a `.error` file without it isn't Pulse's.
+    /// The first line of every `.error` Pulse writes (for people; ownership is the mark below).
     static func errorHeader(_ id: String) -> String { "\(id).json can't be used" }
 
-    /// An `<id>.error` Pulse wrote: a regular file starting with Pulse's first line for that id.
-    static func isOurError(_ url: URL, id: String) -> Bool {
-        guard case .data(let data) = read(url, limit: 16 * 1024) else { return false }
-        return String(decoding: data.prefix(400), as: UTF8.self).hasPrefix(errorHeader(id))
+    /// The extended attribute Pulse sets on each `.error` file it writes: what makes one Pulse's, whatever it says.
+    static let diagnosticMark = "io.github.tommyent.pulse.diagnostic"
+    static let maxDiagnosticBytes = 8 * 1024
+
+    /// A `.error` Pulse wrote: a regular file (not a link to one) carrying Pulse's mark.
+    static func isOurError(_ url: URL) -> Bool {
+        kind(url) == S_IFREG && getxattr(url.path, diagnosticMark, nil, 0, 0, XATTR_NOFOLLOW) >= 0
+    }
+
+    /// A diagnostic, marked as Pulse's before it takes its name: written beside it, marked, then renamed into place.
+    /// With no file there the rename is exclusive, so a file someone makes meanwhile is never replaced; an existing
+    /// one is replaced only if it's Pulse's.
+    static func writeDiagnostic(_ data: Data, to url: URL) {
+        let exists = kind(url) != nil
+        guard !exists || isOurError(url) else { return }
+        let temp = url.deletingLastPathComponent().appending(path: ".\(url.lastPathComponent).\(UUID().uuidString)")
+        guard (try? data.prefix(maxDiagnosticBytes).write(to: temp, options: .withoutOverwriting)) != nil else { return }
+        let placed = setxattr(temp.path, diagnosticMark, "1", 1, 0, XATTR_NOFOLLOW) == 0
+            && (exists ? rename(temp.path, url.path) : renamex_np(temp.path, url.path, UInt32(RENAME_EXCL))) == 0
+        if !placed { unlink(temp.path) }
     }
 
     /// A file of Pulse's that differs from `content` (missing counts as different).
@@ -157,11 +173,12 @@ enum ThemeFolder {
         }
         scan.notice = notes.isEmpty ? nil : notes.joined(separator: " ")
 
-        // .error files: Pulse's own only. Removed where nothing is wrong (a fixed or removed file); written for the
-        // first `maxProblems` problems. Any other `.error` entry (someone's file, a folder, a link) is never touched.
+        // .error files: Pulse's own only (its mark, not what they say). Removed where nothing is wrong (a fixed or removed
+        // file); written for the first `maxProblems` problems. Any other `.error` entry (someone's file, a folder, a
+        // link, a note that happens to read like Pulse's) is never touched.
         for name in listing.names where name.hasSuffix(".error") {
             let id = String(name.dropLast(6)), url = folder.appending(path: name)
-            if scan.issues[id] == nil, isOurError(url, id: id) { try? fm.removeItem(at: url) }
+            if scan.issues[id] == nil, isOurError(url) { try? fm.removeItem(at: url) }
         }
         let builtIns = Set(PulseThemeFile.builtIn.map(\.id))
         for id in scan.issues.keys.sorted(by: { (builtIns.contains($0) ? 0 : 1, $0) < (builtIns.contains($1) ? 0 : 1, $1) }).prefix(maxProblems) {
@@ -169,8 +186,8 @@ enum ThemeFolder {
             let builtIn = PulseThemeFile.builtIn.first { $0.id == id }?.file.name
             let shown = builtIn.map { "its own \($0)" } ?? (cache.lastGood[id] == nil ? "Classic" : "its last good version")
             let data = Data("\(errorHeader(id)), so Pulse draws \(shown) instead. Fix it and Pulse reads it again by itself; \(ThemeStore.guideName) here describes every key.\n\n\(scan.issues[id]!)\n".utf8)
-            guard kind(url) == nil || isOurError(url, id: id) else { continue }
-            if differs(url, from: data) { try? data.write(to: url, options: .atomic) }
+                .prefix(maxDiagnosticBytes)
+            if differs(url, from: data) { writeDiagnostic(data, to: url) }
         }
         return scan
     }

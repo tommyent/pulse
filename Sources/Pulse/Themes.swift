@@ -246,12 +246,17 @@ struct ThemeChoice: Equatable {
         do {
             let file = try JSONDecoder().decode(PulseThemeFile.self, from: data)
             lines += file.problems().map { "- \($0)" }
-            return lines.isEmpty ? .success(file) : .failure(Problem(text: lines.prefix(20).joined(separator: "\n")))
+            return lines.isEmpty ? .success(file) : .failure(Problem(text: Self.bounded(lines)))
         } catch let error as DecodingError {
-            return .failure(Problem(text: (lines + ["- \(describe(error))"]).prefix(20).joined(separator: "\n")))
+            return .failure(Problem(text: Self.bounded(lines + ["- \(describe(error))"])))
         } catch {
             return .failure(Problem(text: "- \(error)"))
         }
+    }
+
+    /// At most 20 problems of at most 200 characters each: a diagnostic stays well under `ThemeFolder.maxDiagnosticBytes`.
+    nonisolated static func bounded(_ lines: [String]) -> String {
+        lines.prefix(20).map { $0.count > 200 ? String($0.prefix(199)) + "…" : $0 }.joined(separator: "\n")
     }
 
     /// Every key path the format has, as components, from the built-ins with each optional value filled: White's
@@ -358,6 +363,21 @@ extension PulseSkin {
         // the contrast floor
         let assumedInk: SkinColor = appearance == .dark ? "#FFFFFF" : "#000000"   // the system's label colour
         let primaryInk = ink.primary ?? assumedInk
+        /// The worst contrast of `colour(ground)` against a gradient's every colour (`SkinColor.samples`), if under
+        /// `needed`: where it is, e.g. "groove.slabTop to groove.slab (at 40%): 1.00:1, text needs 4.5:1".
+        func along(_ stops: [(String, SkinColor)], needed: Double, what: String, _ colour: (SkinColor) -> SkinColor) -> String? {
+            var worst: (ratio: Double, at: String)?
+            for (i, sample) in SkinColor.samples(stops.map(\.1)).enumerated() {
+                let r = colour(sample.color).contrast(with: sample.color)
+                if r < needed, r < (worst?.ratio ?? .infinity) {
+                    let segment = stops.count == 1 ? "\(at)\(stops[0].0) \(stops[0].1.hex)"
+                        : "the gradient from \(at)\(stops[sample.segment].0) to \(at)\(stops[sample.segment + 1].0) (at \(Int((sample.t * 100).rounded()))%)"
+                    worst = (r, segment)
+                }
+                _ = i
+            }
+            return worst.map { "\($0.at): \($0.ratio.formatted(.number.precision(.fractionLength(2)))):1, \(what) needs \(needed.formatted()):1" }
+        }
         func opaque(_ path: String, _ c: SkinColor) -> Bool {
             if c.alpha < 1 { out.append("\(at)\(path): must be opaque (contrast is checked against it)") }
             return c.alpha == 1
@@ -369,16 +389,17 @@ extension PulseSkin {
                 out.append("\(at)\(path) \(c.hex) on \(at)\(groundPath) \(ground.hex): \(r.formatted(.number.precision(.fractionLength(2)))):1, \(what) needs \(needed.formatted()):1")
             }
         }
-        // text lies anywhere on the slab, so on every colour of its gradient: its middle and both ends
-        let grounds = groove.map { [("groove.slab", $0.slab), ("groove.slabTop", $0.slabTop), ("groove.slabBottom", $0.slabBottom)] }
+        // text lies anywhere on the slab, so on every colour its gradient passes through, not only its stops
+        let slab: [(String, SkinColor)] = groove.map { [("groove.slabTop", $0.slabTop), ("groove.slab", $0.slab), ("groove.slabBottom", $0.slabBottom)] }
             ?? [("surface", surface)]
-        for (groundPath, ground) in grounds {
+        if slab.allSatisfy({ opaque($0.0, $0.1) }) {
             for (path, c) in [("ink.primary", ink.primary), ("ink.secondary", ink.secondary), ("ink.alert", ink.alert)] {
-                if let c { floor(path, c, on: groundPath, ground, 4.5, "text") }
+                guard let c, opaque(path, c) else { continue }
+                along(slab, needed: 4.5, what: "text") { _ in c }.map { out.append("\(at)\(path) \(c.hex) on \($0)") }
             }
-            if primaryInk.alpha == 1, ground.alpha == 1 {   // a number from an earlier refresh, drawn at `stale`
-                let r = primaryInk.over(ground, opacity: stale).contrast(with: ground)
-                if r < 4.5 { out.append("\(at)stale: ink at \(stale.formatted()) on \(at)\(groundPath) is \(r.formatted(.number.precision(.fractionLength(2)))):1, text needs 4.5:1") }
+            if primaryInk.alpha == 1 {   // a number from an earlier refresh, drawn at `stale`
+                along(slab, needed: 4.5, what: "text") { primaryInk.over($0, opacity: stale) }
+                    .map { out.append("\(at)stale: ink at \(stale.formatted()) on \($0)") }
             }
         }
         let colours: [(String, SkinColor?)] = [("claude", accents.claude), ("codex", accents.codex), ("grok", accents.grok),
@@ -391,8 +412,9 @@ extension PulseSkin {
         }
 
         guard let g = groove else { return out }
-        for (path, face) in [("groove.face", g.face), ("groove.faceTop", g.faceTop), ("groove.faceBottom", g.faceBottom)] {
-            floor("groove.onFace", g.onFace, on: path, face, 3, "a mark on the hub")
+        let hub = [("groove.faceTop", g.faceTop), ("groove.face", g.face), ("groove.faceBottom", g.faceBottom)]
+        if opaque("groove.onFace", g.onFace), hub.allSatisfy({ opaque($0.0, $0.1) }) {
+            along(hub, needed: 3, what: "a mark on the hub") { _ in g.onFace }.map { out.append("\(at)groove.onFace \(g.onFace.hex) on \($0)") }
         }
         // the agents ring's "+3", on its own disc; left out, the two are Pulse's light grey on the face lifted 9% toward
         // white (blended here in sRGB, close to the perceptual mix that draws it)
@@ -443,6 +465,28 @@ extension PulseSkin {
 
 extension SkinColor {
     var alpha: Double { components[3] }
+
+    /// Every colour a gradient through `stops` passes, closely enough to find its worst point: 64 steps between each
+    /// pair, mixed both in the stops' own values and in linear light (renderers differ), in the first stop's space.
+    static func samples(_ stops: [SkinColor]) -> [(color: SkinColor, segment: Int, t: Double)] {
+        guard stops.count > 1 else { return stops.map { ($0, 0, 0) } }
+        func lin(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        func gam(_ v: Double) -> Double { v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1 / 2.4) - 0.055 }
+        let prefix = stops[0].hex.hasPrefix("p3:") ? "p3:" : "srgb:"
+        var out: [(SkinColor, Int, Double)] = []
+        for segment in 0 ..< stops.count - 1 {
+            let a = stops[segment].components, b = stops[segment + 1].components
+            for step in 0 ... 64 {
+                let t = Double(step) / 64
+                let mixes = [(0 ..< 3).map { a[$0] * (1 - t) + b[$0] * t },
+                             (0 ..< 3).map { gam(lin(a[$0]) * (1 - t) + lin(b[$0]) * t) }]
+                for parts in mixes {
+                    out.append((try! SkinColor(prefix + parts.map { String(max(0, min(1, $0))) }.joined(separator: ",")), segment, t))
+                }
+            }
+        }
+        return out
+    }
 
     /// WCAG's contrast ratio, 1 to 21.
     func contrast(with other: SkinColor) -> Double {

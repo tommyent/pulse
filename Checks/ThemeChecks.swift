@@ -13,6 +13,7 @@ enum ThemeChecks {
         checkOwnership()
         checkBounded()
         checkImportExport()
+        checkDiagnosticOwnership()
         checkSlotLive()
         checkCapAndWatch()
         checkModesAndSlots()
@@ -195,7 +196,7 @@ enum ThemeChecks {
         ends.look.groove!.slabTop = ink
         ends.look.groove!.slabBottom = ink
         let endsText = refusal(ThemeStore.file(ends), "ink on both gradient ends")
-        assert(endsText.contains("groove.slabTop") && endsText.contains("groove.slabBottom") && endsText.contains("1.00:1"), endsText)
+        assert(endsText.contains("groove.slabTop") && endsText.contains("1.00:1"), endsText)
         var counter = PulseThemeFile.groove
         counter.look.groove!.bubble = "#000000"
         counter.look.groove!.bubbleInk = "#000000"
@@ -208,6 +209,25 @@ enum ThemeChecks {
         expectRefused(.grooveWhite, "ink.alert", "#BF2318", mentioning: ["ink.alert", "groove.slabBottom"])
         // a flat theme is held to its surface
         expectRefused(.classicSolid, "accents.codex", "#202060", mentioning: ["accents.codex", "surface"])
+        // Sol's re-review of ad17df2: grey text on a black-to-white slab passes at every stop (4.56:1 on black, 4.61:1
+        // on white) and reads at 1:1 where the gradient crosses its own grey
+        var grey = PulseThemeFile.groove
+        grey.look.groove!.slabTop = "#000000"
+        grey.look.groove!.slab = "#000000"
+        grey.look.groove!.slabBottom = "#FFFFFF"
+        grey.look.ink = PulseSkin.Ink(primary: "#757575", secondary: "#757575", alert: "#757575")
+        grey.look.stale = 1
+        assert(grey.look.ink.primary!.contrast(with: "#000000") >= 4.5 && grey.look.ink.primary!.contrast(with: "#FFFFFF") >= 4.5, "every stop passes")
+        let greyText = refusal(ThemeStore.file(grey), "grey text across a black-to-white slab")
+        assert(greyText.contains("ink.primary #757575 on the gradient from groove.slab to groove.slabBottom") && greyText.contains("1.0"), greyText)
+        // the hub's radial gradient the same way
+        var hub = PulseThemeFile.groove
+        hub.look.groove!.faceTop = "#FFFFFF"
+        hub.look.groove!.face = "#000000"
+        hub.look.groove!.faceBottom = "#000000"
+        hub.look.groove!.onFace = "#7C7C7C"
+        assert(hub.look.groove!.onFace.contrast(with: "#000000") >= 3 && hub.look.groove!.onFace.contrast(with: "#FFFFFF") >= 3)
+        assert(refusal(ThemeStore.file(hub), "a mark across the hub's gradient").contains("groove.onFace #7C7C7C on the gradient from groove.faceTop to groove.face"))
     }
 
     static func checkGuide() {
@@ -384,6 +404,52 @@ enum ThemeChecks {
         let errors = try! fm.contentsOfDirectory(atPath: folder.path).filter { $0.hasSuffix(".error") }
         assert(!errors.contains { $0.hasPrefix("many-") }, "no .error for a file past the cap: \(errors.sorted())")
         assert(errors.count <= 11, "at most 10 .error files written, beside the pipe: \(errors.sorted())")
+    }
+
+    /// Sol's re-review of ad17df2: a `.error` is Pulse's by its mark, not by what it says, so a person's note that reads
+    /// like Pulse's stays; a diagnostic is never bigger than Pulse can recognise and clear; hidden entries count
+    /// toward the 500 a pass looks at.
+    @MainActor static func checkDiagnosticOwnership() {
+        let fm = FileManager.default
+        let folder = folder("diagnostics")
+        defer { try? fm.removeItem(at: folder) }
+        let cache = ThemeFolder.Cache()
+        // a note in Pulse's own words, beside no theme and beside a good one: kept
+        let note = folder.appending(path: "note.error"), alike = folder.appending(path: "alike.error")
+        try! Data("note.json can't be used, so I wrote this down to remember".utf8).write(to: note)
+        try! Data("alike.json can't be used, so Pulse draws Classic instead.".utf8).write(to: alike)
+        try! guideExample.write(to: folder.appending(path: "alike.json"))
+        _ = ThemeFolder.scan(folder, cache: cache)
+        assert(fm.fileExists(atPath: note.path) && fm.fileExists(atPath: alike.path), "notes in Pulse's words are kept")
+        // Pulse's own diagnostic: marked, at most 8 KB even for a huge key, and cleared once the file is fixed
+        let long = folder.appending(path: "long.json")
+        var object = try! JSONSerialization.jsonObject(with: guideExample) as! [String: Any]
+        object[String(repeating: "k", count: 19_000)] = 1
+        try! JSONSerialization.data(withJSONObject: object).write(to: long)
+        let longError = folder.appending(path: "long.error")
+        _ = ThemeFolder.scan(folder, cache: cache)
+        let size = (try! fm.attributesOfItem(atPath: longError.path)[.size] as! NSNumber).intValue
+        assert(size <= ThemeFolder.maxDiagnosticBytes && ThemeFolder.isOurError(longError), "a diagnostic is \(size) bytes and marked")
+        try! guideExample.write(to: long)
+        _ = ThemeFolder.scan(folder, cache: cache)
+        assert(!fm.fileExists(atPath: longError.path), "and it's cleared once the file is fixed")
+        // a note that took the place of Pulse's diagnostic, in its words: not Pulse's, so neither cleared nor rewritten
+        try! Data("{}".utf8).write(to: long)
+        _ = ThemeFolder.scan(folder, cache: cache)
+        try! fm.removeItem(at: longError)
+        try! Data("long.json can't be used, my own copy".utf8).write(to: longError)
+        _ = ThemeFolder.scan(folder, cache: cache)
+        try! guideExample.write(to: long)
+        _ = ThemeFolder.scan(folder, cache: cache)
+        assert(try! String(contentsOf: longError, encoding: .utf8) == "long.json can't be used, my own copy", "a replaced diagnostic is the person's")
+        // hidden entries count toward the 500
+        let hidden = self.folder("hidden")
+        defer { try? fm.removeItem(at: hidden) }
+        for i in 0 ..< 520 { try! Data().write(to: hidden.appending(path: ".h\(i)")) }
+        try! guideExample.write(to: hidden.appending(path: "ember.json"))
+        let listing = ThemeFolder.names(hidden)
+        assert(listing.more, "a folder of 520 hidden entries is past the 500 a pass looks at")
+        assert(ThemeFolder.scan(hidden, cache: ThemeFolder.Cache()).notice?.contains("more than \(ThemeFolder.maxEntries) entries") == true)
     }
 
     /// Import… and a dropped file: the same checks as the folder's own files, copied in byte for byte under a free
