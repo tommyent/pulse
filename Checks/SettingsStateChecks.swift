@@ -296,6 +296,14 @@ enum SettingsStateChecks {
             }
         }
 
+        // the window's height: 830 when there's room, shorter (down to 360) when there isn't, and the layout fits any of
+        // them (it has no fixed height; the pane scrolls)
+        assert(SettingsPane.windowHeight(room: 1000) == 830 && SettingsPane.windowHeight(room: 600) == 600 && SettingsPane.windowHeight(room: 200) == 360)
+        let layout = NSHostingController(rootView: SettingsLayout(selection: .constant(.agents)) { Form { Text("pane") }.formStyle(.grouped) })
+        let width = SettingsPane.sidebarWidth + 1 + SettingsPane.paneWidth
+        for room in [600.0, 420] {
+            assert(layout.sizeThatFits(in: CGSize(width: width, height: room)).height <= room, "\(room) pt of room: \(layout.sizeThatFits(in: CGSize(width: width, height: room)))")
+        }
 
     }
 

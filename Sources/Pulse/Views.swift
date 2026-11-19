@@ -1281,13 +1281,30 @@ private let settingsLog = Logger(subsystem: "io.github.tommyent.pulse", category
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { raiseSettings(tries: tries - 1) }
 }
 
-/// Tells `SettingsWindow` which window Settings' view is in, each time it moves into one.
+/// Tells `SettingsWindow` which window Settings' view is in, each time it moves into one, and sizes that window: the
+/// tallest pane's height where the screen has room for it, else as much as the screen's usable height allows (the
+/// pane scrolls), never less than `SettingsPane.minHeight`. SwiftUI opens Settings at the content's fitting height.
 private struct SettingsWindowReader: NSViewRepresentable {
     final class Reader: NSView {
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             guard let window else { return }
             MainActor.assumeIsolated { SettingsWindow.current = window }
+            DispatchQueue.main.async { [weak window] in   // once SwiftUI has given the window its first size
+                guard let window else { return }
+                // the pane's area is below the title bar; the content view may reach under it (a full-size content view)
+                let layout = window.contentLayoutRect.height, view = window.contentView?.frame.size ?? window.frame.size
+                let underBar = view.height - layout, chrome = window.frame.height - layout
+                let room = (window.screen ?? NSScreen.main).map { $0.visibleFrame.height - chrome } ?? SettingsPane.height
+                let height = SettingsPane.windowHeight(room: room)
+                if abs(layout - height) > 1 { window.setContentSize(NSSize(width: view.width, height: height + underBar)) }
+                if let visible = (window.screen ?? NSScreen.main)?.visibleFrame {   // grown, it stays on the screen
+                    var origin = window.frame.origin
+                    origin.y = max(visible.minY, min(origin.y, visible.maxY - window.frame.height))
+                    window.setFrameOrigin(origin)
+                }
+                settingsLog.notice("sized: \(Int(layout)) to \(Int(window.contentLayoutRect.height)) below the title bar, room \(Int(room))")
+            }
         }
     }
     func makeNSView(context: Context) -> Reader { Reader() }
@@ -1411,13 +1428,7 @@ struct SettingsView: View {
 
     /// A sidebar of panes, the chosen one beside it. Only the layout is grouped: every value is saved where it always was.
     var body: some View {
-        HStack(spacing: 0) {
-            SettingsSidebar(selection: $state.settingsTab)
-            Divider()
-            pane(state.settingsTab)
-                .frame(width: SettingsPane.paneWidth)
-        }
-        .frame(height: SettingsPane.height)
+        SettingsLayout(selection: $state.settingsTab) { pane(state.settingsTab) }
         .background(SettingsWindowReader())
         .navigationTitle(state.settingsTab.title)
         .onAppear {
@@ -1572,6 +1583,23 @@ struct SettingsView: View {
     }
 }
 
+/// Settings' frame: the sidebar, then the chosen pane at the panes' width; as tall as the tallest pane would like,
+/// shorter where the screen is.
+struct SettingsLayout<Pane: View>: View {
+    @Binding var selection: SettingsPane
+    var accent: Color = .accentColor
+    @ViewBuilder var pane: Pane
+
+    var body: some View {
+        HStack(spacing: 0) {
+            SettingsSidebar(selection: $selection, accent: accent)
+            Divider()
+            pane.frame(width: SettingsPane.paneWidth)
+        }
+        .frame(minHeight: SettingsPane.minHeight, idealHeight: SettingsPane.height)   // no cap: SettingsWindowReader sizes the window
+    }
+}
+
 /// Settings' panes, in the sidebar's order: each one's name (also the window's title) and symbol.
 enum SettingsPane: String, CaseIterable, Identifiable {
     case general = "General", appearance = "Appearance", accounts = "Accounts", rings = "Rings", battery = "Battery", codexPet = "Codex pet", agents = "Agents", breaks = "Breaks"
@@ -1596,9 +1624,14 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 
     static let sidebarWidth: CGFloat = 190
     static let paneWidth: CGFloat = 460
-    /// The window's height: the tallest pane's (Agents) as it was in its tab, so none is cut off; the others scroll
-    /// if they ever grow past it.
+    /// The window's height: the tallest pane's (Agents) as it was in its tab, so none is cut off. It's the preferred
+    /// height, not a minimum: on a short screen (or larger text) the window can be shorter, down to `minHeight`, and
+    /// the pane scrolls.
     static let height: CGFloat = 830
+    static let minHeight: CGFloat = 360
+
+    /// The height below the title bar for a screen with `room` points to spare there.
+    static func windowHeight(room: CGFloat) -> CGFloat { max(minHeight, min(height, room)) }
 }
 
 /// Settings' sidebar: every pane, ↑ and ↓ to move, the theme's window behind it. Drawn here rather than by a List,
