@@ -81,7 +81,7 @@ struct AgentsRing: View, Animatable {
                             // at the resting size there's room for the sign only
                             Text(size >= 40 ? "+\(shown.more)" : "+")
                                 .font(.system(size: max(7, size * 0.15), weight: .bold))
-                                .foregroundStyle(Color(white: 0.87))
+                                .foregroundStyle(skin.groove?.bubbleInk?.color ?? Color(white: 0.87))
                                 .fixedSize()
                         }
                     }

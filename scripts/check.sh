@@ -28,7 +28,7 @@ swiftc Sources/Pulse/BreakHats.swift Sources/Pulse/BreakTricks.swift Sources/Pul
 swift package resolve   # the views link Sparkle
 SPARKLE="$PWD/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64"
 swiftc -F "$SPARKLE" -Xlinker -rpath -Xlinker "$SPARKLE" \
-    $(find Sources/Pulse -name "*.swift" ! -name PulseApp.swift) Checks/SettingsStateChecks.swift -o "$OUT/state"
+    $(find Sources/Pulse -name "*.swift" ! -name PulseApp.swift) Checks/SettingsStateChecks.swift Checks/ThemeChecks.swift -o "$OUT/state"
 "$OUT/state"
 ./Checks/ClassicRenderChecks.sh   # Classic draws byte for byte as before skins
 swiftc Sources/Pulse/HotKey.swift Checks/VoiceShortcutChecks.swift -o "$OUT/voice-shortcut"

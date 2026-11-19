@@ -13,7 +13,7 @@ final class AppState: ObservableObject {
         var alwaysOnTop: Bool = true
         var showOverlay: Bool = true
         var appearance: PulseAppearance = .solid
-        var skin: String?   // nil = Classic; otherwise a skin's name ("groove", `PulseSkinSet.named`)
+        var skin: String?   // nil = Classic; otherwise a theme's id: a built-in's ("groove") or a theme file's name (`ThemeStore`)
         var dock: DockEdge?
         var tucked: Bool?   // nil = out: the rail tucked into its edge, a sliver left on screen
         var tuckPeek: Bool?   // nil = off: resting the pointer on the sliver slides the rail out until it leaves

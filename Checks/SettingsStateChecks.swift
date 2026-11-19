@@ -110,6 +110,7 @@ enum SettingsStateChecks {
         checkUnreadableValues()
         checkTrackRendering()
         checkSkins()
+        ThemeChecks.run()
         print("Settings state checks passed: saved values preserved, Tint migrated, unreadable values cost only themselves and are kept in a copy, plain menu-grey tracks without keylines in both looks")
     }
 
@@ -212,22 +213,25 @@ enum SettingsStateChecks {
     /// Skins are plain values with fixed keys, so a skin can later come from a JSON file; the setting picks one by name.
     @MainActor private static func checkSkins() {
         let p = try! JSONDecoder().decode(AppState.Persisted.self, from: Data(#"{"enabled":[],"order":[],"alwaysOnTop":true,"showOverlay":true}"#.utf8))
-        assert(p.skin == nil && PulseSkin.named(p.skin) == .classic, "a state from before skins stays Classic")
+        let themes = ThemeStore.shared   // the built-ins only: nothing read from a folder here
+        assert(p.skin == nil && themes.skin(p.skin) == .classic, "a state from before skins stays Classic")
         var groove = AppState.Persisted()
         groove.skin = "groove"
         let reread = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(groove))
-        assert(reread.skin == "groove" && PulseSkin.named(reread.skin) == .groove, "Groove stays picked after a relaunch")
-        assert(PulseSkin.named("a-skin-this-version-lacks") == .classic, "an unknown skin falls back to Classic")
-        assert(PulseSkinSet.named("a-skin-this-version-lacks").name == "classic" && PulseSkinSet.named(nil).name == "classic",
+        assert(reread.skin == "groove" && themes.skin(reread.skin) == .groove, "Groove stays picked after a relaunch")
+        assert(themes.skin("a-skin-this-version-lacks") == .classic, "an unknown skin falls back to Classic")
+        assert(themes.theme("a-skin-this-version-lacks").id == "classic" && themes.theme(nil).id == "classic",
                "the Skin picker shows Classic for a missing or unknown name, as it draws")
 
-        for skin in PulseSkinSet.builtIn {
+        for (_, skin) in PulseSkinSet.builtIn {
             let json = try! JSONEncoder().encode(skin)
             assert(try! JSONDecoder().decode(PulseSkinSet.self, from: json) == skin, "\(skin.name) survives JSON")
-            assert(skin.light == nil && skin.half(.light) == skin.dark, "dark only for now: a light appearance gets the dark half")
         }
+        assert(PulseSkinSet.classic.light == nil && PulseSkinSet.classic.half(.light) == .classic, "Classic stays dark in light appearance")
+        assert(PulseSkinSet.groove.half(.light) == .grooveWhite && PulseSkinSet.grooveBlack.half(.light) == .grooveBlack
+               && PulseSkinSet.grooveBlack.dark == .groove, "both Groove themes keep the dark half; each has its light one")
         let file = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(PulseSkinSet.groove)) as! [String: Any]
-        assert(file["name"] as? String == "groove" && file["light"] == nil)
+        assert(file["name"] as? String == "Groove" && file["light"] != nil)
         let object = file["dark"] as! [String: Any]
         let accents = object["accents"] as! [String: Any], g = object["groove"] as! [String: Any]
         assert(accents["claude"] as? String == "#CF7C5E" && accents["antigravity2"] as? String == "#79AAD2", "colours are hex strings")
@@ -260,7 +264,7 @@ enum SettingsStateChecks {
         }
 
         // Increase Contrast: full colours, white ink, nothing shading the colour
-        let contrast = PulseSkin.named("groove", contrast: .increased)
+        let contrast = themes.skin("groove", contrast: .increased)
         assert(contrast.accents == PulseSkin.classic.accents && contrast.groove?.wall == nil && contrast.ink.primary == "#FFFFFF")
         assert(contrast.groove?.raise == PulseSkin.groove.groove?.raise, "the slab keeps its shape")
 

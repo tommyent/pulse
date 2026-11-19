@@ -43,6 +43,7 @@ struct PulseApp: App {
         }
         let state = AppState()
         _state = StateObject(wrappedValue: state)   // the pet's folder waits for its first use: no Documents prompt at launch
+        ThemeStore.shared.start(state)
         overlay = OverlayController(state: state)
         batteryAlerts = BatteryAlerts(state: state)
         BreakController.shared.attach(state)
@@ -67,13 +68,7 @@ struct PulseApp: App {
 
         Settings {
             SettingsView(state: state)
-                .containerBackground(for: .window) {
-                    PulseSurface(shape: Rectangle(), floats: false)
-                        .environment(\.pulseAppearance, state.persisted.appearance)
-                        .environment(\.pulseSkin, PulseSkin.named(state.persisted.skin))
-                        .environment(\.appearsActive, true)
-                        .preferredColorScheme(.dark)
-                }
+                .containerBackground(for: .window) { SettingsBackground(state: state) }
                 .pulsePresentation(state)
         }
     }
@@ -96,12 +91,12 @@ final class OverlayHostingView: NSHostingView<AnyView> {
 
     required init(rootView: AnyView) {
         // Set the hosting presentation, so default text and AppKit-backed semantic colors agree.
-        super.init(rootView: AnyView(rootView.preferredColorScheme(.dark)))
+        super.init(rootView: AnyView(rootView.modifier(ThemeScheme())))
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
-        rootView = AnyView(rootView.preferredColorScheme(.dark))
+        rootView = AnyView(rootView.modifier(ThemeScheme()))
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }

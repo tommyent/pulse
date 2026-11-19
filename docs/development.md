@@ -37,8 +37,10 @@ Live checks that use your accounts: `./scripts/grok-check.sh` may refresh Grok c
 | `PetApprovals.swift` | native approval, consent and question prompts, scoped replies and cancellation |
 | `HotKey.swift` | global shortcut registration and the Settings recorder |
 | `Views.swift` | rail, rings, usage cards, pet card, Settings |
-| `Skin.swift` | the skins (Classic and Groove) as plain values: colours, shadows, ring depths; Groove's slab, rings and bars |
-| `Appearance.swift` | Glass and Solid surfaces, and which skin each window draws with |
+| `Skin.swift` | the built-in themes (Classic, Groove, Groove Black) as plain values, a dark and an optional light half each: colours, shadows, ring depths; Groove's slab, rings and bars |
+| `Themes.swift` | theme files: the Themes folder, reading and checking each file (ranges, geometry, the contrast floor), last good versions, `.error` files, the folder watch, and the appearance a theme draws in |
+| `ThemeGuide.swift` | the guide Pulse writes into the Themes folder (`AGENTS.md`) |
+| `Appearance.swift` | Glass and Solid surfaces, and which theme each window draws with |
 | `Breaks.swift` | break settings, schedule, colours and picking ideas |
 | `BreakController.swift` | the break clock, idle and lock detection, the overlay windows |
 | `BreakViews.swift` | the countdown, the break screen, its agents and Settings → Breaks |

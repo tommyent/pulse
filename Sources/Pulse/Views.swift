@@ -817,6 +817,7 @@ struct OverlayView: View {
     @ObservedObject private var battery = BatteryMonitor.shared
     @ObservedObject private var breaks = BreakController.shared
     @ObservedObject private var agents = AgentsMonitor.shared
+    @ObservedObject private var themes = ThemeStore.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast   // for the tuck ticks' colours, read here above the presentation
     @Environment(\.openSettings) private var openSettings
@@ -1013,7 +1014,7 @@ struct OverlayView: View {
                     .buttonStyle(.plain)
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { itemFrames[ringKey(id, pool: pool.index)] = $0 }
                     .overlay(alignment: tuckBand.alignment) {
-                        let skin = PulseSkin.named(state.persisted.skin, contrast: contrast)
+                        let skin = themes.skin(state.persisted.skin, contrast: contrast)
                         let used = windows.outerArc?.percentUsed ?? 0
                         let shown = max(0, min(state.showsRemaining ? 100 - used : used, 100))
                         let spent = windows.longestLimitSpent
@@ -1256,6 +1257,38 @@ struct MenuBarPopover: View {
     }
 }
 
+/// Settings' theme menu: every theme Pulse can draw, a mark on one whose file has a problem, and what the problem is.
+private struct ThemePicker: View {
+    @ObservedObject var state: AppState
+    @ObservedObject private var themes = ThemeStore.shared
+
+    var body: some View {
+        // a name Pulse can't draw shows as Classic, as it draws
+        Picker("Skin", selection: Binding(get: { themes.theme(state.persisted.skin).id },
+                                          set: { state.persisted.skin = $0 == "classic" ? nil : $0 })) {
+            ForEach(themes.themes) { theme in
+                Text(theme.set.name + (themes.problems[theme.id] == nil ? "" : " ⚠︎")).tag(theme.id)
+            }
+        }
+        .accessibilityLabel("Skin")
+        LabeledContent {
+            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([themes.folder]) }
+        } label: {
+            Text("Theme files")
+            ForEach(themes.problems.keys.sorted(), id: \.self) { id in
+                let first = themes.problems[id]?.split(separator: "\n").first.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "- ")) } ?? ""
+                Text("⚠︎ \(id).json can't be used: \(first) (more in \(id).error)")
+                    .foregroundStyle(skinAlert)
+            }
+            if themes.problems.isEmpty {
+                Text("One JSON file per theme, read again when it changes; \(ThemeStore.guideName) there describes the format")
+            }
+        }
+    }
+
+    private var skinAlert: Color { themes.skin(state.persisted.skin).alert }
+}
+
 struct SettingsView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var agents = AgentsMonitor.shared
@@ -1265,7 +1298,7 @@ struct SettingsView: View {
     /// One tab per group. Only the layout is grouped: every value is saved where it always was.
     var body: some View {
         TabView(selection: $state.settingsTab) {
-            tab("General", "gearshape", height: 250) {
+            tab("General", "gearshape", height: 300) {
                 Section {
                     Toggle("Launch at login", isOn: Binding(
                         get: { loginItem == .enabled },
@@ -1277,21 +1310,15 @@ struct SettingsView: View {
                     if loginItem == .requiresApproval {
                         Button("Allow Pulse in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
                     }
-                    Picker("Skin", selection: Binding(get: { PulseSkinSet.named(state.persisted.skin).name },   // a name this version lacks shows as Classic, as it draws
-                                                      set: { state.persisted.skin = $0 == PulseSkinSet.classic.name ? nil : $0 })) {
-                        Text("Classic").tag(PulseSkinSet.classic.name)
-                        Text("Groove").tag(PulseSkinSet.groove.name)
-                    }
-                    .pickerStyle(.segmented)
-                    .accessibilityLabel("Skin")
+                    ThemePicker(state: state)
                     Picker("Appearance", selection: $state.persisted.appearance) {
                         Text("Glass").tag(PulseAppearance.glass)
                         Text("Solid").tag(PulseAppearance.solid)
                     }
                     .pickerStyle(.segmented)
                     .accessibilityLabel("Appearance")
-                    .disabled(state.persisted.skin == PulseSkinSet.groove.name)
-                    .help(state.persisted.skin == PulseSkinSet.groove.name ? "Glass and Solid are Classic's; Groove has its own surface" : "")
+                    .disabled(ThemeStore.shared.theme(state.persisted.skin).set.dark.groove != nil)
+                    .help(ThemeStore.shared.theme(state.persisted.skin).set.dark.groove != nil ? "Glass and Solid are for flat themes; this one has its own surface" : "")
                 }
             }
             tab("Accounts", "person.crop.circle", height: 360) {

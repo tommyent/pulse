@@ -20,10 +20,11 @@ enum PulsePalette {
 }
 
 struct RingTrack: View {
+    @Environment(\.pulseSkin) private var skin
     let lineWidth: CGFloat
 
     var body: some View {
-        Circle().stroke(PulsePalette.track, lineWidth: lineWidth)
+        Circle().stroke(skin.track.color, lineWidth: lineWidth)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
@@ -53,7 +54,7 @@ struct PulseSurface<S: Shape>: View {
                 .overlay { shape.fill(.black.opacity(0.65)) }
                 .environment(\.appearsActive, true)
         case .solid:
-            shape.fill(PulsePalette.surface)
+            shape.fill(skin.surface.color)
         }
     }
 }
@@ -85,13 +86,34 @@ private struct PulseRim<S: Shape>: View {
 
 private struct PulsePresentation: ViewModifier {
     @ObservedObject var state: AppState
+    @ObservedObject private var themes = ThemeStore.shared
     @Environment(\.colorSchemeContrast) private var contrast
     func body(content: Content) -> some View {
-        content.preferredColorScheme(.dark)
+        // dark, unless the theme has a light half: then the system's appearance
+        content.preferredColorScheme(themes.scheme(state.persisted.skin))
             .background(PulseWindowBacking())
             .environment(\.pulseAppearance, state.persisted.appearance)
-            .environment(\.pulseSkin, PulseSkin.named(state.persisted.skin, contrast: contrast))
+            .environment(\.pulseSkin, themes.skin(state.persisted.skin, contrast: contrast))
             .environment(\.appearsActive, true)
+    }
+}
+
+/// The overlay's hosting presentation follows the theme too, so default text and AppKit-backed colours agree.
+struct ThemeScheme: ViewModifier {
+    @ObservedObject private var themes = ThemeStore.shared
+    func body(content: Content) -> some View { content.preferredColorScheme(themes.scheme(themes.selected)) }
+}
+
+/// Settings' window background: the theme's surface, in the theme's appearance.
+struct SettingsBackground: View {
+    @ObservedObject var state: AppState
+    @ObservedObject private var themes = ThemeStore.shared
+    var body: some View {
+        PulseSurface(shape: Rectangle(), floats: false)
+            .environment(\.pulseAppearance, state.persisted.appearance)
+            .environment(\.pulseSkin, themes.skin(state.persisted.skin))
+            .environment(\.appearsActive, true)
+            .preferredColorScheme(themes.scheme(state.persisted.skin))
     }
 }
 
