@@ -74,7 +74,7 @@ are refused, so a typo can't pass silently.
 | `accents.antigravity2` | colour | an account's later pool of models (Antigravity's Claude and GPT) |
 | `accents.battery` | colour, optional | the battery ring at a normal charge; left out: the system's green. Low and critical stay the system's yellow and red |
 | `accents.breakBar` | colour, optional | the break countdown's ring, for the default break colour |
-| `surface` | colour | a flat theme's panel (Settings' Solid look); for a Groove theme, use the slab's colour |
+| `surface` | colour | a flat theme's rail, cards and popover when Settings › General › Appearance is Solid (Glass is the system's); for a Groove theme, the slab's colour |
 | `track` | colour | a flat theme's empty ring track |
 | `ink.primary` | colour, optional | numbers and titles; left out: the system's label colour |
 | `ink.secondary` | colour | captions |
