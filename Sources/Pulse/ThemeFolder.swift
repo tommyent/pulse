@@ -162,7 +162,10 @@ enum ThemeFolder {
                 scan.warnings[id] = ThemeStore.warnings(file)
             case .failure(let problem):
                 scan.issues[id] = problem.text
-                if let good = cache.lastGood[id] { scan.found.append(PulseTheme(id: id, file: good)) }
+                if let good = cache.lastGood[id] {   // still drawn, so still hard to read where it was
+                    scan.found.append(PulseTheme(id: id, file: good))
+                    scan.warnings[id] = ThemeStore.warnings(good)
+                }
             }
         }
         // the cache holds files read in this pass only: at most `maxThemes`, and a file past the cap is not drawn from it

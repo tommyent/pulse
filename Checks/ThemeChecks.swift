@@ -234,6 +234,16 @@ enum ThemeChecks {
         assert(grey.look.ink.primary!.contrast(with: "#000000") >= 4.5 && grey.look.ink.primary!.contrast(with: "#FFFFFF") >= 4.5, "every stop passes")
         let greyText = warning(ThemeStore.file(grey), "grey text across a black-to-white slab")
         assert(greyText.contains("ink.primary #757575 on the gradient from groove.slab to groove.slabBottom") && greyText.contains("1.0"), greyText)
+        // stops in different spaces are converted before they're mixed (Sol's round 3 review: an sRGB slab ending in a
+        // Display P3 red hid a warning, the red read as if its components were sRGB). White on p3:0.92,0,0 is 4.37:1;
+        // read as sRGB it would be 4.63:1.
+        var mixedSpaces = PulseThemeFile.groove
+        mixedSpaces.look.groove!.slabBottom = "p3:0.92,0,0"
+        mixedSpaces.look.ink.primary = "#FFFFFF"
+        let white: SkinColor = "#FFFFFF"
+        assert(white.contrast(with: "p3:0.92,0,0") < 4.5 && white.contrast(with: "srgb:0.92,0,0") > 4.5)
+        let mixedText = warning(ThemeStore.file(mixedSpaces), "white on a slab ending in a P3 red")
+        assert(mixedText.contains("ink.primary #FFFFFF on the gradient from groove.slab to groove.slabBottom"), mixedText)
         // the hub's radial gradient the same way
         var hub = PulseThemeFile.groove
         hub.look.groove!.faceTop = "#FFFFFF"
@@ -311,6 +321,11 @@ enum ThemeChecks {
         assert(waitUntil { listed("dim") != nil && store.warnings["dim"] != nil }, "a hard-to-read theme loads, with a warning")
         assert(store.warnings["dim"]!.contains("ink.secondary #3A302C on surface") && store.problems["dim"] == nil, store.warnings["dim"]!)
         assert(store.current(both("dim")).id == "dim" && !fm.fileExists(atPath: folder.appending(path: "dim.error").path))
+        // a broken edit keeps drawing the last good version, so its warning stays too (Sol's round 3 review)
+        let warned = store.warnings["dim"]
+        try! Data("{\"format\": 1".utf8).write(to: dim)
+        assert(waitUntil { store.problems["dim"] != nil }, "the broken edit is noticed")
+        assert(listed("dim") != nil && store.warnings["dim"] == warned, "the last good version and its warning stay: \(String(describing: store.warnings["dim"]))")
         try! fm.removeItem(at: dim)
         assert(waitUntil { store.warnings["dim"] == nil }, "the warning goes with the file")
 

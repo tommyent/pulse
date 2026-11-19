@@ -422,16 +422,15 @@ extension PulseSkin {
         let primaryInk = ink.primary ?? assumedInk
         /// The worst contrast of `colour(ground)` against a gradient's every colour (`SkinColor.samples`), if under
         /// `needed`: where it is, e.g. "groove.slabTop to groove.slab (at 40%): 1.00:1, text needs 4.5:1".
-        func along(_ stops: [(String, SkinColor)], needed: Double, what: String, _ colour: (SkinColor) -> SkinColor) -> String? {
+        func along(_ stops: [(String, SkinColor)], needed: Double, what: String, _ colour: (LinearRGB) -> LinearRGB) -> String? {
             var worst: (ratio: Double, at: String)?
-            for (i, sample) in SkinColor.samples(stops.map(\.1)).enumerated() {
+            for sample in SkinColor.samples(stops.map(\.1)) {
                 let r = colour(sample.color).contrast(with: sample.color)
                 if r < needed, r < (worst?.ratio ?? .infinity) {
                     let segment = stops.count == 1 ? "\(at)\(stops[0].0) \(stops[0].1.hex)"
                         : "the gradient from \(at)\(stops[sample.segment].0) to \(at)\(stops[sample.segment + 1].0) (at \(Int((sample.t * 100).rounded()))%)"
                     worst = (r, segment)
                 }
-                _ = i
             }
             return worst.map { "\($0.at): \($0.ratio.formatted(.number.precision(.fractionLength(2)))):1, \(what) needs \(needed.formatted()):1" }
         }
@@ -452,10 +451,10 @@ extension PulseSkin {
         if slab.allSatisfy({ opaque($0.0, $0.1) }) {
             for (path, c) in [("ink.primary", ink.primary), ("ink.secondary", ink.secondary), ("ink.alert", ink.alert)] {
                 guard let c, opaque(path, c) else { continue }
-                along(slab, needed: 4.5, what: "text") { _ in c }.map { warnings.append("\(at)\(path) \(c.hex) on \($0)") }
+                along(slab, needed: 4.5, what: "text") { _ in c.linear }.map { warnings.append("\(at)\(path) \(c.hex) on \($0)") }
             }
             if primaryInk.alpha == 1 {   // a number from an earlier refresh, drawn at `stale`
-                along(slab, needed: 4.5, what: "text") { primaryInk.over($0, opacity: stale) }
+                along(slab, needed: 4.5, what: "text") { primaryInk.linear.over($0, opacity: stale) }
                     .map { warnings.append("\(at)stale: ink at \(stale.formatted()) on \($0)") }
             }
         }
@@ -471,7 +470,7 @@ extension PulseSkin {
         guard let g = groove else { return out }
         let hub = [("groove.faceTop", g.faceTop), ("groove.face", g.face), ("groove.faceBottom", g.faceBottom)]
         if opaque("groove.onFace", g.onFace), hub.allSatisfy({ opaque($0.0, $0.1) }) {
-            along(hub, needed: 3, what: "a mark on the hub") { _ in g.onFace }.map { warnings.append("\(at)groove.onFace \(g.onFace.hex) on \($0)") }
+            along(hub, needed: 3, what: "a mark on the hub") { _ in g.onFace.linear }.map { warnings.append("\(at)groove.onFace \(g.onFace.hex) on \($0)") }
         }
         // the agents ring's "+3", on its own disc; left out, the two are Pulse's light grey on the face lifted 9% toward
         // white (blended here in sRGB, close to the perceptual mix that draws it)
@@ -520,29 +519,58 @@ extension PulseSkin {
     }
 }
 
+/// A colour where any two can be mixed and measured: linear light, sRGB primaries, values past 0 to 1 kept (a P3 red).
+struct LinearRGB: Equatable {
+    var r, g, b: Double
+    init(_ r: Double, _ g: Double, _ b: Double) { self.r = r; self.g = g; self.b = b }
+
+    static func decode(_ v: Double) -> Double { v.sign == .minus ? -decode(-v) : v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+    static func encode(_ v: Double) -> Double { v.sign == .minus ? -encode(-v) : v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1 / 2.4) - 0.055 }
+
+    var luminance: Double { max(0, 0.2126 * r + 0.7152 * g + 0.0722 * b) }
+    func contrast(with other: LinearRGB) -> Double {
+        let (x, y) = (max(luminance, other.luminance), min(luminance, other.luminance))
+        return (x + 0.05) / (y + 0.05)
+    }
+    /// `t` of the way to `other`: in sRGB's encoded values, or in linear light.
+    func mixed(_ other: LinearRGB, _ t: Double, encoded: Bool) -> LinearRGB {
+        func mix(_ a: Double, _ b: Double) -> Double {
+            encoded ? Self.decode(Self.encode(a) * (1 - t) + Self.encode(b) * t) : a * (1 - t) + b * t
+        }
+        return LinearRGB(mix(r, other.r), mix(g, other.g), mix(b, other.b))
+    }
+    /// This colour at `opacity` over `ground`, blended in sRGB's encoded values as compositing does.
+    func over(_ ground: LinearRGB, opacity: Double) -> LinearRGB { ground.mixed(self, opacity, encoded: true) }
+}
+
 extension SkinColor {
     var alpha: Double { components[3] }
 
     /// Every colour a gradient through `stops` passes, closely enough to find its worst point: 64 steps between each
-    /// pair, mixed both in the stops' own values and in linear light (renderers differ), in the first stop's space.
-    static func samples(_ stops: [SkinColor]) -> [(color: SkinColor, segment: Int, t: Double)] {
-        guard stops.count > 1 else { return stops.map { ($0, 0, 0) } }
-        func lin(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
-        func gam(_ v: Double) -> Double { v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1 / 2.4) - 0.055 }
-        let prefix = stops[0].hex.hasPrefix("p3:") ? "p3:" : "srgb:"
-        var out: [(SkinColor, Int, Double)] = []
-        for segment in 0 ..< stops.count - 1 {
-            let a = stops[segment].components, b = stops[segment + 1].components
+    /// pair, mixed both in sRGB's encoded values and in linear light (renderers differ). Each stop is first converted
+    /// to one space (linear extended sRGB), so an sRGB stop beside a Display P3 one mixes as the two colours they are.
+    static func samples(_ stops: [SkinColor]) -> [(color: LinearRGB, segment: Int, t: Double)] {
+        let linear = stops.map(\.linear)
+        guard linear.count > 1 else { return linear.map { ($0, 0, 0) } }
+        var out: [(LinearRGB, Int, Double)] = []
+        for segment in 0 ..< linear.count - 1 {
+            let a = linear[segment], b = linear[segment + 1]
             for step in 0 ... 64 {
                 let t = Double(step) / 64
-                let mixes = [(0 ..< 3).map { a[$0] * (1 - t) + b[$0] * t },
-                             (0 ..< 3).map { gam(lin(a[$0]) * (1 - t) + lin(b[$0]) * t) }]
-                for parts in mixes {
-                    out.append((try! SkinColor(prefix + parts.map { String(max(0, min(1, $0))) }.joined(separator: ",")), segment, t))
-                }
+                out.append((a.mixed(b, t, encoded: true), segment, t))
+                out.append((a.mixed(b, t, encoded: false), segment, t))
             }
         }
         return out
+    }
+
+    /// The colour in linear extended sRGB: Display P3 converted with its standard matrix, nothing clamped.
+    var linear: LinearRGB {
+        let v = components.prefix(3).map(LinearRGB.decode)
+        guard hex.hasPrefix("p3:") else { return LinearRGB(v[0], v[1], v[2]) }
+        return LinearRGB(1.2249401 * v[0] - 0.2249404 * v[1],
+                         -0.0420569 * v[0] + 1.0420571 * v[1],
+                         -0.0196376 * v[0] - 0.0786361 * v[1] + 1.0982735 * v[2])
     }
 
     /// WCAG's contrast ratio, 1 to 21.
