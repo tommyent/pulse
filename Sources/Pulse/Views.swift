@@ -1467,6 +1467,13 @@ struct AppearanceSettings: View {
                 Text(promptCopied ? "Copied. Paste it to an agent; its theme shows up here by itself"
                      : "Copies one line that tells an agent where the folder and its guide are")
             }
+            LabeledContent {
+                Link("Find more themes…", destination: URL(string: "https://github.com/tommyent/pulse/tree/main/themes")!)
+                    .help("Opens Pulse's theme collection on GitHub: each theme with its picture, to download and import")
+            } label: {
+                Text("More themes")
+                Text("Pulse's theme collection, with a picture of each")
+            }
         }
         .dropDestination(for: URL.self) { urls, _ in
             for url in urls { themes.importTheme(url) { results.themeImport = $0 } }
