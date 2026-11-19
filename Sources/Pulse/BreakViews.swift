@@ -838,6 +838,7 @@ struct BreakSettingsSection: View {
                     Text("Easy").foregroundStyle(.pulseSecondary)
                     Slider(value: Binding(get: { Double(settings.ideaLevel) }, set: { settings.ideaLevel = Int($0.rounded()) }), in: 0...2, step: 1)
                         .labelsHidden()
+                        .accessibilityLabel("Idea level")   // labelsHidden left it nameless in the AX tree (pulse-5uh)
                         .accessibilityValue(BreakSettings.levels[settings.ideaLevel])
                     Text("Wild").foregroundStyle(.pulseSecondary)
                 }
