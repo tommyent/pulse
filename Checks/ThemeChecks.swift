@@ -537,8 +537,8 @@ enum ThemeChecks {
         // exported metadata comes back exactly (Sol's round 3 review: brackets inside strings were reformatted, and a
         // 299-character description grew past 300 and was refused): export, import, export again, byte for byte
         var meta = PulseThemeFile.groove
-        meta.author = "Ana [studio] {north}, \"quoted\""
-        meta.description = String(String(repeating: "A palette [warm, dusk] for {evenings}, \"late\" ones. ", count: 8).prefix(299))
+        meta.author = "Ana [ studio ] {north}, \"quoted\""
+        meta.description = String(String(repeating: "A palette [warm,dusk,amber] for {evenings}, \"late\". ", count: 8).prefix(299))
         assert(meta.description!.count == 299)
         let once = ThemeStore.file(meta), metaFile = elsewhere.appending(path: "meta.json")
         try! once.write(to: metaFile)
