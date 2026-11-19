@@ -47,6 +47,7 @@ the light or the dark theme as one file to share.
 | File | What it is |
 |---|---|
 | `classic-glass.json`, `classic-solid.json`, `groove.json`, `groove-white.json`, `groove-black.json` | Pulse's own themes, as examples to copy. They are built into Pulse and always there; these copies are rewritten at each launch, and edits to them never apply (an edited copy is first moved beside it as `<name>.json.replaced-<time>`; if it can't be moved, it stays as it is and its `.error` says why). Copy one under a new name to make your own. |
+| `glacier.json`, `orchard.json`, `matcha-washi.json`, `linen.json`, `abyss.json`, `forest-canopy.json`, `velvet.json`, `synthwave-chrome.json`, `espresso-brass.json`, `newsprint.json` | picks from Pulse's theme collection, built in the same way: always there, rewritten at each launch, never read back. Copy one under a new name to change it. |
 | `<name>.json` | a theme. `<name>` is its id: what Pulse saves as the chosen theme. Rename the file and it is a different theme. |
 | `<name>.error` | written by Pulse when `<name>.json` can't be used: every problem, with the key it is in. Removed once the file is fixed or gone. **Check for it after every edit.** |
 | `AGENTS.md` | this guide |

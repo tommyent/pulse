@@ -1,0 +1,111 @@
+{
+  "accents" : {
+    "antigravity" : "#BF85FF",
+    "antigravity2" : "#4AE8B8",
+    "battery" : "#6BE87B",
+    "breakBar" : "#D48AFF",
+    "claude" : "#FF6B8B",
+    "codex" : "#45D2FF",
+    "grok" : "#FFD24C"
+  },
+  "appearance" : "dark",
+  "author" : "Gemini 4 Hydrogen",
+  "description" : "Anodized midnight-plum slab with obsidian channels and electric neon pigments glowing up the walls.",
+  "format" : 1,
+  "groove" : {
+    "barFill" : 6,
+    "barFloor" : "#0C0914",
+    "barLip" : [1, 1, 0.8, "#CBB8FF", 0.12],
+    "barPress" : [
+      [2.2, 2.4, 2.6, "#000000", 1],
+      [-1, -1, 1, "#CBB8FF", 0.12]
+    ],
+    "barRadius" : 5,
+    "barSlot" : 10,
+    "bubble" : "#2B2142",
+    "bubbleDrop" : [1.4, 1.4, 1, "#000000", 0.82],
+    "bubbleInk" : "#EDE8FA",
+    "bubbleInner" : [
+      [0.8, 0.8, 0.6, "#E3D6FF", 0.24],
+      [-0.9, -0.9, 0.8, "#000000", 0.55]
+    ],
+    "discInk" : "#F3EEFF",
+    "discWell" : "#130E1F",
+    "dome" : [
+      [1.2, 1.2, 1.2, "#E3D6FF", 0.22],
+      [-1.6, -1.6, 2, "#000000", 0.55]
+    ],
+    "drop" : [
+      [3, 4, 5, "#05020A", 0.55],
+      [2, 3, 3, "#05020A", 0.48]
+    ],
+    "face" : "#1E172E",
+    "faceBottom" : "#130E1F",
+    "faceTop" : "#2C2242",
+    "fillDrop" : [1.2, 1.2, 1.6, "#000000", 0.85],
+    "fillInner" : [
+      [1, 1, 1, "#FFFFFF", 0.34],
+      [-1, -1, 1.4, "#000000", 0.4]
+    ],
+    "floor" : "#07050C",
+    "glyph" : [
+      [-0.5, -0.5, 0, "#E3D6FF", 0.48],
+      [1, 1.5, 1, "#000000", 0.9],
+      [2.5, 3.5, 5, "#000000", 0.5]
+    ],
+    "grain" : 0.05,
+    "hubDouble" : 26,
+    "hubSingle" : 40,
+    "inner" : {
+      "channel" : 11,
+      "radius" : 31.5,
+      "tube" : 8.5
+    },
+    "logoDrop" : [
+      [1.6, 2, 1.4, "#000000", 0.85],
+      [3.2, 4.2, 5, "#000000", 0.45]
+    ],
+    "logoInner" : [
+      [0.7, 0.7, 0.5, "#FFFFFF", 0.5],
+      [-0.8, -0.8, 0.8, "#000000", 0.4]
+    ],
+    "onFace" : "#F5F0FF",
+    "outer" : {
+      "channel" : 15,
+      "radius" : 47.5,
+      "tube" : 12
+    },
+    "pressInner" : [
+      [3.6, 3.6, 2.2, "#000000", 1],
+      [-1.8, -1.8, 1.1, "#D8C7FF", 0.26]
+    ],
+    "pressLip" : [1.2, 1.2, 0.8, "#D8C7FF", 0.22],
+    "raise" : [
+      [7, 7, 10, "#E3D6FF", 0.05],
+      [-9, -9, 13, "#000000", 0.35],
+      [1.2, 1.2, 0.9, "#E3D6FF", 0.22],
+      [-1.6, -1.6, 1.4, "#000000", 0.65]
+    ],
+    "secondBarGround" : "#251D38",
+    "slab" : "#1E172E",
+    "slabBottom" : "#140F20",
+    "slabTop" : "#281F3D",
+    "tubeBleed" : [0, 0, 4.2, "accent", 0.55],
+    "tubeInner" : [-0.8, -0.8, 1.4, "#000000", 0.28],
+    "type" : [
+      [-0.035, -0.035, 0, "#FFFFFF", 0.8],
+      [0.06, 0.09, 0.05, "#000000", 0.9],
+      [0.14, 0.2, 0.3, "#000000", 0.55]
+    ],
+    "wall" : [4.4, 4.4, 3.2, "#000000", 0.8]
+  },
+  "ink" : {
+    "alert" : "#FF6B7F",
+    "primary" : "#F0EBFC",
+    "secondary" : "#D7CFF2"
+  },
+  "name" : "Synthwave Chrome",
+  "stale" : 0.58,
+  "surface" : "#1E172E",
+  "track" : "#07050C"
+}

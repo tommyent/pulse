@@ -67,9 +67,9 @@ struct PulseThemeFile: Codable, Equatable {
                                             appearance: .light, look: .grooveWhite)
     static let grooveBlack = PulseThemeFile(name: "Groove Black", description: "A white slab with each ring a black puck pressed into it, Groove's dark colours inside.",
                                             appearance: .light, look: .grooveBlack)
-    /// The themes inside the app, under the ids settings and theme files use. Always there; their ids are reserved.
-    static let builtIn: [(id: String, file: PulseThemeFile)] = [("classic-glass", classicGlass), ("classic-solid", classicSolid),
-                                                               ("groove", groove), ("groove-white", grooveWhite), ("groove-black", grooveBlack)]
+    /// Pulse's own themes, under the ids settings and theme files use; with the collection's picks, the built-ins (`builtIn`).
+    static let pulseOwn: [(id: String, file: PulseThemeFile)] = [("classic-glass", classicGlass), ("classic-solid", classicSolid),
+                                                                ("groove", groove), ("groove-white", grooveWhite), ("groove-black", grooveBlack)]
 }
 
 /// One appearance's half of a skin: what the views read from the environment. Views hold no colour or shadow of their own.

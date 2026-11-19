@@ -22,6 +22,18 @@ struct ThemeChoice: Equatable {
     var classic = "classic-solid"
 }
 
+extension PulseThemeFile {
+    /// Picks from the theme collection (`themes/` in the repository), bundled as their files, the same bytes as there.
+    static let picks: [(id: String, file: PulseThemeFile)] = ["glacier", "orchard", "matcha-washi", "linen", "abyss", "forest-canopy",
+                                                              "velvet", "synthwave-chrome", "espresso-brass", "newsprint"].compactMap { id in
+        guard let url = Bundle.pulseResources.url(forResource: "Resources/themes/\(id)", withExtension: "json"),
+              let data = try? Data(contentsOf: url), case .success(let file) = ThemeStore.decode(data) else { return nil }
+        return (id, file)
+    }
+    /// The themes inside the app, under the ids settings and theme files use. Always there; their ids are reserved.
+    static let builtIn = pulseOwn + picks
+}
+
 /// Pulse's themes: the built-ins, always there, and one JSON file per theme in Application Support/Pulse/Themes,
 /// re-read when the folder changes. A file that fails a check never draws: Pulse keeps its last good version (or
 /// Classic) and writes why to `<name>.error` beside it, removed once the file is fixed. The built-ins and the guide

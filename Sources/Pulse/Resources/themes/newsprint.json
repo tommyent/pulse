@@ -1,0 +1,24 @@
+{
+  "accents" : {
+    "antigravity" : "#B070E8",
+    "antigravity2" : "#5AC8E0",
+    "battery" : "#4EAE62",
+    "breakBar" : "#C090E8",
+    "claude" : "#F06090",
+    "codex" : "#2AA0D0",
+    "grok" : "#E0C040"
+  },
+  "appearance" : "dark",
+  "author" : "Grok",
+  "description" : "Process ink on warm charcoal: magenta, cyan and a deepened yellow.",
+  "format" : 1,
+  "ink" : {
+    "alert" : "#FF6A58",
+    "primary" : "#F4F0E6",
+    "secondary" : "#D8D2C4"
+  },
+  "name" : "Newsprint",
+  "stale" : 0.62,
+  "surface" : "#221E18",
+  "track" : "#3C362C"
+}

@@ -1,0 +1,111 @@
+{
+  "accents" : {
+    "antigravity" : "#BA90E8",
+    "antigravity2" : "#62C7BA",
+    "battery" : "#84C979",
+    "breakBar" : "#A697DF",
+    "claude" : "#EB8459",
+    "codex" : "#75A3EB",
+    "grok" : "#E8BD5B"
+  },
+  "appearance" : "dark",
+  "author" : "Gemini 4 Hydrogen",
+  "description" : "Roasted walnut slab with espresso-dark channels and warm vintage brass instrument dial colours.",
+  "format" : 1,
+  "groove" : {
+    "barFill" : 6,
+    "barFloor" : "#0E0A08",
+    "barLip" : [1, 1, 0.8, "#F5DFC8", 0.11],
+    "barPress" : [
+      [2.2, 2.4, 2.6, "#000000", 1],
+      [-1, -1, 1, "#F5DFC8", 0.11]
+    ],
+    "barRadius" : 5,
+    "barSlot" : 10,
+    "bubble" : "#332720",
+    "bubbleDrop" : [1.4, 1.4, 1, "#000000", 0.8],
+    "bubbleInk" : "#EFE5DA",
+    "bubbleInner" : [
+      [0.8, 0.8, 0.6, "#F7E5D2", 0.22],
+      [-0.9, -0.9, 0.8, "#000000", 0.52]
+    ],
+    "discInk" : "#F7EFE6",
+    "discWell" : "#16100D",
+    "dome" : [
+      [1.2, 1.2, 1.2, "#F7E5D2", 0.2],
+      [-1.6, -1.6, 2, "#000000", 0.52]
+    ],
+    "drop" : [
+      [3, 4, 5, "#050302", 0.52],
+      [2, 3, 3, "#050302", 0.45]
+    ],
+    "face" : "#231B16",
+    "faceBottom" : "#18120E",
+    "faceTop" : "#322620",
+    "fillDrop" : [1.2, 1.2, 1.6, "#000000", 0.85],
+    "fillInner" : [
+      [1, 1, 1, "#FFFFFF", 0.3],
+      [-1, -1, 1.4, "#000000", 0.4]
+    ],
+    "floor" : "#090605",
+    "glyph" : [
+      [-0.5, -0.5, 0, "#F7E5D2", 0.45],
+      [1, 1.5, 1, "#000000", 0.9],
+      [2.5, 3.5, 5, "#000000", 0.5]
+    ],
+    "grain" : 0.1,
+    "hubDouble" : 25,
+    "hubSingle" : 38.5,
+    "inner" : {
+      "channel" : 11,
+      "radius" : 30.5,
+      "tube" : 8
+    },
+    "logoDrop" : [
+      [1.6, 2, 1.4, "#000000", 0.85],
+      [3.2, 4.2, 5, "#000000", 0.45]
+    ],
+    "logoInner" : [
+      [0.7, 0.7, 0.5, "#FFFFFF", 0.48],
+      [-0.8, -0.8, 0.8, "#000000", 0.4]
+    ],
+    "onFace" : "#F7EFE6",
+    "outer" : {
+      "channel" : 16,
+      "radius" : 46.5,
+      "tube" : 12.5
+    },
+    "pressInner" : [
+      [3.6, 3.6, 2.2, "#000000", 1],
+      [-1.8, -1.8, 1.1, "#F5DFC8", 0.24]
+    ],
+    "pressLip" : [1.2, 1.2, 0.8, "#F5DFC8", 0.2],
+    "raise" : [
+      [7, 7, 10, "#F7E5D2", 0.04],
+      [-9, -9, 13, "#000000", 0.32],
+      [1.2, 1.2, 0.9, "#F7E5D2", 0.2],
+      [-1.6, -1.6, 1.4, "#000000", 0.62]
+    ],
+    "secondBarGround" : "#29201B",
+    "slab" : "#231B16",
+    "slabBottom" : "#19120F",
+    "slabTop" : "#2E231D",
+    "tubeBleed" : [0, 0, 3.4, "accent", 0.38],
+    "tubeInner" : [-0.8, -0.8, 1.4, "#000000", 0.3],
+    "type" : [
+      [-0.035, -0.035, 0, "#FFF6EB", 0.82],
+      [0.06, 0.09, 0.05, "#000000", 0.9],
+      [0.14, 0.2, 0.3, "#000000", 0.55]
+    ],
+    "wall" : [4.4, 4.4, 3.2, "#000000", 0.8]
+  },
+  "ink" : {
+    "alert" : "#FF7A66",
+    "primary" : "#F2E8DD",
+    "secondary" : "#D8C9BA"
+  },
+  "name" : "Espresso Brass",
+  "stale" : 0.6,
+  "surface" : "#231B16",
+  "track" : "#090605"
+}

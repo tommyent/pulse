@@ -136,7 +136,16 @@ enum ThemeChecks {
     // MARK: the format
 
     static func checkBuiltIns() {
-        assert(PulseThemeFile.builtIn.map(\.id) == ["classic-glass", "classic-solid", "groove", "groove-white", "groove-black"])
+        assert(PulseThemeFile.builtIn.map(\.id) == ["classic-glass", "classic-solid", "groove", "groove-white", "groove-black",
+                                                    "glacier", "orchard", "matcha-washi", "linen", "abyss", "forest-canopy",
+                                                    "velvet", "synthwave-chrome", "espresso-brass", "newsprint"])
+        // the picks are the collection's files, byte for byte: the app's copy, the repository's themes/, and what Pulse writes
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        for (id, file) in PulseThemeFile.picks {
+            let bundled = try! Data(contentsOf: repo.appending(path: "Sources/Pulse/Resources/themes/\(id).json"))
+            assert(bundled == ThemeStore.file(file), "\(id): the app's copy is written as Pulse writes theme files")
+            assert(try! Data(contentsOf: repo.appending(path: "themes/\(id).json")) == bundled, "\(id): the same file as themes/\(id).json")
+        }
         for (id, file) in PulseThemeFile.builtIn {
             guard case .success(let read) = ThemeStore.decode(ThemeStore.file(file)) else {
                 fatalError("\(id) is refused by its own checks: \(refusal(ThemeStore.file(file), id))")
@@ -665,9 +674,12 @@ enum ThemeChecks {
         try! ThemeStore.file(ThemeGuide.paper).write(to: folder.appending(path: "paper.json"))
         try! guideExamples[1].write(to: folder.appending(path: "ember-glass.json"))
         settle(store, store.reload())
-        assert(store.choices(for: .light).map(\.id) == ["classic-glass", "classic-solid", "groove-white", "groove-black", "ember-glass", "paper"],
+        assert(store.choices(for: .light).map(\.id) == ["classic-glass", "classic-solid", "groove-white", "groove-black",
+                                                          "glacier", "orchard", "matcha-washi", "linen", "ember-glass", "paper"],
                "the light menu: \(store.choices(for: .light).map(\.id))")
-        assert(store.choices(for: .dark).map(\.id) == ["classic-glass", "classic-solid", "groove", "ember-glass"], "the dark menu: \(store.choices(for: .dark).map(\.id))")
+        assert(store.choices(for: .dark).map(\.id) == ["classic-glass", "classic-solid", "groove", "abyss", "forest-canopy", "velvet",
+                                                         "synthwave-chrome", "espresso-brass", "newsprint", "ember-glass"],
+               "the dark menu: \(store.choices(for: .dark).map(\.id))")
 
         // Auto follows the system, live; Light and Dark keep to theirs
         var choice = ThemeChoice(mode: .auto, light: "groove-white", dark: "groove", classic: "classic-glass")

@@ -2,7 +2,8 @@
 // Builds every source but the app's entry point, so it stands in for the two things PulseApp.swift defines.
 import SwiftUI
 
-extension Bundle { static let pulseResources = Bundle.main }
+// the sources' Resources, as the app's bundle holds them (the built-in themes' files)
+extension Bundle { static let pulseResources = Bundle(path: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appending(path: "Sources/Pulse").path)! }
 final class OverlayHostingView<Content: View>: NSHostingView<Content> {}
 
 @main
