@@ -214,7 +214,43 @@ enum SettingsStateChecks {
     /// Settings' sidebar: every pane is there, in order, with a symbol that exists; a pane opened by name (Break
     /// settings… opens Breaks) selects its row; and a row chosen in the list opens its pane.
     @MainActor private static func checkSettingsPanes() {
-        assert(SettingsPane.allCases.map(\.title) == ["General", "Appearance", "Accounts", "Rings", "Battery", "Codex pet", "Agents", "Breaks"])
+        // each pane takes its own height, as classic Mac Settings do: the layout reports the chosen pane's own height
+        // (its Form's content, measured in an offscreen window where SwiftUI lays the Form out), which sizes the window
+        // (SettingsWindow.fit) between the sidebar's minimum and the screen's room; it no longer opens every pane at 830
+        _ = NSApplication.shared
+        final class Got { var height: CGFloat = 0 }
+        func measured<P: View>(@ViewBuilder _ pane: () -> P) -> CGFloat {
+            let got = Got()
+            let host = NSHostingView(rootView: SettingsLayout(selection: .constant(.rings), onPaneHeight: { got.height = $0 }) { pane() })
+            host.frame = NSRect(x: 0, y: 0, width: SettingsPane.sidebarWidth + 1 + SettingsPane.paneWidth, height: 600)
+            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = host
+            for _ in 0 ..< 10 { RunLoop.main.run(until: Date().addingTimeInterval(0.03)); host.layoutSubtreeIfNeeded() }
+            window.close()
+            return got.height
+        }
+        let one = measured { Form { Text("pane") }.formStyle(.grouped) }
+        let twelve = measured { Form { Section { ForEach(0 ..< 12) { Text("row \($0)") } } }.formStyle(.grouped) }
+        let eighty = measured { Form { ForEach(0 ..< 80) { Text("row \($0)") } }.formStyle(.grouped) }
+        assert(one > 20 && one < twelve && twelve < eighty, "panes report their own heights: \(one), \(twelve), \(eighty)")
+        assert(SettingsPane.windowHeight(content: one, room: 2000) == SettingsPane.minHeight, "a one-row pane: the sidebar's minimum, not 830")
+        let mid = SettingsPane.windowHeight(content: twelve, room: 2000)
+        assert(mid > SettingsPane.minHeight + 60 && mid < 700, "a 12-row pane is its own height: \(mid)")
+        assert(SettingsPane.windowHeight(content: eighty, room: 500) == 500, "a pane taller than the room stops there and scrolls")
+        // the layout itself fills whatever the window is, down to the minimum, so the pane can scroll
+        let layout = NSHostingController(rootView: SettingsLayout(selection: .constant(.agents)) { Form { Text("pane") }.formStyle(.grouped) })
+        for room in [600.0, 420] {
+            assert(layout.sizeThatFits(in: CGSize(width: SettingsPane.sidebarWidth + 1 + SettingsPane.paneWidth, height: room)).height == room)
+        }
+        assert(SettingsPane.windowHeight(content: 640, room: 1000) == 640 && SettingsPane.windowHeight(content: 100, room: 1000) == SettingsPane.minHeight
+               && SettingsPane.windowHeight(content: 1400, room: 900) == 900 && SettingsPane.windowHeight(content: 1400, room: 100) == SettingsPane.minHeight)
+        // the sidebar's list with Launch at login under it fits in the shortest window
+        let sidebar = NSHostingController(rootView: SettingsSidebar(selection: .constant(.appearance), footer: AnyView(Toggle("Launch at login", isOn: .constant(true)).toggleStyle(.checkbox).padding(.horizontal, 10))))
+        let needs = sidebar.sizeThatFits(in: CGSize(width: SettingsPane.sidebarWidth, height: 0)).height
+        assert(needs <= SettingsPane.minHeight, "the sidebar needs \(needs) pt, more than the shortest window")
+
+        assert(SettingsPane.allCases.map(\.title) == ["Appearance", "Accounts", "Rings", "Battery", "Codex pet", "Agents", "Breaks"],
+               "no General pane: Launch at login is under the sidebar's list")
         for pane in SettingsPane.allCases { assert(NSImage(systemSymbolName: pane.symbol, accessibilityDescription: nil) != nil, "\(pane.symbol) exists") }
 
         // captions take the theme's secondary ink: Classic's grey in Classic, as before; dark grey on Groove White
@@ -224,25 +260,25 @@ enum SettingsStateChecks {
         assert(PulseSecondary().resolve(in: env) == PulseSkin.grooveWhite.secondary.resolve(in: env), "Groove White's captions are its own")
         assert(PulseSkin.grooveWhite.ink.secondary.contrast(with: PulseSkin.grooveWhite.groove!.slab) >= 4.5)
 
-        // ↓ from General reaches every pane in order and stops at Breaks; ↑ goes back and stops at General
-        var walked = [SettingsPane.general]
+        // ↓ from Appearance reaches every pane in order and stops at Breaks; ↑ goes back and stops at Appearance
+        var walked = [SettingsPane.appearance]
         for _ in 0 ..< 10 { walked.append(walked.last!.moved(by: 1)) }
-        assert(Array(walked.prefix(8)) == SettingsPane.allCases && walked.last == .breaks, "↓ reaches every pane: \(walked.map(\.title))")
-        assert(SettingsPane.breaks.moved(by: -7) == .general && SettingsPane.general.moved(by: -1) == .general)
+        assert(Array(walked.prefix(7)) == SettingsPane.allCases && walked.last == .breaks, "↓ reaches every pane: \(walked.map(\.title))")
+        assert(SettingsPane.breaks.moved(by: -6) == .appearance && SettingsPane.appearance.moved(by: -1) == .appearance)
 
         // the sidebar in an offscreen window (never shown): the pane set (as Break settings… sets Breaks) is the one row
         // drawn in the accent colour, each lower down the list in order. SwiftUI builds no accessibility tree and takes no clicks in a window
         // that isn't on screen, so clicking every row and VoiceOver's reading of them are checked in the app (on m1).
-        final class Box: ObservableObject { @Published var pane = SettingsPane.general }
+        final class Box: ObservableObject { @Published var pane = SettingsPane.appearance }
         struct Host: View {
             @ObservedObject var box: Box
             // a fixed accent (pure blue) for the geometry: the real one is whatever the Mac's is, tested for contrast below
-            var body: some View { SettingsSidebar(selection: $box.pane, accent: Color(rgb: 0x0000FF)).frame(height: SettingsPane.height).background(Color.black) }
+            var body: some View { SettingsSidebar(selection: $box.pane, accent: Color(rgb: 0x0000FF)).frame(height: 600).background(Color.black) }
         }
         _ = NSApplication.shared
         let box = Box()
         let host = NSHostingView(rootView: Host(box: box))
-        host.frame = NSRect(x: 0, y: 0, width: SettingsPane.sidebarWidth, height: SettingsPane.height)
+        host.frame = NSRect(x: 0, y: 0, width: SettingsPane.sidebarWidth, height: 600)
         let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = host
         func settle() { for _ in 0 ..< 6 { RunLoop.main.run(until: Date().addingTimeInterval(0.03)); host.layoutSubtreeIfNeeded() } }
@@ -295,14 +331,7 @@ enum SettingsStateChecks {
             }
         }
 
-        // the window's height: 830 when there's room, shorter (down to 360) when there isn't, and the layout fits any of
-        // them (it has no fixed height; the pane scrolls)
-        assert(SettingsPane.windowHeight(room: 1000) == 830 && SettingsPane.windowHeight(room: 600) == 600 && SettingsPane.windowHeight(room: 200) == 360)
-        let layout = NSHostingController(rootView: SettingsLayout(selection: .constant(.agents)) { Form { Text("pane") }.formStyle(.grouped) })
         let width = SettingsPane.sidebarWidth + 1 + SettingsPane.paneWidth
-        for room in [600.0, 420] {
-            assert(layout.sizeThatFits(in: CGSize(width: width, height: room)).height <= room, "\(room) pt of room: \(layout.sizeThatFits(in: CGSize(width: width, height: room)))")
-        }
 
         // results people come back to (a theme import, a test push) outlive the pane they were shown in: the pane is
         // rebuilt each time it's chosen, so they're kept in SettingsResults, which a rebuilt pane reads
@@ -322,7 +351,7 @@ enum SettingsStateChecks {
         }
         let panes = Panes(), store = ThemeStore(folder: FileManager.default.temporaryDirectory.appending(path: "panes-\(UUID().uuidString)"))
         let switcher = NSHostingView(rootView: Switcher(panes: panes, store: store))
-        switcher.frame = NSRect(x: 0, y: 0, width: width, height: SettingsPane.height)
+        switcher.frame = NSRect(x: 0, y: 0, width: width, height: 600)
         let switchWindow = NSWindow(contentRect: switcher.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         switchWindow.contentView = switcher
         func spin() { for _ in 0 ..< 6 { RunLoop.main.run(until: Date().addingTimeInterval(0.03)); switcher.layoutSubtreeIfNeeded() } }

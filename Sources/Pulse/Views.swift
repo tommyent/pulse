@@ -1255,6 +1255,27 @@ private let settingsLog = Logger(subsystem: "io.github.tommyent.pulse", category
 /// rather than a window looked up by title or identifier.
 @MainActor enum SettingsWindow {
     static weak var current: NSWindow?
+    private static var content: CGFloat?   // the chosen pane's own height, last measured
+
+    /// Settings as tall as the chosen pane (`content`, below the title bar), as classic Mac Settings are: its top stays
+    /// where it is, it stops at the screen's room (the pane scrolls past that) and stays on the screen. Done on the next
+    /// turn of the main queue: resizing the window from a height measured during SwiftUI's layout, inside that layout
+    /// (a window sized to its content), went round in a loop until AppKit stopped Pulse. Within a point it's left alone.
+    static func fit(content: CGFloat? = nil) {
+        if let content { self.content = content }
+        DispatchQueue.main.async {
+            guard let window = current, let content = Self.content, let visible = (window.screen ?? NSScreen.main)?.visibleFrame else { return }
+            let chrome = window.frame.height - window.contentLayoutRect.height   // the title bar
+            let height = SettingsPane.windowHeight(content: content, room: visible.height - chrome) + chrome
+            guard abs(window.frame.height - height) > 1 else { return }
+            var frame = window.frame
+            frame.origin.y += frame.height - height
+            frame.size.height = height
+            frame.origin.y = max(visible.minY, min(frame.origin.y, visible.maxY - height))
+            window.setFrame(frame, display: true, animate: window.isVisible)
+            settingsLog.notice("fit: pane \(Int(content)), window \(Int(height)) tall")
+        }
+    }
 }
 
 /// Opens Settings in front. Pulse is an accessory app, and macOS may not let it become active (another app in front, a
@@ -1281,29 +1302,23 @@ private let settingsLog = Logger(subsystem: "io.github.tommyent.pulse", category
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { raiseSettings(tries: tries - 1) }
 }
 
-/// Tells `SettingsWindow` which window Settings' view is in, each time it moves into one, and sizes that window: the
-/// tallest pane's height where the screen has room for it, else as much as the screen's usable height allows (the
-/// pane scrolls), never less than `SettingsPane.minHeight`. SwiftUI opens Settings at the content's fitting height.
+/// Tells `SettingsWindow` which window Settings' view is in, each time it moves into one, and fits it to the chosen pane
+/// then, and again when it moves to another screen (whose room may differ).
 private struct SettingsWindowReader: NSViewRepresentable {
     final class Reader: NSView {
+        private var watch: NSObjectProtocol?
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            watch.map(NotificationCenter.default.removeObserver)
+            watch = nil
             guard let window else { return }
-            MainActor.assumeIsolated { SettingsWindow.current = window }
-            DispatchQueue.main.async { [weak window] in   // once SwiftUI has given the window its first size
-                guard let window else { return }
-                // the pane's area is below the title bar; the content view may reach under it (a full-size content view)
-                let layout = window.contentLayoutRect.height, view = window.contentView?.frame.size ?? window.frame.size
-                let underBar = view.height - layout, chrome = window.frame.height - layout
-                let room = (window.screen ?? NSScreen.main).map { $0.visibleFrame.height - chrome } ?? SettingsPane.height
-                let height = SettingsPane.windowHeight(room: room)
-                if abs(layout - height) > 1 { window.setContentSize(NSSize(width: view.width, height: height + underBar)) }
-                if let visible = (window.screen ?? NSScreen.main)?.visibleFrame {   // grown, it stays on the screen
-                    var origin = window.frame.origin
-                    origin.y = max(visible.minY, min(origin.y, visible.maxY - window.frame.height))
-                    window.setFrameOrigin(origin)
-                }
-                settingsLog.notice("sized: \(Int(layout)) to \(Int(window.contentLayoutRect.height)) below the title bar, room \(Int(room))")
+            MainActor.assumeIsolated {
+                SettingsWindow.current = window
+                SettingsWindow.fit()
+            }
+            watch = NotificationCenter.default.addObserver(forName: NSWindow.didChangeScreenNotification, object: window, queue: .main) { _ in
+                MainActor.assumeIsolated { SettingsWindow.fit() }
             }
         }
     }
@@ -1459,9 +1474,12 @@ struct SettingsView: View {
     // owned by macOS, not state.json, so a change in System Settings → Login Items shows here too
     @State private var loginItem = SMAppService.mainApp.status
 
-    /// A sidebar of panes, the chosen one beside it. Only the layout is grouped: every value is saved where it always was.
+    /// A sidebar of panes with Launch at login under it, the chosen pane beside it. Only the layout is grouped: every
+    /// value is saved where it always was.
     var body: some View {
-        SettingsLayout(selection: $state.settingsTab) { pane(state.settingsTab) }
+        SettingsLayout(selection: $state.settingsTab, footer: AnyView(launchAtLogin), onPaneHeight: { SettingsWindow.fit(content: $0) }) {
+            pane(state.settingsTab)
+        }
         .background(SettingsWindowReader())
         .navigationTitle(state.settingsTab.title)
         .onAppear {
@@ -1470,24 +1488,28 @@ struct SettingsView: View {
         }
     }
 
+    /// Under the sidebar's list, as the General pane's one setting was.
+    private var launchAtLogin: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Launch at login", isOn: Binding(
+                get: { loginItem == .enabled },
+                set: { on in
+                    try? on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
+                    loginItem = SMAppService.mainApp.status
+                }))
+                .toggleStyle(.checkbox)
+                .accessibilityLabel("Launch at login")
+            if loginItem == .requiresApproval {
+                Button("Allow Pulse in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
+                    .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 10)
+    }
+
     /// A pane's content, as it was in its tab.
     @ViewBuilder private func pane(_ pane: SettingsPane) -> some View {
         switch pane {
-        case .general:
-            form {
-                Section {
-                    Toggle("Launch at login", isOn: Binding(
-                        get: { loginItem == .enabled },
-                        set: { on in
-                            try? on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
-                            loginItem = SMAppService.mainApp.status
-                        }))
-                        .accessibilityLabel("Launch at login")
-                    if loginItem == .requiresApproval {
-                        Button("Allow Pulse in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
-                    }
-                }
-            }
         case .appearance:
             form {
                 AppearanceSettings(choice: $state.persisted.themeChoice, themes: ThemeStore.shared)
@@ -1616,32 +1638,37 @@ struct SettingsView: View {
     }
 }
 
-/// Settings' frame: the sidebar, then the chosen pane at the panes' width; as tall as the tallest pane would like,
-/// shorter where the screen is.
+/// Settings' frame: the sidebar, then the chosen pane at the panes' width, filling the window. The pane's own height (its
+/// Form's content) goes to `onPaneHeight`, which sizes the window to it (`SettingsWindow.fit`), as classic Mac Settings
+/// are; past the screen's room the pane scrolls.
 struct SettingsLayout<Pane: View>: View {
     @Binding var selection: SettingsPane
     var accent: Color = .accentColor
+    var footer = AnyView(EmptyView())   // under the sidebar's list (Launch at login)
+    var onPaneHeight: (CGFloat) -> Void = { _ in }
     @ViewBuilder var pane: Pane
 
     var body: some View {
         HStack(spacing: 0) {
-            SettingsSidebar(selection: $selection, accent: accent)
+            SettingsSidebar(selection: $selection, accent: accent, footer: footer)
             Divider()
             pane.frame(width: SettingsPane.paneWidth)
+                .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom } action: { _, height in
+                    onPaneHeight(height)
+                }
         }
-        .frame(minHeight: SettingsPane.minHeight, idealHeight: SettingsPane.height)   // no cap: SettingsWindowReader sizes the window
+        .frame(minHeight: SettingsPane.minHeight)
     }
 }
 
 /// Settings' panes, in the sidebar's order: each one's name (also the window's title) and symbol.
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general = "General", appearance = "Appearance", accounts = "Accounts", rings = "Rings", battery = "Battery", codexPet = "Codex pet", agents = "Agents", breaks = "Breaks"
+    case appearance = "Appearance", accounts = "Accounts", rings = "Rings", battery = "Battery", codexPet = "Codex pet", agents = "Agents", breaks = "Breaks"
 
     var id: Self { self }
     var title: String { rawValue }
     var symbol: String {
         switch self {
-        case .general: "gearshape"
         case .appearance: "paintpalette"
         case .accounts: "person.crop.circle"
         case .rings: "circle.circle"
@@ -1654,30 +1681,40 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 
     static let sidebarWidth: CGFloat = 190
     static let paneWidth: CGFloat = 460
-    /// The window's height: the tallest pane's (Agents) as it was in its tab, so none is cut off. It's the preferred
-    /// height, not a minimum: on a short screen (or larger text) the window can be shorter, down to `minHeight`, and
-    /// the pane scrolls.
-    static let height: CGFloat = 830
-    static let minHeight: CGFloat = 360
+    /// The shortest Settings gets: the sidebar's list and Launch at login under it still fit.
+    static let minHeight: CGFloat = 320
 
-    /// The height below the title bar for a screen with `room` points to spare there.
-    static func windowHeight(room: CGFloat) -> CGFloat { max(minHeight, min(height, room)) }
+    /// The height below the title bar: the pane's own (`content`), never less than the sidebar needs, and no more than the
+    /// screen's `room`, past which the pane scrolls.
+    static func windowHeight(content: CGFloat, room: CGFloat) -> CGFloat { max(minHeight, min(content.rounded(.up), room)) }
 }
 
 /// Settings' sidebar: every pane, ↑ and ↓ to move, the theme's window behind it. Drawn here rather than by a List,
 /// whose selection takes the application's appearance, not the window's: in Groove White it was a black bar over
 /// black text while Settings wasn't key. The chosen row is the accent colour, its label black or white, whichever
 /// reads better on that accent (white on the default blue is only 3.8:1); with the keyboard in the list, a ring
-/// marks it.
+/// marks it. Under the list, `footer` (Launch at login), outside the list's keys and its accessibility group.
 struct SettingsSidebar: View {
     @Binding var selection: SettingsPane
     var accent: Color = .accentColor   // the chosen row's fill; the checks pin one
+    var footer = AnyView(EmptyView())
     @FocusState private var focused: Bool
     @Environment(\.self) private var environment
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            list
+            Divider().padding(.horizontal, 10)
+            footer
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 10)
+        .frame(width: SettingsPane.sidebarWidth)
+    }
+
+    private var list: some View {
         let fill = accent.resolve(in: environment)
-        VStack(alignment: .leading, spacing: 2) {
+        return VStack(alignment: .leading, spacing: 2) {
             ForEach(SettingsPane.allCases) { pane in
                 let chosen = pane == selection
                 Button {
@@ -1702,10 +1739,8 @@ struct SettingsSidebar: View {
                 .accessibilityLabel(pane.title)
                 .accessibilityAddTraits(chosen ? .isSelected : [])
             }
-            Spacer(minLength: 0)
         }
-        .padding(10)
-        .frame(width: SettingsPane.sidebarWidth)
+        .padding(.horizontal, 10)
         .focusable()
         .focused($focused)
         .focusEffectDisabled()   // the ring above marks it, around the chosen row

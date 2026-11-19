@@ -191,7 +191,7 @@ final class AppState: ObservableObject {
     var gliding = false   // the rail is moving to its edge: hover changes would move its target mid-flight
     // the break cup's menu is up: the pointer leaves the rail to reach it, which mustn't close it; tooltips hide meanwhile
     @Published var menuOpen = false
-    @Published var settingsTab = SettingsPane.general   // the pane Settings shows, kept while Pulse runs; Break settings… opens Breaks
+    @Published var settingsTab = SettingsPane.appearance   // the pane Settings shows, kept while Pulse runs; Break settings… opens Breaks
     private var refreshRequested = false
     private var agy = AgyPause() { didSet { if persisted.agyHold != agy.hold { persisted.agyHold = agy.hold } } }
     private let fetches = ProviderFetches { await fetchSnapshot($0) }
