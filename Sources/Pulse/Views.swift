@@ -1335,6 +1335,48 @@ private struct SettingsWindowReader: NSViewRepresentable {
     @Published var testPush = ""
 }
 
+/// Settings › Appearance's Copy Agent Prompt. After a copy it is green and reads "✓ Copied" for `shown`, and VoiceOver
+/// says "Copied". The longer label stays underneath, hidden, so the button keeps its width and nothing beside it moves.
+struct CopyPromptButton: View {
+    static let shown: Duration = .seconds(2)
+    /// Dark enough for the button's white label, at about 5:1 (on the system green it would be about 2.2:1).
+    static let green = Color(.sRGB, red: 0.10, green: 0.50, blue: 0.20)
+    static func label(copied: Bool) -> String { copied ? "✓ Copied" : "Copy Agent Prompt" }
+
+    let copied: Bool
+    let action: () -> Void
+
+    var body: some View {
+        let button = Button {
+            action()
+            AccessibilityNotification.Announcement("Copied").post()
+        } label: {
+            ZStack {
+                Text(Self.label(copied: false)).hidden()
+                Text(Self.label(copied: copied))
+            }
+        }
+        .accessibilityLabel(copied ? "Copied" : Self.label(copied: false))
+        if copied {
+            button.buttonStyle(Copied())
+        } else {
+            button
+        }
+    }
+
+    /// The copied look, drawn here rather than as a tinted prominent button, which macOS draws grey in a window that
+    /// isn't key: the same size as the plain button, filled with `green`, its label white.
+    private struct Copied: ButtonStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(CopyPromptButton.green.opacity(configuration.isPressed ? 0.8 : 1), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+    }
+}
+
 /// Settings › Appearance: when Pulse is light or dark, a theme for each, and the theme files (Import…, Export…, a file
 /// dropped here, what's wrong with any that can't be used, and a line to copy that sets an agent to make one).
 struct AppearanceSettings: View {
@@ -1343,6 +1385,8 @@ struct AppearanceSettings: View {
     @ObservedObject private var results = SettingsResults.shared
     @State private var agentName = ""
     @State private var promptCopied = false
+    @State private var justCopied = false   // the button's "✓ Copied", for CopyPromptButton.shown
+    @State private var copies = 0           // each copy restarts that time
 
     var body: some View {
         Section {
@@ -1401,12 +1445,21 @@ struct AppearanceSettings: View {
                         .frame(width: 140)
                         .accessibilityLabel("Name for the agent's theme")
                         .onChange(of: agentName) { promptCopied = false }
-                    Button("Copy Agent Prompt") {
+                    CopyPromptButton(copied: justCopied) {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(ThemeStore.agentPrompt(folder: themes.folder, name: agentName), forType: .string)
                         promptCopied = true
+                        justCopied = true
+                        copies += 1
                     }
                     .help("Copies a line for a coding agent: read the guide in the Themes folder and save a theme there")
+                    .task(id: copies) {
+                        guard copies > 0 else { return }
+                        do {
+                            try await Task.sleep(for: CopyPromptButton.shown)
+                            justCopied = false
+                        } catch {}   // a newer copy started its own time
+                    }
                 }
             } label: {
                 Text("Make one with an agent")

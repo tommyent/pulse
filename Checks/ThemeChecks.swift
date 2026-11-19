@@ -24,11 +24,43 @@ enum ThemeChecks {
     }
 
     /// Settings' Copy Agent Prompt: the guide's whole path in quotes (spaces and all), the name when there is one.
-    static func checkAgentPrompt() {
+    @MainActor static func checkAgentPrompt() {
         let folder = URL(filePath: "/tmp/Application Support/Pulse/Themes", directoryHint: .isDirectory)
         let guide = "Read \"/tmp/Application Support/Pulse/Themes/AGENTS.md\" and make a Pulse theme"
         assert(ThemeStore.agentPrompt(folder: folder, name: "  Ember Two ") == guide + " called Ember Two; save it as JSON in that folder.")
         assert(ThemeStore.agentPrompt(folder: folder, name: " \n") == guide + "; save it as JSON in that folder.", "no name: the agent picks one")
+        checkCopyPromptButton()
+    }
+
+    /// The button after a copy: green, "✓ Copied" for about 2 s, the same width as before (nothing beside it moves), and
+    /// its label readable on the green. Drawn in a window that's never shown, where controls render.
+    @MainActor static func checkCopyPromptButton() {
+        _ = NSApplication.shared
+        assert(CopyPromptButton.shown == .seconds(2))
+        assert(CopyPromptButton.label(copied: true) == "✓ Copied" && CopyPromptButton.label(copied: false) == "Copy Agent Prompt")
+        func draw(copied: Bool) -> (width: CGFloat, greenPixels: Int) {
+            let host = NSHostingView(rootView: CopyPromptButton(copied: copied) {}.padding(8).background(Color(white: 0.12)))
+            host.frame = NSRect(origin: .zero, size: host.fittingSize)
+            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.contentView = host
+            for _ in 0 ..< 6 { RunLoop.main.run(until: Date().addingTimeInterval(0.03)); host.layoutSubtreeIfNeeded() }
+            let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
+            host.cacheDisplay(in: host.bounds, to: rep)
+            var green = 0
+            for x in 0 ..< rep.pixelsWide { for y in 0 ..< rep.pixelsHigh {
+                guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                if c.greenComponent > 0.3, c.greenComponent > c.redComponent * 1.6, c.greenComponent > c.blueComponent * 1.4 { green += 1 }
+            } }
+            window.close()
+            return (host.fittingSize.width, green)
+        }
+        let before = draw(copied: false), after = draw(copied: true)
+        assert(before.greenPixels == 0 && after.greenPixels > 200, "green only once copied: \(before.greenPixels) then \(after.greenPixels)")
+        assert(abs(before.width - after.width) < 0.5, "the button keeps its width: \(before.width) then \(after.width)")
+        func luminance(_ c: Color.Resolved) -> Double { 0.2126 * Double(c.linearRed) + 0.7152 * Double(c.linearGreen) + 0.0722 * Double(c.linearBlue) }
+        let green = luminance(CopyPromptButton.green.resolve(in: EnvironmentValues()))
+        assert(1.05 / (green + 0.05) >= 4.5, "white on the copied green reads: \(1.05 / (green + 0.05)):1")
     }
 
     // MARK: helpers
