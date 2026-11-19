@@ -1,0 +1,24 @@
+{
+  "accents" : {
+    "antigravity" : "#BA99ED",
+    "antigravity2" : "#6CD4E0",
+    "battery" : "#7CD08E",
+    "breakBar" : "#96A5EB",
+    "claude" : "#F08A7E",
+    "codex" : "#7AB0F5",
+    "grok" : "#EECD6E"
+  },
+  "appearance" : "dark",
+  "author" : "Gemini 4 Hydrogen",
+  "description" : "Flat Arctic slate-blue rail with crisp frost-pastel aurora rings and snow-white type.",
+  "format" : 1,
+  "ink" : {
+    "alert" : "#FF7D7A",
+    "primary" : "#ECEFF4",
+    "secondary" : "#C9D3E3"
+  },
+  "name" : "Nordic Frost",
+  "stale" : 0.58,
+  "surface" : "#1E2430",
+  "track" : "#354054"
+}

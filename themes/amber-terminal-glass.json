@@ -1,0 +1,25 @@
+{
+  "accents" : {
+    "antigravity" : "#C394FF",
+    "antigravity2" : "#52D9CE",
+    "battery" : "#63DF7B",
+    "breakBar" : "#AF9CFF",
+    "claude" : "#FF8D4F",
+    "codex" : "#73A8FF",
+    "grok" : "#FFCC47"
+  },
+  "appearance" : "any",
+  "author" : "Gemini 4 Hydrogen",
+  "description" : "Retro CRT phosphor accents floating on untinted dark Liquid Glass with warm cream text.",
+  "format" : 1,
+  "glass" : true,
+  "ink" : {
+    "alert" : "#FF7063",
+    "primary" : "#F7F0E2",
+    "secondary" : "#DFD3BE"
+  },
+  "name" : "Amber Terminal Glass",
+  "stale" : 0.55,
+  "surface" : "#12100C",
+  "track" : "#362F24"
+}

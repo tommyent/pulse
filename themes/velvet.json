@@ -1,0 +1,111 @@
+{
+  "accents" : {
+    "antigravity" : "#C868C0",
+    "antigravity2" : "#70B8A8",
+    "battery" : "#88C898",
+    "breakBar" : "#B090D0",
+    "claude" : "#E07890",
+    "codex" : "#7884DC",
+    "grok" : "#E09860"
+  },
+  "appearance" : "dark",
+  "author" : "Grok",
+  "description" : "A plum curtain. Rose, antique gold and orchid pressed into the nap.",
+  "format" : 1,
+  "groove" : {
+    "barFill" : 6,
+    "barFloor" : "#100A12",
+    "barLip" : [1, 1, 0.8, "#FFFFFF", 0.1],
+    "barPress" : [
+      [2.2, 2.4, 2.6, "#000000", 1],
+      [-1, -1, 1, "#FFFFFF", 0.1]
+    ],
+    "barRadius" : 5,
+    "barSlot" : 10,
+    "bubble" : "#4A3050",
+    "bubbleDrop" : [1.4, 1.4, 1, "#000000", 0.8],
+    "bubbleInk" : "#F8F0F6",
+    "bubbleInner" : [
+      [0.8, 0.8, 0.6, "#FFFFFF", 0.22],
+      [-0.9, -0.9, 0.8, "#000000", 0.5]
+    ],
+    "discInk" : "#F6EEF4",
+    "discWell" : "#3A2438",
+    "dome" : [
+      [1.2, 1.2, 1.2, "#FFFFFF", 0.2],
+      [-1.6, -1.6, 2, "#000000", 0.5]
+    ],
+    "drop" : [
+      [3, 4, 5, "#000000", 0.5],
+      [2, 3, 3, "#000000", 0.45]
+    ],
+    "face" : "#321C30",
+    "faceBottom" : "#1C101E",
+    "faceTop" : "#3E2440",
+    "fillDrop" : [1.2, 1.2, 1.6, "#000000", 0.85],
+    "fillInner" : [
+      [1, 1, 1, "#FFFFFF", 0.3],
+      [-1, -1, 1.4, "#000000", 0.4]
+    ],
+    "floor" : "#08060C",
+    "glyph" : [
+      [-0.5, -0.5, 0, "#FFFFFF", 0.5],
+      [1, 1.5, 1, "#000000", 0.9],
+      [2.5, 3.5, 5, "#000000", 0.5]
+    ],
+    "grain" : 0.11,
+    "hubDouble" : 25,
+    "hubSingle" : 38.5,
+    "inner" : {
+      "channel" : 11,
+      "radius" : 30.5,
+      "tube" : 8
+    },
+    "logoDrop" : [
+      [1.6, 2, 1.4, "#000000", 0.85],
+      [3.2, 4.2, 5, "#000000", 0.45]
+    ],
+    "logoInner" : [
+      [0.7, 0.7, 0.5, "#FFFFFF", 0.5],
+      [-0.8, -0.8, 0.8, "#000000", 0.4]
+    ],
+    "onFace" : "#F6EEF4",
+    "outer" : {
+      "channel" : 16,
+      "radius" : 46.5,
+      "tube" : 12.5
+    },
+    "pressInner" : [
+      [3.6, 3.6, 2.2, "#000000", 1],
+      [-1.8, -1.8, 1.1, "#FFFFFF", 0.28]
+    ],
+    "pressLip" : [1.2, 1.2, 0.8, "#FFFFFF", 0.22],
+    "raise" : [
+      [7, 7, 10, "#FFFFFF", 0.04],
+      [-9, -9, 13, "#000000", 0.3],
+      [1.2, 1.2, 0.9, "#FFFFFF", 0.2],
+      [-1.6, -1.6, 1.4, "#000000", 0.6]
+    ],
+    "secondBarGround" : "#3A2438",
+    "slab" : "#2A1828",
+    "slabBottom" : "#1A101C",
+    "slabTop" : "#361E34",
+    "tubeBleed" : [0, 0, 3.4, "accent", 0.4],
+    "tubeInner" : [-0.8, -0.8, 1.4, "#000000", 0.3],
+    "type" : [
+      [-0.035, -0.035, 0, "#FFFFFF", 0.85],
+      [0.06, 0.09, 0.05, "#000000", 0.9],
+      [0.14, 0.2, 0.3, "#000000", 0.55]
+    ],
+    "wall" : [4.4, 4.4, 3.2, "#000000", 0.8]
+  },
+  "ink" : {
+    "alert" : "#FF7A90",
+    "primary" : "#F6EEF4",
+    "secondary" : "#E0D0DC"
+  },
+  "name" : "Velvet",
+  "stale" : 0.62,
+  "surface" : "#2A1828",
+  "track" : "#08060C"
+}

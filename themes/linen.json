@@ -1,0 +1,111 @@
+{
+  "accents" : {
+    "antigravity" : "#6A3874",
+    "antigravity2" : "#14685A",
+    "battery" : "#3A6424",
+    "breakBar" : "#4A4470",
+    "claude" : "#8C3E24",
+    "codex" : "#34307A",
+    "grok" : "#7A5410"
+  },
+  "appearance" : "light",
+  "author" : "Grok",
+  "description" : "Undyed cloth. Plant dyes — clay, indigo, walnut — pressed into a warm ivory slab.",
+  "format" : 1,
+  "groove" : {
+    "barFill" : 6,
+    "barFloor" : "#D4C2A4",
+    "barLip" : [1, 1, 0.8, "#FFFFFF", 0.95],
+    "barPress" : [
+      [2, 2.2, 2.6, "#4C3C2E", 0.75],
+      [-1, -1, 1, "#FFFFFF", 1]
+    ],
+    "barRadius" : 5,
+    "barSlot" : 10,
+    "bubble" : "#F8F2E6",
+    "bubbleDrop" : [1.4, 1.4, 1.2, "#3A2C20", 0.5],
+    "bubbleInk" : "#3A2C20",
+    "bubbleInner" : [
+      [0.8, 0.8, 0.6, "#FFFFFF", 1],
+      [-0.9, -0.9, 0.8, "#6B5846", 0.35]
+    ],
+    "discInk" : "#2A2118",
+    "discWell" : "#C8B494",
+    "dome" : [
+      [1.2, 1.2, 1.2, "#FFFFFF", 1],
+      [-1.6, -1.6, 2, "#6B5846", 0.4]
+    ],
+    "drop" : [
+      [3, 4, 5, "#2E241C", 0.38],
+      [2, 3, 3, "#2E241C", 0.3]
+    ],
+    "face" : "#F3E8D6",
+    "faceBottom" : "#E4D5BE",
+    "faceTop" : "#FBF6EC",
+    "fillDrop" : [1.2, 1.2, 1.6, "#3A2C20", 0.45],
+    "fillInner" : [
+      [1, 1, 1, "#FFFFFF", 0.3],
+      [-1, -1, 1.4, "#000000", 0.3]
+    ],
+    "floor" : "#D4C2A4",
+    "glyph" : [
+      [-0.7, -0.7, 0.3, "#FFFFFF", 1],
+      [1, 1.5, 1.2, "#3A2C20", 0.5],
+      [2.5, 3.5, 5, "#3A2C20", 0.25]
+    ],
+    "grain" : 0.08,
+    "hubDouble" : 25,
+    "hubSingle" : 38.5,
+    "inner" : {
+      "channel" : 11,
+      "radius" : 30.5,
+      "tube" : 8
+    },
+    "logoDrop" : [
+      [1.6, 2, 1.4, "#3A2C20", 0.5],
+      [3.2, 4.2, 5, "#3A2C20", 0.22]
+    ],
+    "logoInner" : [
+      [0.7, 0.7, 0.5, "#FFFFFF", 0.55],
+      [-0.8, -0.8, 0.8, "#000000", 0.3]
+    ],
+    "onFace" : "#2A2118",
+    "outer" : {
+      "channel" : 16,
+      "radius" : 46.5,
+      "tube" : 12.5
+    },
+    "pressInner" : [
+      [3.4, 3.4, 2.6, "#4C3C2E", 0.8],
+      [-1.8, -1.8, 1.2, "#FFFFFF", 1]
+    ],
+    "pressLip" : [1.2, 1.2, 0.8, "#FFFFFF", 1],
+    "raise" : [
+      [7, 7, 10, "#FFFFFF", 0.5],
+      [-9, -9, 13, "#6B5846", 0.22],
+      [1.2, 1.2, 0.9, "#FFFFFF", 0.95],
+      [-1.6, -1.6, 1.6, "#6B5846", 0.5]
+    ],
+    "secondBarGround" : "#D4C2A4",
+    "slab" : "#EFE4D2",
+    "slabBottom" : "#E2D3BC",
+    "slabTop" : "#F7F1E4",
+    "tubeBleed" : [0, 0, 3.4, "accent", 0.22],
+    "tubeInner" : [-0.8, -0.8, 1.4, "#000000", 0.2],
+    "type" : [
+      [-0.05, -0.05, 0.02, "#FFFFFF", 1],
+      [0.06, 0.09, 0.06, "#3A2C20", 0.5],
+      [0.14, 0.2, 0.3, "#3A2C20", 0.28]
+    ],
+    "wall" : [4.4, 4.4, 3.2, "#2A2018", 0.62]
+  },
+  "ink" : {
+    "alert" : "#9C2A1C",
+    "primary" : "#2A2118",
+    "secondary" : "#5C4636"
+  },
+  "name" : "Linen",
+  "stale" : 0.72,
+  "surface" : "#EFE4D2",
+  "track" : "#D4C2A4"
+}

@@ -1,0 +1,111 @@
+{
+  "accents" : {
+    "antigravity" : "#3E3494",
+    "antigravity2" : "#0C6A70",
+    "battery" : "#146848",
+    "breakBar" : "#245080",
+    "claude" : "#7A3048",
+    "codex" : "#145878",
+    "grok" : "#5A6418"
+  },
+  "appearance" : "light",
+  "author" : "Grok",
+  "description" : "Blue-white ice. Cold garnet, fjord blue and lichen pressed into an ice slab.",
+  "format" : 1,
+  "groove" : {
+    "barFill" : 6,
+    "barFloor" : "#B7D0E0",
+    "barLip" : [1, 1, 0.8, "#FFFFFF", 0.95],
+    "barPress" : [
+      [2, 2.2, 2.6, "#345058", 0.75],
+      [-1, -1, 1, "#FFFFFF", 1]
+    ],
+    "barRadius" : 5,
+    "barSlot" : 10,
+    "bubble" : "#F2F8FB",
+    "bubbleDrop" : [1.4, 1.4, 1.2, "#1E3038", 0.5],
+    "bubbleInk" : "#1C3440",
+    "bubbleInner" : [
+      [0.8, 0.8, 0.6, "#FFFFFF", 1],
+      [-0.9, -0.9, 0.8, "#4A6270", 0.35]
+    ],
+    "discInk" : "#102028",
+    "discWell" : "#A4C4D6",
+    "dome" : [
+      [1.2, 1.2, 1.2, "#FFFFFF", 1],
+      [-1.6, -1.6, 2, "#4A6270", 0.4]
+    ],
+    "drop" : [
+      [3, 4, 5, "#182830", 0.38],
+      [2, 3, 3, "#182830", 0.3]
+    ],
+    "face" : "#E2F0F6",
+    "faceBottom" : "#C9DDE8",
+    "faceTop" : "#F4FBFE",
+    "fillDrop" : [1.2, 1.2, 1.6, "#1E3038", 0.45],
+    "fillInner" : [
+      [1, 1, 1, "#FFFFFF", 0.3],
+      [-1, -1, 1.4, "#000000", 0.3]
+    ],
+    "floor" : "#B7D0E0",
+    "glyph" : [
+      [-0.7, -0.7, 0.3, "#FFFFFF", 1],
+      [1, 1.5, 1.2, "#1E3038", 0.5],
+      [2.5, 3.5, 5, "#1E3038", 0.25]
+    ],
+    "grain" : 0.03,
+    "hubDouble" : 25,
+    "hubSingle" : 38.5,
+    "inner" : {
+      "channel" : 11,
+      "radius" : 30.5,
+      "tube" : 8
+    },
+    "logoDrop" : [
+      [1.6, 2, 1.4, "#1E3038", 0.5],
+      [3.2, 4.2, 5, "#1E3038", 0.22]
+    ],
+    "logoInner" : [
+      [0.7, 0.7, 0.5, "#FFFFFF", 0.55],
+      [-0.8, -0.8, 0.8, "#000000", 0.3]
+    ],
+    "onFace" : "#102028",
+    "outer" : {
+      "channel" : 16,
+      "radius" : 46.5,
+      "tube" : 12.5
+    },
+    "pressInner" : [
+      [3.4, 3.4, 2.6, "#345058", 0.8],
+      [-1.8, -1.8, 1.2, "#FFFFFF", 1]
+    ],
+    "pressLip" : [1.2, 1.2, 0.8, "#FFFFFF", 1],
+    "raise" : [
+      [7, 7, 10, "#FFFFFF", 0.5],
+      [-9, -9, 13, "#4A6270", 0.22],
+      [1.2, 1.2, 0.9, "#FFFFFF", 0.95],
+      [-1.6, -1.6, 1.6, "#4A6270", 0.5]
+    ],
+    "secondBarGround" : "#B7D0E0",
+    "slab" : "#D5E8F2",
+    "slabBottom" : "#C2D8E6",
+    "slabTop" : "#EAF4FA",
+    "tubeBleed" : [0, 0, 3.4, "accent", 0.22],
+    "tubeInner" : [-0.8, -0.8, 1.4, "#000000", 0.2],
+    "type" : [
+      [-0.05, -0.05, 0.02, "#FFFFFF", 1],
+      [0.06, 0.09, 0.06, "#1E3038", 0.5],
+      [0.14, 0.2, 0.3, "#1E3038", 0.28]
+    ],
+    "wall" : [4.4, 4.4, 3.2, "#16242C", 0.62]
+  },
+  "ink" : {
+    "alert" : "#9E2430",
+    "primary" : "#102028",
+    "secondary" : "#3A5160"
+  },
+  "name" : "Glacier",
+  "stale" : 0.72,
+  "surface" : "#D5E8F2",
+  "track" : "#B7D0E0"
+}

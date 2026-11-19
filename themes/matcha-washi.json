@@ -1,0 +1,111 @@
+{
+  "accents" : {
+    "antigravity" : "#6E44AD",
+    "antigravity2" : "#166E75",
+    "battery" : "#24732F",
+    "breakBar" : "#5E52A8",
+    "claude" : "#B04119",
+    "codex" : "#2953B8",
+    "grok" : "#8E6100"
+  },
+  "appearance" : "light",
+  "author" : "Gemini 4 Hydrogen",
+  "description" : "Warm Kyoto washi paper slab with celadon-stone channels and rich mineral ink accents.",
+  "format" : 1,
+  "groove" : {
+    "barFill" : 6,
+    "barFloor" : "#D3D6C7",
+    "barLip" : [1, 1, 0.8, "#FFFFFF", 0.92],
+    "barPress" : [
+      [2, 2.2, 2.6, "#4A5242", 0.72],
+      [-1, -1, 1, "#FFFFFF", 0.95]
+    ],
+    "barRadius" : 5,
+    "barSlot" : 10,
+    "bubble" : "#F5F2EA",
+    "bubbleDrop" : [1.4, 1.4, 1.2, "#353D2F", 0.45],
+    "bubbleInk" : "#313B2F",
+    "bubbleInner" : [
+      [0.8, 0.8, 0.6, "#FFFFFF", 1],
+      [-0.9, -0.9, 0.8, "#6A7360", 0.35]
+    ],
+    "discInk" : "#262D24",
+    "discWell" : "#C6C9BA",
+    "dome" : [
+      [1.2, 1.2, 1.2, "#FFFFFF", 0.95],
+      [-1.6, -1.6, 2, "#6A7360", 0.38]
+    ],
+    "drop" : [
+      [3, 4, 5, "#2C3327", 0.35],
+      [2, 3, 3, "#2C3327", 0.26]
+    ],
+    "face" : "#EDE9DD",
+    "faceBottom" : "#DBD5C4",
+    "faceTop" : "#F9F6EF",
+    "fillDrop" : [1.2, 1.2, 1.6, "#353D2F", 0.42],
+    "fillInner" : [
+      [1, 1, 1, "#FFFFFF", 0.28],
+      [-1, -1, 1.4, "#000000", 0.28]
+    ],
+    "floor" : "#D3D6C7",
+    "glyph" : [
+      [-0.7, -0.7, 0.3, "#FFFFFF", 0.95],
+      [1, 1.5, 1.2, "#353D2F", 0.48],
+      [2.5, 3.5, 5, "#353D2F", 0.24]
+    ],
+    "grain" : 0.08,
+    "hubDouble" : 25,
+    "hubSingle" : 38.5,
+    "inner" : {
+      "channel" : 11,
+      "radius" : 30.5,
+      "tube" : 8
+    },
+    "logoDrop" : [
+      [1.6, 2, 1.4, "#353D2F", 0.46],
+      [3.2, 4.2, 5, "#353D2F", 0.2]
+    ],
+    "logoInner" : [
+      [0.7, 0.7, 0.5, "#FFFFFF", 0.52],
+      [-0.8, -0.8, 0.8, "#000000", 0.28]
+    ],
+    "onFace" : "#1D241C",
+    "outer" : {
+      "channel" : 16,
+      "radius" : 46.5,
+      "tube" : 12.5
+    },
+    "pressInner" : [
+      [3.4, 3.4, 2.6, "#4A5242", 0.78],
+      [-1.8, -1.8, 1.2, "#FFFFFF", 0.95]
+    ],
+    "pressLip" : [1.2, 1.2, 0.8, "#FFFFFF", 0.95],
+    "raise" : [
+      [7, 7, 10, "#FFFFFF", 0.48],
+      [-9, -9, 13, "#6A7360", 0.22],
+      [1.2, 1.2, 0.9, "#FFFFFF", 0.9],
+      [-1.6, -1.6, 1.6, "#6A7360", 0.48]
+    ],
+    "secondBarGround" : "#D3D6C7",
+    "slab" : "#EDE9DD",
+    "slabBottom" : "#DFD9C9",
+    "slabTop" : "#F7F4EC",
+    "tubeBleed" : [0, 0, 3.4, "accent", 0.2],
+    "tubeInner" : [-0.8, -0.8, 1.4, "#000000", 0.18],
+    "type" : [
+      [-0.05, -0.05, 0.02, "#FFFFFF", 0.95],
+      [0.06, 0.09, 0.06, "#353D2F", 0.45],
+      [0.14, 0.2, 0.3, "#353D2F", 0.24]
+    ],
+    "wall" : [4.4, 4.4, 3.2, "#242B20", 0.58]
+  },
+  "ink" : {
+    "alert" : "#B0251C",
+    "primary" : "#1D241C",
+    "secondary" : "#3A4538"
+  },
+  "name" : "Matcha Washi",
+  "stale" : 0.68,
+  "surface" : "#EDE9DD",
+  "track" : "#D3D6C7"
+}

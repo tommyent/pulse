@@ -1,0 +1,24 @@
+{
+  "accents" : {
+    "antigravity" : "#D182FF",
+    "antigravity2" : "#3BE0D8",
+    "battery" : "#52DE82",
+    "breakBar" : "#9B94FF",
+    "claude" : "#FF6A4D",
+    "codex" : "#4DA3FF",
+    "grok" : "#FFD140"
+  },
+  "appearance" : "dark",
+  "author" : "Gemini 4 Hydrogen",
+  "description" : "Rain-slicked midnight asphalt with saturated Japanese street-sign rings.",
+  "format" : 1,
+  "ink" : {
+    "alert" : "#FF5E69",
+    "primary" : "#F4F6FC",
+    "secondary" : "#CBD3E6"
+  },
+  "name" : "Tokyo Neon",
+  "stale" : 0.52,
+  "surface" : "#0B0D14",
+  "track" : "#272D42"
+}

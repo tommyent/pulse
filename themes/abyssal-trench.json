@@ -1,0 +1,111 @@
+{
+  "accents" : {
+    "antigravity" : "#AB8FF0",
+    "antigravity2" : "#4AD4C5",
+    "battery" : "#65CE86",
+    "breakBar" : "#8CA1EC",
+    "claude" : "#F27E6B",
+    "codex" : "#5CB0FF",
+    "grok" : "#EDC353"
+  },
+  "appearance" : "dark",
+  "author" : "Gemini 4 Hydrogen",
+  "description" : "Deep oceanic navy-teal hull with Mariana-dark channels and crisp sonar and coral readouts.",
+  "format" : 1,
+  "groove" : {
+    "barFill" : 6,
+    "barFloor" : "#080E17",
+    "barLip" : [1, 1, 0.8, "#BFE0FF", 0.11],
+    "barPress" : [
+      [2.2, 2.4, 2.6, "#000000", 1],
+      [-1, -1, 1, "#BFE0FF", 0.11]
+    ],
+    "barRadius" : 5,
+    "barSlot" : 10,
+    "bubble" : "#1B2B3E",
+    "bubbleDrop" : [1.4, 1.4, 1, "#000000", 0.82],
+    "bubbleInk" : "#E6F0FA",
+    "bubbleInner" : [
+      [0.8, 0.8, 0.6, "#CBE4FF", 0.22],
+      [-0.9, -0.9, 0.8, "#000000", 0.54]
+    ],
+    "discInk" : "#EBF4FC",
+    "discWell" : "#0D1622",
+    "dome" : [
+      [1.2, 1.2, 1.2, "#CBE4FF", 0.2],
+      [-1.6, -1.6, 2, "#000000", 0.54]
+    ],
+    "drop" : [
+      [3, 4, 5, "#010306", 0.54],
+      [2, 3, 3, "#010306", 0.46]
+    ],
+    "face" : "#111C29",
+    "faceBottom" : "#0B121B",
+    "faceTop" : "#19293B",
+    "fillDrop" : [1.2, 1.2, 1.6, "#000000", 0.85],
+    "fillInner" : [
+      [1, 1, 1, "#FFFFFF", 0.3],
+      [-1, -1, 1.4, "#000000", 0.4]
+    ],
+    "floor" : "#04070D",
+    "glyph" : [
+      [-0.5, -0.5, 0, "#CBE4FF", 0.46],
+      [1, 1.5, 1, "#000000", 0.9],
+      [2.5, 3.5, 5, "#000000", 0.5]
+    ],
+    "grain" : 0.06,
+    "hubDouble" : 25,
+    "hubSingle" : 38.5,
+    "inner" : {
+      "channel" : 11,
+      "radius" : 30.5,
+      "tube" : 8
+    },
+    "logoDrop" : [
+      [1.6, 2, 1.4, "#000000", 0.85],
+      [3.2, 4.2, 5, "#000000", 0.45]
+    ],
+    "logoInner" : [
+      [0.7, 0.7, 0.5, "#FFFFFF", 0.5],
+      [-0.8, -0.8, 0.8, "#000000", 0.4]
+    ],
+    "onFace" : "#F0F6FC",
+    "outer" : {
+      "channel" : 16,
+      "radius" : 46.5,
+      "tube" : 12.5
+    },
+    "pressInner" : [
+      [3.6, 3.6, 2.2, "#000000", 1],
+      [-1.8, -1.8, 1.1, "#BFE0FF", 0.25]
+    ],
+    "pressLip" : [1.2, 1.2, 0.8, "#BFE0FF", 0.21],
+    "raise" : [
+      [7, 7, 10, "#CBE4FF", 0.04],
+      [-9, -9, 13, "#000000", 0.34],
+      [1.2, 1.2, 0.9, "#CBE4FF", 0.19],
+      [-1.6, -1.6, 1.4, "#000000", 0.64]
+    ],
+    "secondBarGround" : "#182534",
+    "slab" : "#111C29",
+    "slabBottom" : "#0B131D",
+    "slabTop" : "#172536",
+    "tubeBleed" : [0, 0, 3.6, "accent", 0.42],
+    "tubeInner" : [-0.8, -0.8, 1.4, "#000000", 0.3],
+    "type" : [
+      [-0.035, -0.035, 0, "#FFFFFF", 0.84],
+      [0.06, 0.09, 0.05, "#000000", 0.9],
+      [0.14, 0.2, 0.3, "#000000", 0.55]
+    ],
+    "wall" : [4.4, 4.4, 3.2, "#000000", 0.8]
+  },
+  "ink" : {
+    "alert" : "#FF736B",
+    "primary" : "#E8F1FA",
+    "secondary" : "#C4D6EB"
+  },
+  "name" : "Abyssal Trench",
+  "stale" : 0.58,
+  "surface" : "#111C29",
+  "track" : "#04070D"
+}

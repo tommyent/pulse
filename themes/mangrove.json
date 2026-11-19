@@ -1,0 +1,24 @@
+{
+  "accents" : {
+    "antigravity" : "#98A8F0",
+    "antigravity2" : "#3EC8A4",
+    "battery" : "#6EC46E",
+    "breakBar" : "#A8C070",
+    "claude" : "#F09458",
+    "codex" : "#4AA0C0",
+    "grok" : "#E0A040"
+  },
+  "appearance" : "dark",
+  "author" : "Grok",
+  "description" : "Tidal night. Persimmon, warm pollen and moon-blue on black-green water.",
+  "format" : 1,
+  "ink" : {
+    "alert" : "#FF7A58",
+    "primary" : "#E8F2E4",
+    "secondary" : "#C8D8C4"
+  },
+  "name" : "Mangrove",
+  "stale" : 0.62,
+  "surface" : "#14261E",
+  "track" : "#2E4A3C"
+}

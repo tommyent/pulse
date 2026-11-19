@@ -1,0 +1,24 @@
+{
+  "accents" : {
+    "antigravity" : "#E060C8",
+    "antigravity2" : "#6AD4FF",
+    "battery" : "#6EE08A",
+    "breakBar" : "#C090FF",
+    "claude" : "#FF5C84",
+    "codex" : "#8888FF",
+    "grok" : "#F6EE70"
+  },
+  "appearance" : "dark",
+  "author" : "Grok",
+  "description" : "A black stage. Gels of rose, royal blue, straw, orchid and aqua.",
+  "format" : 1,
+  "ink" : {
+    "alert" : "#FF6A78",
+    "primary" : "#F6F2EA",
+    "secondary" : "#E0D8D0"
+  },
+  "name" : "Marquee",
+  "stale" : 0.62,
+  "surface" : "#140C16",
+  "track" : "#3A2842"
+}

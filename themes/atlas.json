@@ -1,0 +1,24 @@
+{
+  "accents" : {
+    "antigravity" : "#C0A0E8",
+    "antigravity2" : "#5ED4A4",
+    "battery" : "#74B86A",
+    "breakBar" : "#A898D0",
+    "claude" : "#F08868",
+    "codex" : "#68A4D4",
+    "grok" : "#C4983A"
+  },
+  "appearance" : "dark",
+  "author" : "Grok",
+  "description" : "A dusk map. Terracotta, cerulean, ochre and verdigris on blue slate.",
+  "format" : 1,
+  "ink" : {
+    "alert" : "#FF7464",
+    "primary" : "#E8E6DC",
+    "secondary" : "#C8C6BA"
+  },
+  "name" : "Atlas",
+  "stale" : 0.62,
+  "surface" : "#1C2636",
+  "track" : "#3A4C64"
+}
