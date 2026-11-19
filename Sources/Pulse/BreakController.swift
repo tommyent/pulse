@@ -42,6 +42,9 @@ final class BreakController: ObservableObject {
     private weak var state: AppState?
     private var timer: Timer?
     private var panels: [NSPanel] = []
+    /// The app in front when a break took the keyboard, which gets it back when the break ends; nil when Pulse itself
+    /// was in front (Settings), which then keeps it.
+    private var keyboardLender: NSRunningApplication?
     private var pillPanel: NSPanel?   // only while the rings are hidden
     private var recentIdeas: [String] = []   // break-ideas.json: the ideas last shown, oldest first
     private var lockedAt: Date?
@@ -436,6 +439,8 @@ final class BreakController: ObservableObject {
         }
         rememberShownIdea()
         // the keyboard, so Escape can end the break
+        let front = NSWorkspace.shared.frontmostApplication
+        keyboardLender = front == .current ? nil : front
         NSApp.activate(ignoringOtherApps: true)
         (panels.first { $0.screen == main } ?? panels.first)?.makeKey()
         if let first = panels.first {
@@ -516,7 +521,17 @@ final class BreakController: ObservableObject {
         panels = []
         breakEnded = .now
         closing.forEach { $0.close() }
-        if NSApp.isActive { NSApp.deactivate() }   // hand the keyboard back to whatever was in use
+        // The keyboard goes back to the app that had it, by name: deactivating alone left Pulse in front (pulse-2o0), as
+        // it did for the cards. Nothing to do when another app took it during the break, or Pulse had it before.
+        let lender = keyboardLender
+        keyboardLender = nil
+        guard NSApp.isActive else { return }
+        if let lender, !lender.isTerminated {
+            NSApp.yieldActivation(to: lender)
+            lender.activate()
+        } else if lender != nil {
+            NSApp.deactivate()
+        }
     }
 }
 
