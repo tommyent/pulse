@@ -1297,10 +1297,18 @@ struct AppearanceSettings: View {
                 ForEach(ids.prefix(5), id: \.self) { id in
                     let first = themes.problems[id]?.split(separator: "\n").first.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "- ")) } ?? ""
                     Text("⚠︎ \(id).json can't be used: \(first) (more in \(id).error)").foregroundStyle(alert)
+                        .help(themes.problems[id] ?? "")
                 }
                 if ids.count > 5 { Text("⚠︎ and \(ids.count - 5) more theme files that can't be used").foregroundStyle(alert) }
+                let hard = themes.warnings.keys.sorted()
+                ForEach(hard.prefix(max(0, 5 - ids.count)), id: \.self) { id in
+                    let first = themes.warnings[id]?.split(separator: "\n").first.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "- ")) } ?? ""
+                    Text("⚠︎ \(id).json is hard to read in places: \(first)").foregroundStyle(alert)
+                        .help(themes.warnings[id] ?? "")
+                }
+                if hard.count > max(0, 5 - ids.count) { Text("⚠︎ and \(hard.count - max(0, 5 - ids.count)) more themes that are hard to read in places").foregroundStyle(alert) }
                 if let notice = themes.notice { Text("⚠︎ \(notice)").foregroundStyle(alert) }
-                if themes.problems.isEmpty, themes.notice == nil, message == nil {
+                if themes.problems.isEmpty, themes.warnings.isEmpty, themes.notice == nil, message == nil {
                     Text("One JSON file per theme: import one or drop it here. \(ThemeStore.guideName) in the folder describes the format")
                 }
             }
@@ -1320,7 +1328,7 @@ struct AppearanceSettings: View {
                                              if ThemeStore.classicIDs.contains(id) { choice.classic = id }
                                          })) {
             ForEach(themes.choices(for: slot)) { theme in
-                Text(theme.file.name + (themes.problems[theme.id] == nil ? "" : " ⚠︎")).tag(theme.id)
+                Text(theme.file.name + (themes.problems[theme.id] == nil && themes.warnings[theme.id] == nil ? "" : " ⚠︎")).tag(theme.id)
             }
         }
         .accessibilityLabel(title)

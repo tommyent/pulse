@@ -38,6 +38,7 @@ struct ThemeChoice: Equatable {
 
     @Published private(set) var themes: [PulseTheme] = PulseThemeFile.builtIn.map { PulseTheme(id: $0.id, file: $0.file, builtIn: true) }
     @Published private(set) var problems: [String: String] = [:]   // a file's id: what its .error says
+    @Published private(set) var warnings: [String: String] = [:]   // a theme that loads: what's hard to read in it
     @Published private(set) var notice: String?                    // about the folder as a whole (too many files)
     @Published private(set) var systemScheme: ColorScheme = .dark
     @Published private(set) var choice = ThemeChoice()             // as state.json has it
@@ -131,7 +132,8 @@ struct ThemeChoice: Equatable {
             let result = ThemeFolder.importTheme(source, into: folder)
             let message: String
             switch result {
-            case .success(let added): message = "Imported \(added.name) as \(added.id).json."
+            case .success(let added):
+                message = "Imported \(added.name) as \(added.id).json." + (added.hardToRead ? " Some of its text or colours are hard to read; Settings says which." : "")
             case .failure(let problem): message = "\(source.lastPathComponent) wasn't imported:\n\(problem.text)"
             }
             DispatchQueue.main.async { MainActor.assumeIsolated { done(message) } }
@@ -155,6 +157,7 @@ struct ThemeChoice: Equatable {
             let all = PulseThemeFile.builtIn.map { PulseTheme(id: $0.id, file: $0.file, builtIn: true) } + scan.found
             if all != themes { themes = all }
             if scan.issues != problems { problems = scan.issues }
+            if scan.warnings != warnings { warnings = scan.warnings }
             if scan.notice != notice { notice = scan.notice }
         }
         finished = max(finished, number)
@@ -254,6 +257,12 @@ struct ThemeChoice: Equatable {
         }
     }
 
+    /// What's hard to read in a theme that loads, as Settings shows it; nil when nothing is.
+    nonisolated static func warnings(_ file: PulseThemeFile) -> String? {
+        let lines = file.warnings()
+        return lines.isEmpty ? nil : bounded(lines.map { "- \($0)" })
+    }
+
     /// At most 20 problems of at most 200 characters each: a diagnostic stays well under `ThemeFolder.maxDiagnosticBytes`.
     nonisolated static func bounded(_ lines: [String]) -> String {
         lines.prefix(20).map { $0.count > 200 ? String($0.prefix(199)) + "…" : $0 }.joined(separator: "\n")
@@ -320,8 +329,14 @@ struct ThemeChoice: Equatable {
 
 extension PulseThemeFile {
     /// Everything wrong with a decoded theme, each as "key: why". Empty: Pulse may draw it.
-    func problems() -> [String] {
-        var out: [String] = []
+    func problems() -> [String] { check().problems }
+
+    /// What's hard to read in a theme that can be used: each pair under the floor, with where. Empty for the built-ins.
+    func warnings() -> [String] { check().warnings }
+
+    /// Problems (the theme can't be used) and warnings (it can, but some text or colour is hard to read).
+    func check() -> (problems: [String], warnings: [String]) {
+        var out: [String] = [], warnings: [String] = []
         func text(_ key: String, _ value: String?, max: Int, lines: Bool = false) {
             guard let value else { return }
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -337,15 +352,15 @@ extension PulseThemeFile {
             out.append("appearance: a flat theme (no groove) uses Classic's drawing, which is dark only; give it a dark surface, or groove")
         }
         if look.glass != nil, look.groove != nil { out.append("glass: for a flat theme only; a theme with groove draws its own slab") }
-        out += look.problems("", appearance: scheme)
-        return out
+        out += look.problems("", appearance: scheme, warnings: &warnings)
+        return (out, warnings)
     }
 }
 
 extension PulseSkin {
     /// Ranges, the rings' geometry and the contrast floor (Fable's: 4.5:1 for text on its slab, 3:1 for a ring's or a
     /// bar's colour on the floor it lies on, and for marks on a ring's hub).
-    func problems(_ at: String, appearance: ColorScheme) -> [String] {
+    func problems(_ at: String, appearance: ColorScheme, warnings: inout [String]) -> [String] {
         var out: [String] = []
         func range(_ path: String, _ v: Double, _ r: ClosedRange<Double>) {
             if !r.contains(v) { out.append("\(at)\(path): \(v.formatted()) is outside \(r.lowerBound.formatted()) to \(r.upperBound.formatted())") }
@@ -379,14 +394,14 @@ extension PulseSkin {
             return worst.map { "\($0.at): \($0.ratio.formatted(.number.precision(.fractionLength(2)))):1, \(what) needs \(needed.formatted()):1" }
         }
         func opaque(_ path: String, _ c: SkinColor) -> Bool {
-            if c.alpha < 1 { out.append("\(at)\(path): must be opaque (contrast is checked against it)") }
+            if c.alpha < 1 { warnings.append("\(at)\(path): translucent, so how well it reads depends on what's behind it") }
             return c.alpha == 1
         }
         func floor(_ path: String, _ c: SkinColor, on groundPath: String, _ ground: SkinColor, _ needed: Double, _ what: String) {
             guard opaque(path, c), opaque(groundPath, ground) else { return }
             let r = c.contrast(with: ground)
             if r < needed {
-                out.append("\(at)\(path) \(c.hex) on \(at)\(groundPath) \(ground.hex): \(r.formatted(.number.precision(.fractionLength(2)))):1, \(what) needs \(needed.formatted()):1")
+                warnings.append("\(at)\(path) \(c.hex) on \(at)\(groundPath) \(ground.hex): \(r.formatted(.number.precision(.fractionLength(2)))):1, \(what) needs \(needed.formatted()):1")
             }
         }
         // text lies anywhere on the slab, so on every colour its gradient passes through, not only its stops
@@ -395,11 +410,11 @@ extension PulseSkin {
         if slab.allSatisfy({ opaque($0.0, $0.1) }) {
             for (path, c) in [("ink.primary", ink.primary), ("ink.secondary", ink.secondary), ("ink.alert", ink.alert)] {
                 guard let c, opaque(path, c) else { continue }
-                along(slab, needed: 4.5, what: "text") { _ in c }.map { out.append("\(at)\(path) \(c.hex) on \($0)") }
+                along(slab, needed: 4.5, what: "text") { _ in c }.map { warnings.append("\(at)\(path) \(c.hex) on \($0)") }
             }
             if primaryInk.alpha == 1 {   // a number from an earlier refresh, drawn at `stale`
                 along(slab, needed: 4.5, what: "text") { primaryInk.over($0, opacity: stale) }
-                    .map { out.append("\(at)stale: ink at \(stale.formatted()) on \($0)") }
+                    .map { warnings.append("\(at)stale: ink at \(stale.formatted()) on \($0)") }
             }
         }
         let colours: [(String, SkinColor?)] = [("claude", accents.claude), ("codex", accents.codex), ("grok", accents.grok),
@@ -414,7 +429,7 @@ extension PulseSkin {
         guard let g = groove else { return out }
         let hub = [("groove.faceTop", g.faceTop), ("groove.face", g.face), ("groove.faceBottom", g.faceBottom)]
         if opaque("groove.onFace", g.onFace), hub.allSatisfy({ opaque($0.0, $0.1) }) {
-            along(hub, needed: 3, what: "a mark on the hub") { _ in g.onFace }.map { out.append("\(at)groove.onFace \(g.onFace.hex) on \($0)") }
+            along(hub, needed: 3, what: "a mark on the hub") { _ in g.onFace }.map { warnings.append("\(at)groove.onFace \(g.onFace.hex) on \($0)") }
         }
         // the agents ring's "+3", on its own disc; left out, the two are Pulse's light grey on the face lifted 9% toward
         // white (blended here in sRGB, close to the perceptual mix that draws it)

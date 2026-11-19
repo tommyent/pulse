@@ -12,6 +12,7 @@ enum ThemeFolder {
     struct Scan: Sendable {
         var found: [PulseTheme] = []
         var issues: [String: String] = [:]
+        var warnings: [String: String] = [:]   // themes that load but are hard to read in places
         var notice: String?
     }
 
@@ -158,6 +159,7 @@ enum ThemeFolder {
             case .success(let file):
                 cache.lastGood[id] = file
                 scan.found.append(PulseTheme(id: id, file: file))
+                scan.warnings[id] = ThemeStore.warnings(file)
             case .failure(let problem):
                 scan.issues[id] = problem.text
                 if let good = cache.lastGood[id] { scan.found.append(PulseTheme(id: id, file: good)) }
@@ -208,7 +210,7 @@ enum ThemeFolder {
     /// A theme file from anywhere, read and checked exactly as the folder's own files are, then copied into the folder,
     /// byte for byte, under a name of its own: the source's name in lower case, letters, digits and dashes only, with
     /// "-2", "-3"… if that name is taken or is a built-in's. Never replaces a file.
-    static func importTheme(_ source: URL, into folder: URL) -> Result<(id: String, name: String), ThemeStore.Problem> {
+    static func importTheme(_ source: URL, into folder: URL) -> Result<(id: String, name: String, hardToRead: Bool), ThemeStore.Problem> {
         let data: Data
         switch read(source, limit: ThemeStore.maxFileBytes) {
         case .data(let d): data = d
@@ -233,7 +235,7 @@ enum ThemeFolder {
             guard !reserved.contains(id), kind(folder.appending(path: "\(id).json")) == nil else { continue }
             do {
                 try data.write(to: folder.appending(path: "\(id).json"), options: .withoutOverwriting)
-                return .success((id, file.name))
+                return .success((id, file.name, ThemeStore.warnings(file) != nil))
             } catch {
                 return .failure(.init(text: "- it couldn't be copied into the Themes folder: \(error.localizedDescription)"))
             }

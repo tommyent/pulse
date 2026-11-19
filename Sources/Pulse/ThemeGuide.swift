@@ -174,10 +174,13 @@ The rings' geometry must fit: the outer channel inside the box
 outer one, `hubSingle` inside the outer channel, `hubDouble` inside the inner
 one, and a porthole around the outer channel.
 
-## The contrast floor
+## Legibility: a warning, not a refusal
 
-Pulse refuses a theme that would be hard to read, with the thresholds Fable's
-Groove designs were measured against (WCAG contrast ratios):
+A theme that is hard to read still loads and draws. Pulse measures it with the
+thresholds Fable's Groove designs were measured against (WCAG contrast
+ratios), and Settings › Appearance marks it with ⚠︎ and says which text or
+colour is under them, and where (hover the line for every one). Pulse's own
+themes pass them all. If someone wants a theme readable, keep to these:
 
 - **Text, 4.5:1**, anywhere along the slab's gradient: from
   `groove.slabTop` through `groove.slab` to `groove.slabBottom`, every colour
@@ -192,12 +195,14 @@ Groove designs were measured against (WCAG contrast ratios):
   gradient, from `groove.faceTop` through `groove.face` to
   `groove.faceBottom`.
 
-These colours must be opaque. Not held to the floor, as in Pulse's own
-themes: the providers' logos (brand marks), an empty channel against the slab
-(carried by its shadow), and a later window's half-strength bar.
+A translucent colour gets a warning too, since how well it reads depends on
+what's behind it. Not measured, as in Pulse's own themes: the providers' logos
+(brand marks), an empty channel against the slab (carried by its shadow), and
+a later window's half-strength bar.
 
-Light colours on a white floor fail first: deepen a colour (same hue, darker)
-until it passes, as Groove White does (Grok's amber becomes `#986300`).
+Light colours on a white floor fall short first: deepen a colour (same hue,
+darker) until the warning goes, as Groove White does (Grok's amber becomes
+`#986300`).
 
 Increase Contrast (System Settings › Accessibility › Display) makes Pulse
 draw ink black or white, drop the wall's shadow, and use Classic's full
@@ -206,7 +211,8 @@ colours on a dark floor; a theme needs nothing for it.
 ## Worked examples
 
 Each is complete. Save it here under the name given, pick it in Settings ›
-Appearance, and check that no `.error` file appears beside it.
+Appearance, and check that no `.error` file appears beside it (and no ⚠︎ in
+Settings).
 
 **A dark theme**, flat, as `ember.json` (under Dark theme):
 

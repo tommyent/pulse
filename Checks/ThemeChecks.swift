@@ -19,7 +19,7 @@ enum ThemeChecks {
         checkModesAndSlots()
         checkMigration()
         checkClassicInBothModes()
-        print("Theme checks passed: built-ins round-trip, every refusal on the list, the format and portability, the contrast floor on gradients and the counter, the guide's examples and keys, last good, .error files, live reload, built-in names, only Pulse's files touched, bounded reads off the main thread, import and export, a theme's appearance changed live with the app staying dark, the cap and the cache, the watch's teardown, modes and slots, migration, Classic identical in both modes")
+        print("Theme checks passed: built-ins round-trip, every refusal on the list, the format and portability, low contrast warned along whole gradients and on the counter, never refused, the guide's examples and keys, last good, .error files, live reload, built-in names, only Pulse's files touched, bounded reads off the main thread, import and export, a theme's appearance changed live with the app staying dark, the cap and the cache, the watch's teardown, modes and slots, migration, Classic identical in both modes")
     }
 
     // MARK: helpers
@@ -46,6 +46,18 @@ enum ThemeChecks {
     static func expectRefused(_ file: PulseThemeFile, _ path: String, _ value: Any?, mentioning words: [String]) {
         let text = refusal(edited(file, path, value), "\(path) = \(String(describing: value))")
         for w in words { assert(text.contains(w), "refusing \(path) = \(String(describing: value)) should mention \(w): \(text)") }
+    }
+
+    /// What's hard to read in a theme that loads; fails the check if it's refused or reads fine.
+    static func warning(_ data: Data, _ what: String) -> String {
+        guard case .success(let file) = ThemeStore.decode(data) else { fatalError("refused, not warned: \(what): \(refusal(data, what))") }
+        guard let text = ThemeStore.warnings(file) else { fatalError("no warning: \(what)") }
+        return text
+    }
+
+    static func expectWarned(_ file: PulseThemeFile, _ path: String, _ value: Any?, mentioning words: [String]) {
+        let text = warning(edited(file, path, value), "\(path) = \(String(describing: value))")
+        for w in words { assert(text.contains(w), "the warning for \(path) = \(String(describing: value)) should mention \(w): \(text)") }
     }
 
     /// Until the store's background job `number` is done and its results are published.
@@ -179,36 +191,38 @@ enum ThemeChecks {
                "the format has no key that refers outside the file")
     }
 
+    /// Hard-to-read themes load, with a warning that says where (the owner: low contrast warns, it doesn't refuse).
     static func checkContrastFloor() {
+        for (id, file) in PulseThemeFile.builtIn { assert(file.warnings().isEmpty, "\(id) reads well: \(file.warnings())") }
         // text hard to read on the slab, each kind on its own
-        expectRefused(.groove, "ink.secondary", "#45484F", mentioning: ["ink.secondary", "text needs 4.5:1"])
-        expectRefused(.groove, "ink.primary", "#202226", mentioning: ["ink.primary", "1.00:1"])
-        expectRefused(.grooveWhite, "ink.alert", "#FF6B61", mentioning: ["ink.alert", "text needs 4.5:1"])
-        expectRefused(.groove, "stale", 0.3, mentioning: ["stale", "text needs 4.5:1"])
+        expectWarned(.groove, "ink.secondary", "#45484F", mentioning: ["ink.secondary", "text needs 4.5:1"])
+        expectWarned(.groove, "ink.primary", "#202226", mentioning: ["ink.primary", "1.00:1"])
+        expectWarned(.grooveWhite, "ink.alert", "#FF6B61", mentioning: ["ink.alert", "text needs 4.5:1"])
+        expectWarned(.groove, "stale", 0.3, mentioning: ["stale", "text needs 4.5:1"])
         // dark Groove's amber on White's floor: the reason Groove White deepens its colours
-        expectRefused(.grooveWhite, "accents.grok", "#DBB572", mentioning: ["accents.grok", "groove.floor", "needs 3:1"])
-        expectRefused(.groove, "accents.codex", "#2A3A66", mentioning: ["accents.codex", "groove.barFloor"])
-        expectRefused(.groove, "groove.onFace", "#2B2D32", mentioning: ["groove.onFace", "a mark on the hub"])
-        expectRefused(.groove, "ink.secondary", "#E6E6E640", mentioning: ["must be opaque"])
+        expectWarned(.grooveWhite, "accents.grok", "#DBB572", mentioning: ["accents.grok", "groove.floor", "needs 3:1"])
+        expectWarned(.groove, "accents.codex", "#2A3A66", mentioning: ["accents.codex", "groove.barFloor"])
+        expectWarned(.groove, "groove.onFace", "#2B2D32", mentioning: ["groove.onFace", "a mark on the hub"])
+        expectWarned(.groove, "ink.secondary", "#E6E6E640", mentioning: ["translucent"])
         // Sol's two 1:1 cases on 4f91bdb: text on both ends of the slab's gradient, and the agents' "+3" on its disc
         var ends = PulseThemeFile.groove
         let ink = ends.look.ink.primary!
         ends.look.groove!.slabTop = ink
         ends.look.groove!.slabBottom = ink
-        let endsText = refusal(ThemeStore.file(ends), "ink on both gradient ends")
+        let endsText = warning(ThemeStore.file(ends), "ink on both gradient ends")
         assert(endsText.contains("groove.slabTop") && endsText.contains("1.00:1"), endsText)
         var counter = PulseThemeFile.groove
         counter.look.groove!.bubble = "#000000"
         counter.look.groove!.bubbleInk = "#000000"
-        let counterText = refusal(ThemeStore.file(counter), "the counter on its disc")
+        let counterText = warning(ThemeStore.file(counter), "the counter on its disc")
         assert(counterText.contains("groove.bubbleInk #000000 on groove.bubble #000000: 1.00:1"), counterText)
         // the hub's gradient, and the counter's defaults on a face they can't be read on
-        expectRefused(.groove, "groove.faceTop", "#F5F5F7", mentioning: ["groove.onFace", "groove.faceTop"])
-        expectRefused(.groove, "groove.face", "#DEDEDE", mentioning: ["groove.bubbleInk (left out: light grey)"])
+        expectWarned(.groove, "groove.faceTop", "#F5F5F7", mentioning: ["groove.onFace", "groove.faceTop"])
+        expectWarned(.groove, "groove.face", "#DEDEDE", mentioning: ["groove.bubbleInk (left out: light grey)"])
         // Fable's #BF2318 alert reads 4.24:1 on White's darker slab end; White's is deepened to pass
-        expectRefused(.grooveWhite, "ink.alert", "#BF2318", mentioning: ["ink.alert", "groove.slabBottom"])
+        expectWarned(.grooveWhite, "ink.alert", "#BF2318", mentioning: ["ink.alert", "groove.slabBottom"])
         // a flat theme is held to its surface
-        expectRefused(.classicSolid, "accents.codex", "#202060", mentioning: ["accents.codex", "surface"])
+        expectWarned(.classicSolid, "accents.codex", "#202060", mentioning: ["accents.codex", "surface"])
         // Sol's re-review of ad17df2: grey text on a black-to-white slab passes at every stop (4.56:1 on black, 4.61:1
         // on white) and reads at 1:1 where the gradient crosses its own grey
         var grey = PulseThemeFile.groove
@@ -218,7 +232,7 @@ enum ThemeChecks {
         grey.look.ink = PulseSkin.Ink(primary: "#757575", secondary: "#757575", alert: "#757575")
         grey.look.stale = 1
         assert(grey.look.ink.primary!.contrast(with: "#000000") >= 4.5 && grey.look.ink.primary!.contrast(with: "#FFFFFF") >= 4.5, "every stop passes")
-        let greyText = refusal(ThemeStore.file(grey), "grey text across a black-to-white slab")
+        let greyText = warning(ThemeStore.file(grey), "grey text across a black-to-white slab")
         assert(greyText.contains("ink.primary #757575 on the gradient from groove.slab to groove.slabBottom") && greyText.contains("1.0"), greyText)
         // the hub's radial gradient the same way
         var hub = PulseThemeFile.groove
@@ -227,7 +241,7 @@ enum ThemeChecks {
         hub.look.groove!.faceBottom = "#000000"
         hub.look.groove!.onFace = "#7C7C7C"
         assert(hub.look.groove!.onFace.contrast(with: "#000000") >= 3 && hub.look.groove!.onFace.contrast(with: "#FFFFFF") >= 3)
-        assert(refusal(ThemeStore.file(hub), "a mark across the hub's gradient").contains("groove.onFace #7C7C7C on the gradient from groove.faceTop to groove.face"))
+        assert(warning(ThemeStore.file(hub), "a mark across the hub's gradient").contains("groove.onFace #7C7C7C on the gradient from groove.faceTop to groove.face"))
     }
 
     static func checkGuide() {
@@ -235,7 +249,7 @@ enum ThemeChecks {
         let expected: [(String, ThemeSlot)] = [("Ember", .dark), ("Ember Glass", .any), ("Paper", .light)]
         for (data, (name, slot)) in zip(guideExamples, expected) {
             guard case .success(let file) = ThemeStore.decode(data) else { fatalError("the guide's \(name) is refused: \(refusal(data, name))") }
-            assert(file.name == name && file.appearance == slot, "\(name) is the guide's \(slot) example")
+            assert(file.name == name && file.appearance == slot && file.warnings().isEmpty, "\(name) is the guide's \(slot) example, and reads well")
         }
         assert(ThemeStore.decode(guideExamples[2]) == .success(ThemeGuide.paper), "the light example is Paper, as written")
         for key in ThemeStore.knownKeys {
@@ -290,6 +304,15 @@ enum ThemeChecks {
         assert(try! String(contentsOf: folder.appending(path: "broken.error"), encoding: .utf8).contains("draws Classic"))
         try! fm.removeItem(at: broken)
         assert(waitUntil { !fm.fileExists(atPath: folder.appending(path: "broken.error").path) }, "a removed file's .error is removed")
+
+        // hard to read: it loads and draws, Settings warns and says where, and there's no .error
+        let dim = folder.appending(path: "dim.json")
+        try! Data(String(decoding: guideExample, as: UTF8.self).replacingOccurrences(of: "#E8DDD8", with: "#3A302C").utf8).write(to: dim)
+        assert(waitUntil { listed("dim") != nil && store.warnings["dim"] != nil }, "a hard-to-read theme loads, with a warning")
+        assert(store.warnings["dim"]!.contains("ink.secondary #3A302C on surface") && store.problems["dim"] == nil, store.warnings["dim"]!)
+        assert(store.current(both("dim")).id == "dim" && !fm.fileExists(atPath: folder.appending(path: "dim.error").path))
+        try! fm.removeItem(at: dim)
+        assert(waitUntil { store.warnings["dim"] == nil }, "the warning goes with the file")
 
         // a built-in's name: the built-in draws, the edit is reported, and the next launch's examples keep the edit aside
         try! edited(.groove, "name", "My Groove").write(to: folder.appending(path: "groove.json"))
@@ -468,6 +491,10 @@ enum ThemeChecks {
         take(source)
         assert(try! Data(contentsOf: folder.appending(path: "my-ember.json")) == guideExample, "copied byte for byte under a tidy name")
         assert(store.themes.contains { $0.id == "my-ember" && $0.file.name == "Ember" } && messages.last == "Imported Ember as my-ember.json.", messages.description)
+        let dim = elsewhere.appending(path: "dim.json")
+        try! edited(.groove, "ink.secondary", "#45484F").write(to: dim)
+        take(dim)
+        assert(messages.last?.contains("Imported Groove as dim.json.") == true && messages.last?.contains("hard to read") == true, messages.description)
         // the same name again, and a built-in's name: a free name, never a replacement
         take(source)
         assert(fm.fileExists(atPath: folder.appending(path: "my-ember-2.json").path))
