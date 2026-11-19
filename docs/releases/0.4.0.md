@@ -8,4 +8,4 @@ The rings now follow each provider's real limits, and Pulse is more honest when 
 - **No more log pile-up from Antigravity.** The Antigravity CLI's log for each refresh now goes in a temporary folder and is removed with it.
 - **Smaller fixes.** One reset no longer shows as two different times. Failure reasons wrap instead of getting cut off. VoiceOver reads each ring's numbers. Antigravity no longer shows one percent too few. Cards show the provider's own plan name. If Pulse can't read its settings, it keeps a copy instead of overwriting them, and a failed save when a break ends no longer crashes it.
 
-For Apple silicon Macs on macOS 26 or later. To check the download, run `shasum -a 256 -c Pulse-0.4.0.dmg.sha256` in the folder that holds both files.
+For Apple silicon Macs; tested on macOS 27. To check the download, run `shasum -a 256 -c Pulse-0.4.0.dmg.sha256` in the folder that holds both files.

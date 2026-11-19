@@ -3,7 +3,7 @@
 ## Requirements
 
 - **Tested:** macOS 26.5.1 and 27.3 on Apple silicon. Intel is untested.
-- **Build:** Xcode 26 or later (the Command Line Tools alone lack the SwiftUI macro plugin) and Swift 6.2 or later. Sparkle, for in-app updates, is the only third-party package; SwiftPM fetches it.
+- **Build:** built with Xcode 27.2 (Swift 6.4.2). The Command Line Tools alone can't build it: they lack the SwiftUI macro plugin. Sparkle, for in-app updates, is the only third-party package; SwiftPM fetches it.
 - **Codex:** a signed-in Codex CLI (`codex login`). Voice needs a CLI package containing `codex-voice-host` (tested with 0.160.0), microphone permission, and an account that supports the CLI's experimental realtime protocol.
 - **Claude and Grok:** sign in through their CLIs, or use **Connect**, which shows on the account's card, in the menu bar popover and in **Settings → Accounts** while the CLI isn't signed in. Grok CLI support reads Grok Build's `~/.grok/auth.json`.
 - **Antigravity:** the Antigravity CLI (`agy`), signed in by running `agy` once. Pulse is tested with agy 1.5.11 and runs its usage report with `--log-file`, so an agy without that flag shows no usage. The Gemini pool and the Claude and GPT pool each have a ring, and **Settings → Accounts** has a switch for the second; each ring's card lists that pool's limits.

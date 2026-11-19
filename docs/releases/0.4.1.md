@@ -4,4 +4,4 @@ The Codex pet now frees its memory when you aren't using it, and Solid gets a po
 - **Your conversation stays open.** Opening the card again starts Codex back up in the same conversation, with its messages still on screen. New conversation still starts fresh.
 - **A clear coat on Solid.** The rail, cards, alerts, break pills and menu now have a deeper black, lit softly from the top left. Glass, the break screen and Settings look the same as before.
 
-For Apple silicon Macs on macOS 26 or later. To check the download, run `shasum -a 256 -c Pulse-0.4.1.dmg.sha256` in the folder that holds both files.
+For Apple silicon Macs; tested on macOS 27. To check the download, run `shasum -a 256 -c Pulse-0.4.1.dmg.sha256` in the folder that holds both files.
