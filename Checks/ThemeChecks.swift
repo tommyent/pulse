@@ -519,6 +519,19 @@ enum ThemeChecks {
         assert(refusals.allSatisfy { $0.contains("wasn't imported") }, refusals.description)
         assert(refusals.contains { $0.contains("accents.codex") } && refusals.contains { $0.contains("made for a newer Pulse") }
                && refusals.contains { $0.contains("a link") } && refusals.contains { $0.contains("64 KB") }, refusals.description)
+        // exported metadata comes back exactly (Sol's round 3 review: brackets inside strings were reformatted, and a
+        // 299-character description grew past 300 and was refused): export, import, export again, byte for byte
+        var meta = PulseThemeFile.groove
+        meta.author = "Ana [studio] {north}, \"quoted\""
+        meta.description = String(String(repeating: "A palette [warm, dusk] for {evenings}, \"late\" ones. ", count: 8).prefix(299))
+        assert(meta.description!.count == 299)
+        let once = ThemeStore.file(meta), metaFile = elsewhere.appending(path: "meta.json")
+        try! once.write(to: metaFile)
+        guard case .success(let back) = ThemeStore.decode(once) else { fatalError("an exported theme with bracketed metadata imports: \(refusal(once, "meta"))") }
+        assert(back.author == meta.author && back.description == meta.description && back == meta, "metadata survives export: \(String(describing: back.author))")
+        take(metaFile)
+        let copied = try! Data(contentsOf: folder.appending(path: "meta.json"))
+        assert(copied == once && ThemeStore.file(back) == once, "export, import and export again are byte-equal")
         // exported: one file holding the whole theme; on another Mac (another folder) it imports as the same theme
         let exported = elsewhere.appending(path: "exported.json")
         try! ThemeStore.file(.grooveWhite).write(to: exported)

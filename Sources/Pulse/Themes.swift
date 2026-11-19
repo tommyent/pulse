@@ -314,14 +314,56 @@ struct ThemeChoice: Equatable {
     }
 
     /// A theme as Pulse writes it: pretty-printed, each shadow on one line.
+    /// Strings are copied exactly as the encoder wrote them; only the layout between values changes, so a name, an
+    /// author or a description with brackets in it comes out as it went in.
     nonisolated static func file(_ set: PulseThemeFile) -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]   // the same bytes every time
-        let text = String(decoding: try! encoder.encode(set), as: UTF8.self)
-        let joined = text.replacing(#/\[\s*([^\[\]\{\}]*?)\s*\]/#) { match in
-            "[" + match.output.1.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.joined(separator: ", ") + "]"
+        let text = Array(String(decoding: try! encoder.encode(set), as: UTF8.self).utf8)
+        /// The index just past the string starting at `i` (a quote), its escapes included.
+        func stringEnd(_ i: Int) -> Int {
+            var j = i + 1
+            while j < text.count, text[j] != UInt8(ascii: "\"") { j += text[j] == UInt8(ascii: "\\") ? 2 : 1 }
+            return j + 1
         }
-        return Data((joined + "\n").utf8)
+        /// The index of the `]` closing the array at `i` if it holds only plain values (no array or object), else nil.
+        func flatEnd(_ i: Int) -> Int? {
+            var j = i + 1
+            while j < text.count {
+                switch text[j] {
+                case UInt8(ascii: "\""): j = stringEnd(j)
+                case UInt8(ascii: "["), UInt8(ascii: "{"): return nil
+                case UInt8(ascii: "]"): return j
+                default: j += 1
+                }
+            }
+            return nil
+        }
+        var out: [UInt8] = [], i = 0
+        while i < text.count {
+            switch text[i] {
+            case UInt8(ascii: "\""):
+                let end = stringEnd(i)
+                out += text[i ..< end]; i = end
+            case UInt8(ascii: "["):
+                guard let close = flatEnd(i) else { out.append(text[i]); i += 1; continue }
+                // a shadow and other lists of plain values on one line: "[a, b, c]", the values untouched
+                out.append(UInt8(ascii: "["))
+                var j = i + 1
+                while j < close {
+                    switch text[j] {
+                    case UInt8(ascii: "\""): let end = stringEnd(j); out += text[j ..< end]; j = end
+                    case UInt8(ascii: ","): out += Array(", ".utf8); j += 1
+                    case UInt8(ascii: " "), UInt8(ascii: "\n"), UInt8(ascii: "\t"), UInt8(ascii: "\r"): j += 1
+                    default: out.append(text[j]); j += 1
+                    }
+                }
+                out.append(UInt8(ascii: "]")); i = close + 1
+            default:
+                out.append(text[i]); i += 1
+            }
+        }
+        return Data(out + Array("\n".utf8))
     }
 }
 
