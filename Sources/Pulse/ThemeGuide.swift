@@ -1,25 +1,52 @@
 /// The guide Pulse writes into its Themes folder at each launch, for people and their AI to write a theme from.
-/// `ThemeChecks` reads the worked example out of it and loads it, so the example stays a theme Pulse accepts.
+/// `ThemeChecks` reads every worked example out of it and loads it, so each stays a theme Pulse accepts; the light one
+/// is written from Groove White's own values here, so it can't drift from what Pulse draws.
 enum ThemeGuide {
+    /// The light example: Groove White with warmer colours, written as Pulse writes theme files.
+    static let paper: PulseThemeFile = {
+        var look = PulseSkin.grooveWhite
+        look.accents.claude = "#A8430F"
+        look.accents.codex = "#2F5BC9"
+        return PulseThemeFile(name: "Paper", author: "Your name", description: "Groove White with warmer colours.",
+                              appearance: .light, look: look)
+    }()
+
     static let text = #"""
 # Pulse themes
 
 <!-- Written by Pulse at each launch. Edits here are overwritten. -->
 
 This folder holds Pulse's themes, one JSON file per theme. Pulse reads every
-`*.json` here, lists the good ones in Settings › General › Skin, and reads a
-file again within about a second, after edits to it stop: the theme in use redraws without a
-relaunch. A theme is data only: colours, sizes and shadows. No code, no
-images, no network.
+`*.json` here and lists the good ones in Settings › Appearance, and it reads
+a file again within about a second, after edits to it stop: the theme in use
+redraws without a relaunch. A theme is data only: colours, sizes and shadows.
+No code, no images, no network, and nothing that points outside the file, so
+one file is the whole theme: send it to someone, or move it to another Mac,
+and it works there.
 
 When someone asks for a theme ("make Pulse warmer", "a green Groove"), you
 write a file here. Start from the closest example and change values.
+
+## Settings › Appearance
+
+```
+Mode         ( Auto | Light | Dark )
+Light theme  [ Groove White      ▾ ]
+Dark theme   [ Groove            ▾ ]
+```
+
+**Mode** Auto follows the Mac's appearance as it changes; Light and Dark keep
+Pulse in one. Pulse draws the **light theme** in light and the **dark theme**
+in dark. Each theme says which menu it belongs in (`appearance`, below).
+**Import…** copies a theme file into this folder after the same checks as
+every file here (a file dropped on Settings does the same); **Export…** saves
+the light or the dark theme as one file to share.
 
 ## The files
 
 | File | What it is |
 |---|---|
-| `classic.json`, `groove.json`, `groove-black.json` | Pulse's own themes, as examples to copy. They are built into Pulse and always there; these copies are rewritten at each launch, and edits to them never apply (an edited copy is first moved beside it as `<name>.json.replaced-<time>`; if it can't be moved, it stays as it is and its `.error` says why). Copy one under a new name to make your own. |
+| `classic-glass.json`, `classic-solid.json`, `groove.json`, `groove-white.json`, `groove-black.json` | Pulse's own themes, as examples to copy. They are built into Pulse and always there; these copies are rewritten at each launch, and edits to them never apply (an edited copy is first moved beside it as `<name>.json.replaced-<time>`; if it can't be moved, it stays as it is and its `.error` says why). Copy one under a new name to make your own. |
 | `<name>.json` | a theme. `<name>` is its id: what Pulse saves as the chosen theme. Rename the file and it is a different theme. |
 | `<name>.error` | written by Pulse when `<name>.json` can't be used: every problem, with the key it is in. Removed once the file is fixed or gone. **Check for it after every edit.** |
 | `AGENTS.md` | this guide |
@@ -31,23 +58,35 @@ all. Pulse writes at most 10 `.error` files at a time, and never touches a
 `.error` entry it didn't write.
 
 **A file that fails any check never draws.** Pulse keeps showing the last
-good version of that theme from this run (or Classic, if it had none) and
-writes the reasons to `<name>.error`. Settings marks the theme with ⚠︎ and
-shows the first problem.
+good version of that theme from this run (or the person's Classic, if it had
+none) and writes the reasons to `<name>.error`. Settings marks the theme with
+⚠︎ and shows the first problem. A theme chosen for a menu it doesn't belong in,
+or one Pulse doesn't have, draws the person's Classic (Glass or Solid) there.
 
 ## The format
 
+One theme is one look, in one JSON object:
+
 ```
 {
-  "name": "Shown in Settings",       1 to 40 characters
-  "dark":  { ...one half... },        required
-  "light": { ...one half... }         optional
+  "format": 1,                       required: the format this file is written in
+  "name": "Shown in Settings",       required, 1 to 40 characters
+  "author": "Who made it",           optional, 1 to 80 characters
+  "description": "What it is",       optional, 1 to 300 characters, line breaks allowed
+  "appearance": "light",             required: "light", "dark" or "any"
+  ...the look's keys (below)...
 }
 ```
 
-A theme without `light` keeps Pulse dark whatever the system's appearance,
-as Classic does. A theme with `light` follows the system: `dark` in Dark
-Mode, `light` in Light Mode.
+- **`format`** is 1. A file with a higher number was made for a newer Pulse,
+  and this Pulse says so instead of guessing at it.
+- **`appearance`**: `"light"` lists the theme under Light theme, `"dark"`
+  under Dark theme, and `"any"` under both, drawing the same in either mode.
+  Pulse's windows take the theme's appearance (system controls, menus): light
+  for a light theme, dark for a dark one, and for "any" the one its surface
+  reads as (Classic: dark).
+- **A flat theme** (no `groove`) uses Classic's drawing, which is dark only:
+  its appearance is "dark", or "any" with a dark surface.
 
 Every key below is required unless it says optional. Keys Pulse doesn't know
 are refused, so a typo can't pass silently.
@@ -69,7 +108,7 @@ are refused, so a typo can't pass silently.
 - **ring units**: a ring is 100 units across and draws in a box 120 units
   across, so 60 from the centre is the edge of the space it has.
 
-## One half
+## The look
 
 | Key | Type | What it is |
 |---|---|---|
@@ -77,13 +116,14 @@ are refused, so a typo can't pass silently.
 | `accents.antigravity2` | colour | an account's later pool of models (Antigravity's Claude and GPT) |
 | `accents.battery` | colour, optional | the battery ring at a normal charge; left out: the system's green. Low and critical stay the system's yellow and red |
 | `accents.breakBar` | colour, optional | the break countdown's ring, for the default break colour |
-| `surface` | colour | a flat theme's rail, cards and popover when Settings › General › Appearance is Solid (Glass is the system's); unused by a Groove theme, whose panels draw `groove.slab` (set it to the slab's colour) |
+| `surface` | colour | a flat theme's rail, cards and popover; unused by a Groove theme, whose panels draw `groove.slab` (set it to the slab's colour) |
+| `glass` | true, optional | a flat theme's panels on untinted dark Liquid Glass instead of `surface` (Classic Glass); flat themes only |
 | `track` | colour | a flat theme's empty ring track |
 | `ink.primary` | colour, optional | numbers and titles; left out: the system's label colour |
 | `ink.secondary` | colour | captions |
 | `ink.alert` | colour, optional | text near a limit, a critical battery; left out: the system's red |
 | `stale` | 0 to 1 | the opacity of a ring and number from an earlier refresh |
-| `groove` | object, optional | the sculpted look (next section). Left out: the flat look, Classic's drawing with this half's colours. A `light` half needs `groove`: the flat drawing is dark only |
+| `groove` | object, optional | the sculpted look (next section). Left out: the flat look, Classic's drawing with these colours |
 
 ### `groove`: the sculpted look
 
@@ -121,7 +161,7 @@ hub with the logo standing on it; text embossed and icons raised.
 | `fillInner` | shadow list | points, offset and blur to 4 | the fill's inner shadows |
 | `fillDrop` | shadow | points, offset and blur to 3 | the fill's shadow in the slot |
 | `secondBarGround` | colour | | a later window's bar is its colour halfway to this |
-| `porthole` | object, optional | | a dark puck each ring sits in, pressed into a light slab (Groove Black's light half): `{"radius": 1 to 58 ring units, at least the outer channel's edge; "lip": shadow, offset and blur to 2; "inner": shadow list, offset and blur to 10}` |
+| `porthole` | object, optional | | a dark puck each ring sits in, pressed into a light slab (Groove Black): `{"radius": 1 to 58 ring units, at least the outer channel's edge; "lip": shadow, offset and blur to 2; "inner": shadow list, offset and blur to 10}` |
 | `bubble` | colour, optional | | the agents' discs; left out: the hub's face lifted 9% toward white |
 | `bubbleInk` | colour, optional | | "+3" on a disc; left out: light grey |
 | `discWell` | colour, optional | | the cap disc's well; left out: the floor lifted 16% toward white |
@@ -153,40 +193,74 @@ themes: the providers' logos (brand marks), an empty channel against the slab
 (carried by its shadow), and a later window's half-strength bar.
 
 Light colours on a white floor fail first: deepen a colour (same hue, darker)
-until it passes, as Groove's light half does (Grok's amber becomes `#986300`).
+until it passes, as Groove White does (Grok's amber becomes `#986300`).
 
 Increase Contrast (System Settings › Accessibility › Display) makes Pulse
 draw ink black or white, drop the wall's shadow, and use Classic's full
 colours on a dark floor; a theme needs nothing for it.
 
-## A worked example
+## Worked examples
 
-A flat theme, complete. Save it as `ember.json` here, pick "Ember" in
-Settings, and check that no `ember.error` appears:
+Each is complete. Save it here under the name given, pick it in Settings ›
+Appearance, and check that no `.error` file appears beside it.
+
+**A dark theme**, flat, as `ember.json` (under Dark theme):
 
 ```json
 {
+  "format": 1,
   "name": "Ember",
-  "dark": {
-    "accents": {
-      "claude": "#FF7A45",
-      "codex": "#6E95FF",
-      "grok": "#FFC24D",
-      "antigravity": "#B08CFF",
-      "antigravity2": "#5CC4FF"
-    },
-    "surface": "#1A1412",
-    "track": "#2E2622",
-    "ink": { "secondary": "#E8DDD8" },
-    "stale": 0.5
-  }
+  "author": "Your name",
+  "description": "Classic's drawing on a warm dark brown.",
+  "appearance": "dark",
+  "accents": {
+    "claude": "#FF7A45",
+    "codex": "#6E95FF",
+    "grok": "#FFC24D",
+    "antigravity": "#B08CFF",
+    "antigravity2": "#5CC4FF"
+  },
+  "surface": "#1A1412",
+  "track": "#2E2622",
+  "ink": { "secondary": "#E8DDD8" },
+  "stale": 0.5
 }
 ```
 
-For a sculpted theme, copy `groove.json` (it has every key) and change the
-values: for example the accents and `floor` for other colours, or `outer`,
-`inner` and the hubs for thinner rings. To try a light half on its own,
-switch the system to Light Mode.
+**A theme for either mode**, flat on glass, as `ember-glass.json` (under
+both menus, drawing the same in each):
+
+```json
+{
+  "format": 1,
+  "name": "Ember Glass",
+  "appearance": "any",
+  "glass": true,
+  "accents": {
+    "claude": "#FF7A45",
+    "codex": "#6E95FF",
+    "grok": "#FFC24D",
+    "antigravity": "#B08CFF",
+    "antigravity2": "#5CC4FF"
+  },
+  "surface": "#1A1412",
+  "track": "#2E2622",
+  "ink": { "secondary": "#E8DDD8" },
+  "stale": 0.5
+}
+```
+
+**A light theme**, sculpted, as `paper.json` (under Light theme): Groove
+White with warmer Claude and Codex colours. Every `groove` key is there, as
+a sculpted theme needs:
+
+```json
+\#(String(decoding: ThemeStore.file(paper), as: UTF8.self).trimmingCharacters(in: .newlines))
+```
+
+For other sculpted themes, copy `groove.json` (dark) or `groove-white.json`
+(light) and change the values: the accents and `floor` for other colours, or
+`outer`, `inner` and the hubs for thinner rings.
 
 ## Not yet
 

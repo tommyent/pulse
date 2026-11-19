@@ -12,8 +12,31 @@ final class AppState: ObservableObject {
         var order: [AccountID] = AccountID.allCases
         var alwaysOnTop: Bool = true
         var showOverlay: Bool = true
-        var appearance: PulseAppearance = .solid
-        var skin: String?   // nil = Classic; otherwise a theme's id: a built-in's ("groove") or a theme file's name (`ThemeStore`)
+        var appearance: PulseAppearance = .solid   // the person's Classic, Glass or Solid: a slot's fallback theme
+        var skin: String?   // before Settings › Appearance (read only, for the move): nil = Classic, "groove", "groove-black"
+        var mode: AppearanceMode?   // nil = not chosen yet: see `themeChoice`
+        var lightTheme: String?     // a theme's id: a built-in's or a theme file's name (`ThemeStore`)
+        var darkTheme: String?
+
+        /// Settings › Appearance. Until it's first chosen, it's what Pulse drew before: Classic (Glass or Solid) in both
+        /// modes, or for Groove, Groove White in light and Groove in dark (Groove Black: Groove Black in light), in Auto.
+        var themeChoice: ThemeChoice {
+            get {
+                let classic = appearance == .glass ? "classic-glass" : "classic-solid"
+                let before: (light: String, dark: String) = switch skin {
+                case "groove": ("groove-white", "groove")
+                case "groove-black": ("groove-black", "groove")
+                default: (classic, classic)
+                }
+                return ThemeChoice(mode: mode ?? .auto, light: lightTheme ?? before.light, dark: darkTheme ?? before.dark, classic: classic)
+            }
+            set {
+                mode = newValue.mode
+                lightTheme = newValue.light
+                darkTheme = newValue.dark
+                appearance = newValue.classic == "classic-glass" ? .glass : .solid
+            }
+        }
         var dock: DockEdge?
         var tucked: Bool?   // nil = out: the rail tucked into its edge, a sliver left on screen
         var tuckPeek: Bool?   // nil = off: resting the pointer on the sliver slides the rail out until it leaves
@@ -64,6 +87,9 @@ final class AppState: ObservableObject {
             appearance = c.lenient(PulseAppearance.self, forKey: .appearance, in: decoder)
                 ?? ((try? legacy.decode(Bool.self, forKey: .glassTint)) == false ? .glass : .solid)
             skin = c.lenient(String.self, forKey: .skin, in: decoder)
+            mode = c.lenient(AppearanceMode.self, forKey: .mode, in: decoder)
+            lightTheme = c.lenient(String.self, forKey: .lightTheme, in: decoder)
+            darkTheme = c.lenient(String.self, forKey: .darkTheme, in: decoder)
             dock = c.lenient(DockEdge.self, forKey: .dock, in: decoder)
             tucked = c.lenient(Bool.self, forKey: .tucked, in: decoder)
             tuckPeek = c.lenient(Bool.self, forKey: .tuckPeek, in: decoder)

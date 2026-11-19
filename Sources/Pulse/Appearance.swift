@@ -89,11 +89,13 @@ private struct PulsePresentation: ViewModifier {
     @ObservedObject private var themes = ThemeStore.shared
     @Environment(\.colorSchemeContrast) private var contrast
     func body(content: Content) -> some View {
-        // dark, unless the theme has a light half: then the system's appearance
-        content.preferredColorScheme(themes.scheme(state.persisted.skin))
-            .background(PulseWindowBacking(scheme: themes.scheme(state.persisted.skin)))
-            .environment(\.pulseAppearance, state.persisted.appearance)
-            .environment(\.pulseSkin, themes.skin(state.persisted.skin, contrast: contrast))
+        // the theme drawn now (Settings › Appearance) and the appearance its windows take: a light theme's light, a dark
+        // or Classic one's dark
+        let choice = state.persisted.themeChoice, scheme = themes.scheme(choice), look = themes.skin(choice, contrast: contrast)
+        content.preferredColorScheme(scheme)
+            .background(PulseWindowBacking(scheme: scheme))
+            .environment(\.pulseAppearance, look.material)
+            .environment(\.pulseSkin, look)
             .environment(\.appearsActive, true)
     }
 }
@@ -101,7 +103,7 @@ private struct PulsePresentation: ViewModifier {
 /// The overlay's hosting presentation follows the theme too, so default text and AppKit-backed colours agree.
 struct ThemeScheme: ViewModifier {
     @ObservedObject private var themes = ThemeStore.shared
-    func body(content: Content) -> some View { content.preferredColorScheme(themes.scheme(themes.selected)) }
+    func body(content: Content) -> some View { content.preferredColorScheme(themes.scheme(themes.choice)) }
 }
 
 /// Settings' window background: the theme's surface, in the theme's appearance.
@@ -109,11 +111,12 @@ struct SettingsBackground: View {
     @ObservedObject var state: AppState
     @ObservedObject private var themes = ThemeStore.shared
     var body: some View {
+        let choice = state.persisted.themeChoice, look = themes.skin(choice)
         PulseSurface(shape: Rectangle(), floats: false)
-            .environment(\.pulseAppearance, state.persisted.appearance)
-            .environment(\.pulseSkin, themes.skin(state.persisted.skin))
+            .environment(\.pulseAppearance, look.material)
+            .environment(\.pulseSkin, look)
             .environment(\.appearsActive, true)
-            .preferredColorScheme(themes.scheme(state.persisted.skin))
+            .preferredColorScheme(themes.scheme(choice))
     }
 }
 

@@ -17,7 +17,7 @@ enum ThemeFolder {
 
     /// What the queue keeps between passes: each file's last good version, and what launch left alone.
     final class Cache: @unchecked Sendable {   // used on the store's queue only
-        var lastGood: [String: PulseSkinSet] = [:]
+        var lastGood: [String: PulseThemeFile] = [:]
         var kept: [String: String] = [:]
     }
 
@@ -99,8 +99,8 @@ enum ThemeFolder {
         let fm = FileManager.default
         var kept: [String: String] = [:]
         try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
-        for (id, set) in PulseSkinSet.builtIn {
-            let url = folder.appending(path: "\(id).json"), shipped = ThemeStore.file(set)
+        for (id, file) in PulseThemeFile.builtIn {
+            let url = folder.appending(path: "\(id).json"), shipped = ThemeStore.file(file)
             guard let kind = kind(url) else { try? shipped.write(to: url, options: .atomic); continue }
             guard kind == S_IFREG else { kept[id] = "it isn't a regular file (a link or a folder), so Pulse leaves it alone"; continue }
             guard differs(url, from: shipped) else { continue }
@@ -129,22 +129,22 @@ enum ThemeFolder {
         var readIDs: Set<String> = [], skipped: [String] = []
         for id in files {
             let url = folder.appending(path: "\(id).json")
-            if let builtIn = PulseSkinSet.builtIn.first(where: { $0.id == id }) {
-                if differs(url, from: ThemeStore.file(builtIn.set)) {
+            if let builtIn = PulseThemeFile.builtIn.first(where: { $0.id == id }) {
+                if differs(url, from: ThemeStore.file(builtIn.file)) {
                     let next = cache.kept[id].map { "At launch \($0)." } ?? "The next launch puts it back, keeping your copy beside it as \(id).json.replaced-<time>."
-                    scan.issues[id] = "\(id).json is Pulse's own \(builtIn.set.name), written as an example: edits to it never apply. \(next) Copy it under a new name to make a theme of your own."
+                    scan.issues[id] = "\(id).json is Pulse's own \(builtIn.file.name), written as an example: edits to it never apply. \(next) Copy it under a new name to make a theme of your own."
                 }
                 continue
             }
             guard readIDs.count < ThemeStore.maxThemes else { skipped.append(id); continue }
             readIDs.insert(id)
             switch load(url) {
-            case .success(let set):
-                cache.lastGood[id] = set
-                scan.found.append(PulseTheme(id: id, set: set))
+            case .success(let file):
+                cache.lastGood[id] = file
+                scan.found.append(PulseTheme(id: id, file: file))
             case .failure(let problem):
                 scan.issues[id] = problem.text
-                if let good = cache.lastGood[id] { scan.found.append(PulseTheme(id: id, set: good)) }
+                if let good = cache.lastGood[id] { scan.found.append(PulseTheme(id: id, file: good)) }
             }
         }
         // the cache holds files read in this pass only: at most `maxThemes`, and a file past the cap is not drawn from it
@@ -163,10 +163,10 @@ enum ThemeFolder {
             let id = String(name.dropLast(6)), url = folder.appending(path: name)
             if scan.issues[id] == nil, isOurError(url, id: id) { try? fm.removeItem(at: url) }
         }
-        let builtIns = Set(PulseSkinSet.builtIn.map(\.id))
+        let builtIns = Set(PulseThemeFile.builtIn.map(\.id))
         for id in scan.issues.keys.sorted(by: { (builtIns.contains($0) ? 0 : 1, $0) < (builtIns.contains($1) ? 0 : 1, $1) }).prefix(maxProblems) {
             let url = folder.appending(path: "\(id).error")
-            let builtIn = PulseSkinSet.builtIn.first { $0.id == id }?.set.name
+            let builtIn = PulseThemeFile.builtIn.first { $0.id == id }?.file.name
             let shown = builtIn.map { "its own \($0)" } ?? (cache.lastGood[id] == nil ? "Classic" : "its last good version")
             let data = Data("\(errorHeader(id)), so Pulse draws \(shown) instead. Fix it and Pulse reads it again by itself; \(ThemeStore.guideName) here describes every key.\n\n\(scan.issues[id]!)\n".utf8)
             guard kind(url) == nil || isOurError(url, id: id) else { continue }
@@ -176,7 +176,7 @@ enum ThemeFolder {
     }
 
     /// A theme file, or why it can't be used: a regular file of at most 64 KB, then everything `ThemeStore.decode` checks.
-    static func load(_ url: URL) -> Result<PulseSkinSet, ThemeStore.Problem> {
+    static func load(_ url: URL) -> Result<PulseThemeFile, ThemeStore.Problem> {
         switch read(url, limit: ThemeStore.maxFileBytes) {
         case .data(let data): return ThemeStore.decode(data)
         case .tooBig: return .failure(.init(text: "- the file is over \(ThemeStore.maxFileBytes / 1024) KB; a theme file is at most \(ThemeStore.maxFileBytes / 1024) KB"))
@@ -184,5 +184,43 @@ enum ThemeFolder {
         case .notRegular(let what): return .failure(.init(text: "- it's \(what); a theme is a regular file"))
         case .unreadable(let why): return .failure(.init(text: "- the file can't be read: \(why)"))
         }
+    }
+
+    // MARK: importing
+
+    /// A theme file from anywhere, read and checked exactly as the folder's own files are, then copied into the folder,
+    /// byte for byte, under a name of its own: the source's name in lower case, letters, digits and dashes only, with
+    /// "-2", "-3"… if that name is taken or is a built-in's. Never replaces a file.
+    static func importTheme(_ source: URL, into folder: URL) -> Result<(id: String, name: String), ThemeStore.Problem> {
+        let data: Data
+        switch read(source, limit: ThemeStore.maxFileBytes) {
+        case .data(let d): data = d
+        case .tooBig: return .failure(.init(text: "- the file is over \(ThemeStore.maxFileBytes / 1024) KB; a theme file is at most \(ThemeStore.maxFileBytes / 1024) KB"))
+        case .missing: return .failure(.init(text: "- the file isn't there"))
+        case .notRegular(let what): return .failure(.init(text: "- it's \(what); a theme is a regular file"))
+        case .unreadable(let why): return .failure(.init(text: "- the file can't be read: \(why)"))
+        }
+        let file: PulseThemeFile
+        switch ThemeStore.decode(data) {
+        case .success(let f): file = f
+        case .failure(let problem): return .failure(problem)
+        }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let stem = source.deletingPathExtension().lastPathComponent.lowercased()
+            .map { $0.isLetter && $0.isASCII || $0.isNumber && $0.isASCII ? String($0) : "-" }.joined()
+            .split(separator: "-").joined(separator: "-").prefix(40)
+        let base = stem.isEmpty ? "theme" : String(stem)
+        let reserved = Set(PulseThemeFile.builtIn.map(\.id))
+        for n in 1 ... 100 {
+            let id = n == 1 ? base : "\(base)-\(n)"
+            guard !reserved.contains(id), kind(folder.appending(path: "\(id).json")) == nil else { continue }
+            do {
+                try data.write(to: folder.appending(path: "\(id).json"), options: .withoutOverwriting)
+                return .success((id, file.name))
+            } catch {
+                return .failure(.init(text: "- it couldn't be copied into the Themes folder: \(error.localizedDescription)"))
+            }
+        }
+        return .failure(.init(text: "- there's no free name for it in the Themes folder"))
     }
 }

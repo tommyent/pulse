@@ -1014,7 +1014,7 @@ struct OverlayView: View {
                     .buttonStyle(.plain)
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { itemFrames[ringKey(id, pool: pool.index)] = $0 }
                     .overlay(alignment: tuckBand.alignment) {
-                        let skin = themes.skin(state.persisted.skin, contrast: contrast)
+                        let skin = themes.skin(state.persisted.themeChoice, contrast: contrast)
                         let used = windows.outerArc?.percentUsed ?? 0
                         let shown = max(0, min(state.showsRemaining ? 100 - used : used, 100))
                         let spent = windows.longestLimitSpent
@@ -1257,39 +1257,105 @@ struct MenuBarPopover: View {
     }
 }
 
-/// Settings' theme menu: every theme Pulse can draw, a mark on one whose file has a problem, and what the problem is.
-private struct ThemePicker: View {
-    @ObservedObject var state: AppState
-    @ObservedObject private var themes = ThemeStore.shared
+/// Settings › Appearance: when Pulse is light or dark, a theme for each, and the theme files (Import…, Export…, a file
+/// dropped here, and what's wrong with any that can't be used).
+struct AppearanceSettings: View {
+    @Binding var choice: ThemeChoice
+    @ObservedObject var themes: ThemeStore
+    @State private var message: String?
 
     var body: some View {
-        // a name Pulse can't draw shows as Classic, as it draws
-        Picker("Skin", selection: Binding(get: { themes.theme(state.persisted.skin).id },
-                                          set: { state.persisted.skin = $0 == "classic" ? nil : $0 })) {
-            ForEach(themes.themes) { theme in
-                Text(theme.set.name + (themes.problems[theme.id] == nil ? "" : " ⚠︎")).tag(theme.id)
+        Section {
+            Picker("Mode", selection: $choice.mode) {
+                Text("Auto").tag(AppearanceMode.auto)
+                Text("Light").tag(AppearanceMode.light)
+                Text("Dark").tag(AppearanceMode.dark)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityLabel("Mode")
+            .help("Auto follows the Mac's appearance; Light and Dark keep Pulse in one")
+            slot("Light theme", .light)
+            slot("Dark theme", .dark)
+        }
+        Section {
+            LabeledContent {
+                HStack {
+                    Button("Import…", action: importPanel)
+                    Menu("Export…") {
+                        ForEach([ColorScheme.light, .dark], id: \.self) { slot in
+                            let theme = themes.theme(for: slot, in: choice)
+                            Button("\(slot == .light ? "Light" : "Dark") theme: \(theme.file.name)…") { export(theme) }
+                        }
+                    }
+                    .fixedSize()
+                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([themes.folder]) }
+                }
+            } label: {
+                Text("Theme files")
+                if let message { Text(message) }
+                let ids = themes.problems.keys.sorted()
+                ForEach(ids.prefix(5), id: \.self) { id in
+                    let first = themes.problems[id]?.split(separator: "\n").first.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "- ")) } ?? ""
+                    Text("⚠︎ \(id).json can't be used: \(first) (more in \(id).error)").foregroundStyle(alert)
+                }
+                if ids.count > 5 { Text("⚠︎ and \(ids.count - 5) more theme files that can't be used").foregroundStyle(alert) }
+                if let notice = themes.notice { Text("⚠︎ \(notice)").foregroundStyle(alert) }
+                if themes.problems.isEmpty, themes.notice == nil, message == nil {
+                    Text("One JSON file per theme: import one or drop it here. \(ThemeStore.guideName) in the folder describes the format")
+                }
             }
         }
-        .accessibilityLabel("Skin")
-        LabeledContent {
-            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([themes.folder]) }
-        } label: {
-            Text("Theme files")
-            let ids = themes.problems.keys.sorted()
-            ForEach(ids.prefix(5), id: \.self) { id in
-                let first = themes.problems[id]?.split(separator: "\n").first.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "- ")) } ?? ""
-                Text("⚠︎ \(id).json can't be used: \(first) (more in \(id).error)")
-                    .foregroundStyle(skinAlert)
-            }
-            if ids.count > 5 { Text("⚠︎ and \(ids.count - 5) more theme files that can't be used").foregroundStyle(skinAlert) }
-            if let notice = themes.notice { Text("⚠︎ \(notice)").foregroundStyle(skinAlert) }
-            if themes.problems.isEmpty, themes.notice == nil {
-                Text("One JSON file per theme, read again when it changes; \(ThemeStore.guideName) there describes the format")
-            }
+        .dropDestination(for: URL.self) { urls, _ in
+            for url in urls { themes.importTheme(url) { message = $0 } }
+            return !urls.isEmpty
         }
     }
 
-    private var skinAlert: Color { themes.skin(state.persisted.skin).alert }
+    /// A theme menu: the themes that can draw in this mode, showing the one that does (a missing or unfitting choice
+    /// shows the Classic that draws instead). Picking a Classic makes it the fallback too.
+    private func slot(_ title: String, _ slot: ColorScheme) -> some View {
+        Picker(title, selection: Binding(get: { themes.theme(for: slot, in: choice).id },
+                                         set: { id in
+                                             if slot == .light { choice.light = id } else { choice.dark = id }
+                                             if ThemeStore.classicIDs.contains(id) { choice.classic = id }
+                                         })) {
+            ForEach(themes.choices(for: slot)) { theme in
+                Text(theme.file.name + (themes.problems[theme.id] == nil ? "" : " ⚠︎")).tag(theme.id)
+            }
+        }
+        .accessibilityLabel(title)
+    }
+
+    private var alert: Color { themes.skin(choice).alert }
+
+    private func importPanel() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = true
+        panel.message = "Choose theme files to copy into Pulse's Themes folder"
+        panel.begin { response in
+            guard response == .OK else { return }
+            MainActor.assumeIsolated { for url in panel.urls { themes.importTheme(url) { message = $0 } } }
+        }
+    }
+
+    /// The theme as one self-contained file, wherever the person puts it.
+    private func export(_ theme: PulseTheme) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "\(theme.id).json"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            let data = ThemeStore.file(theme.file), name = theme.file.name
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result: String
+                do { try data.write(to: url, options: .atomic); result = "Exported \(name) to \(url.lastPathComponent)." } catch {
+                    result = "\(name) wasn't exported: \(error.localizedDescription)"
+                }
+                DispatchQueue.main.async { message = result }
+            }
+        }
+    }
 }
 
 struct SettingsView: View {
@@ -1301,7 +1367,7 @@ struct SettingsView: View {
     /// One tab per group. Only the layout is grouped: every value is saved where it always was.
     var body: some View {
         TabView(selection: $state.settingsTab) {
-            tab("General", "gearshape", height: 300) {
+            tab("General", "gearshape", height: 160) {
                 Section {
                     Toggle("Launch at login", isOn: Binding(
                         get: { loginItem == .enabled },
@@ -1313,16 +1379,10 @@ struct SettingsView: View {
                     if loginItem == .requiresApproval {
                         Button("Allow Pulse in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
                     }
-                    ThemePicker(state: state)
-                    Picker("Appearance", selection: $state.persisted.appearance) {
-                        Text("Glass").tag(PulseAppearance.glass)
-                        Text("Solid").tag(PulseAppearance.solid)
-                    }
-                    .pickerStyle(.segmented)
-                    .accessibilityLabel("Appearance")
-                    .disabled(ThemeStore.shared.theme(state.persisted.skin).set.dark.groove != nil)
-                    .help(ThemeStore.shared.theme(state.persisted.skin).set.dark.groove != nil ? "Glass and Solid are for flat themes; this one has its own surface" : "")
                 }
+            }
+            tab("Appearance", "paintpalette", height: 330) {
+                AppearanceSettings(choice: $state.persisted.themeChoice, themes: ThemeStore.shared)
             }
             tab("Accounts", "person.crop.circle", height: 360) {
                 Section {

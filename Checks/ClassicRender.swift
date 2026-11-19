@@ -35,18 +35,18 @@ final class OverlayHostingView<Content: View>: NSHostingView<Content> {}
             .padding(20).pulseSurface(in: Capsule())
             UsageCard(snapshot: snap, windows: windows).frame(width: 250)
         }.padding(20).background(Color.white)
-        for scale in [1.0, 2.0] {
+        for (appearance, suffix) in [(PulseAppearance.solid, ""), (.glass, "-glass")] { for scale in [1.0, 2.0] {
             let renderer = ImageRenderer(content: fixture.environment(\.colorScheme, .dark)
-                .environment(\.pulseAppearance, .solid))
+                .environment(\.pulseAppearance, appearance))
             renderer.scale = scale
             let image = renderer.cgImage!
             let flags = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
             let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
                                 bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: flags)!
             ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-            try Data(bytes: ctx.data!, count: image.width * image.height * 4).write(to: out.appending(path: "classic-\(Int(scale))x.rgba"))
-            try NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])!.write(to: out.appending(path: "classic-\(Int(scale))x.png"))
-            print("Classic \(Int(scale))x \(image.width)x\(image.height)")
-        }
+            try Data(bytes: ctx.data!, count: image.width * image.height * 4).write(to: out.appending(path: "classic\(suffix)-\(Int(scale))x.rgba"))
+            try NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])!.write(to: out.appending(path: "classic\(suffix)-\(Int(scale))x.png"))
+            print("Classic\(suffix) \(Int(scale))x \(image.width)x\(image.height)")
+        } }
     }
 }

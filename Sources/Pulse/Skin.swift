@@ -1,26 +1,75 @@
 import SwiftUI
 
-/// A theme as its file holds it: the name Settings shows and a set of values for each appearance. Classic is the look
-/// Pulse has always had; Groove is a sculpted one (Fable's "Groove C · Inlay"), white in light appearance, and Groove
-/// Black the same with black rings. A theme with no light half keeps Pulse dark whatever the system's appearance.
+/// Which of Settings' two theme menus a theme belongs in: the light theme's, the dark theme's, or both ("any": it
+/// draws the same in both modes).
+enum ThemeSlot: String, Codable, CaseIterable {
+    case light, dark, any
+    func fits(_ mode: ColorScheme) -> Bool { self == .any || (self == .light) == (mode == .light) }
+}
+
+/// A theme as its file holds it, one look: the format it's written in, the name Settings shows, who made it and what it
+/// is (optional), which menu it belongs in, and the look's own keys beside them in the same object. Nothing in it
+/// refers to anything outside the file, so the file alone is the theme: it can be sent to someone or moved to another Mac.
 ///
-/// Plain Codable values with fixed key names, so a theme can come from a JSON file (`Themes.swift` reads and checks
-/// them): colours are strings (`SkinColor`: hex, or exact components such as "p3:1,0.40,0.16"), shadows are
-/// `[x, y, blur, "#RRGGBB", opacity]` as in Fable's token files, sizes are numbers.
-struct PulseSkinSet: Codable, Equatable {
+/// Plain Codable values with fixed key names (`Themes.swift` reads and checks them): colours are strings (`SkinColor`:
+/// hex, or exact components such as "p3:1,0.40,0.16"), shadows are `[x, y, blur, "#RRGGBB", opacity]` as in Fable's
+/// token files, sizes are numbers.
+struct PulseThemeFile: Codable, Equatable {
+    static let currentFormat = 1
+
+    var format = PulseThemeFile.currentFormat
     var name: String
-    var dark: PulseSkin
-    var light: PulseSkin?
+    var author: String? = nil
+    var description: String? = nil
+    var appearance: ThemeSlot
+    var look: PulseSkin
 
-    /// The appearance Pulse draws in with this theme: the system's when the theme has a light half, else dark.
-    func scheme(system: ColorScheme) -> ColorScheme { light == nil ? .dark : system }
-    func half(_ scheme: ColorScheme) -> PulseSkin { scheme == .light ? light ?? dark : dark }
+    /// The appearance Pulse's windows take with this theme: its own for a light or dark one; for "any", the one its
+    /// surface reads as (Classic: dark, as Pulse always was).
+    var scheme: ColorScheme {
+        switch appearance {
+        case .light: .light
+        case .dark: .dark
+        case .any: (look.groove?.slab ?? look.surface).luminance > 0.18 ? .light : .dark
+        }
+    }
 
-    static let classic = PulseSkinSet(name: "Classic", dark: .classic)
-    static let groove = PulseSkinSet(name: "Groove", dark: .groove, light: .grooveWhite)
-    static let grooveBlack = PulseSkinSet(name: "Groove Black", dark: .groove, light: .grooveBlack)
-    /// The themes inside the app, under the ids a setting and a theme's file name use. Always there.
-    static let builtIn: [(id: String, set: PulseSkinSet)] = [("classic", classic), ("groove", groove), ("groove-black", grooveBlack)]
+    private enum Keys: String, CodingKey { case format, name, author, description, appearance }
+    init(name: String, author: String? = nil, description: String? = nil, appearance: ThemeSlot, look: PulseSkin) {
+        self.name = name; self.author = author; self.description = description; self.appearance = appearance; self.look = look
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        format = try c.decode(Int.self, forKey: .format)
+        name = try c.decode(String.self, forKey: .name)
+        author = try c.decodeIfPresent(String.self, forKey: .author)
+        description = try c.decodeIfPresent(String.self, forKey: .description)
+        appearance = try c.decode(ThemeSlot.self, forKey: .appearance)
+        look = try PulseSkin(from: decoder)   // the look's keys sit beside these in the same object
+    }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        try c.encode(format, forKey: .format)
+        try c.encode(name, forKey: .name)
+        try c.encodeIfPresent(author, forKey: .author)
+        try c.encodeIfPresent(description, forKey: .description)
+        try c.encode(appearance, forKey: .appearance)
+        try look.encode(to: encoder)
+    }
+
+    static let classicGlass = PulseThemeFile(name: "Classic Glass", description: "Pulse's own look, on untinted dark Liquid Glass.",
+                                             appearance: .any, look: .classicGlass)
+    static let classicSolid = PulseThemeFile(name: "Classic Solid", description: "Pulse's own look, on an opaque dark surface.",
+                                             appearance: .any, look: .classic)
+    static let groove = PulseThemeFile(name: "Groove", description: "Each ring a channel pressed into a raised dark slab, the colour on its floor.",
+                                       appearance: .dark, look: .groove)
+    static let grooveWhite = PulseThemeFile(name: "Groove White", description: "Groove in white: white channels pressed into a white slab, the colours deepened to read on it.",
+                                            appearance: .light, look: .grooveWhite)
+    static let grooveBlack = PulseThemeFile(name: "Groove Black", description: "A white slab with each ring a black puck pressed into it, Groove's dark colours inside.",
+                                            appearance: .light, look: .grooveBlack)
+    /// The themes inside the app, under the ids settings and theme files use. Always there; their ids are reserved.
+    static let builtIn: [(id: String, file: PulseThemeFile)] = [("classic-glass", classicGlass), ("classic-solid", classicSolid),
+                                                               ("groove", groove), ("groove-white", grooveWhite), ("groove-black", grooveBlack)]
 }
 
 /// One appearance's half of a skin: what the views read from the environment. Views hold no colour or shadow of their own.
@@ -30,7 +79,11 @@ struct PulseSkin: Codable, Equatable {
     var track: SkinColor     // an empty ring's track (Classic)
     var ink: Ink
     var stale: Double        // opacity of a ring and number from an earlier refresh
+    var glass: Bool? = nil   // a flat look's panels: untinted dark Liquid Glass instead of `surface` (Classic Glass)
     var groove: Groove?      // nil = flat: Classic's surface, tracks and text
+
+    /// How a flat look's panels are drawn: Glass or Solid.
+    var material: PulseAppearance { glass == true ? .glass : .solid }
 
     struct Accents: Codable, Equatable {
         var claude, codex, grok, antigravity: SkinColor
@@ -87,6 +140,9 @@ struct PulseSkin: Codable, Equatable {
         ink: Ink(primary: nil, secondary: "srgb:0.9,0.9,0.9"),
         stale: 0.5,
         groove: nil)
+
+    /// Classic on untinted dark Liquid Glass.
+    static let classicGlass: PulseSkin = { var s = classic; s.glass = true; return s }()
 
     /// Groove C · Inlay, its dark half: the colour lies flat on the floor of a deep channel, part of it in the wall's shadow;
     /// muted colours (OKLCH chroma 58%, lightness 95%); text embossed, logos and icons raised. Light from the top left.

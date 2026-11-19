@@ -6,8 +6,20 @@ import SwiftUI
 /// A theme Pulse can draw: a built-in, or a file in the Themes folder that passed every check.
 struct PulseTheme: Equatable, Identifiable {
     let id: String   // the file's name without ".json"; what state.json keeps
-    let set: PulseSkinSet
+    let file: PulseThemeFile
     var builtIn = false
+}
+
+/// Settings › Appearance: when Pulse is light or dark, and the theme for each.
+enum AppearanceMode: String, Codable, CaseIterable { case auto, light, dark }
+
+/// What the person chose: the mode, a light theme and a dark theme by id, and their Classic (Glass or Solid), which
+/// draws in a slot whose theme Pulse doesn't have or that doesn't fit it.
+struct ThemeChoice: Equatable {
+    var mode: AppearanceMode = .auto
+    var light = "classic-solid"
+    var dark = "classic-solid"
+    var classic = "classic-solid"
 }
 
 /// Pulse's themes: the built-ins, always there, and one JSON file per theme in Application Support/Pulse/Themes,
@@ -22,11 +34,13 @@ struct PulseTheme: Equatable, Identifiable {
     nonisolated static let maxFileBytes = 64 * 1024
     nonisolated static let maxThemes = 50   // files read, beyond the built-ins
     nonisolated static let guideName = "AGENTS.md"
+    nonisolated static let classicIDs = ["classic-glass", "classic-solid"]
 
-    @Published private(set) var themes: [PulseTheme] = PulseSkinSet.builtIn.map { PulseTheme(id: $0.id, set: $0.set, builtIn: true) }
+    @Published private(set) var themes: [PulseTheme] = PulseThemeFile.builtIn.map { PulseTheme(id: $0.id, file: $0.file, builtIn: true) }
     @Published private(set) var problems: [String: String] = [:]   // a file's id: what its .error says
     @Published private(set) var notice: String?                    // about the folder as a whole (too many files)
     @Published private(set) var systemScheme: ColorScheme = .dark
+    @Published private(set) var choice = ThemeChoice()             // as state.json has it
 
     let folder: URL
     private let io = DispatchQueue(label: "io.github.tommyent.pulse.themes")
@@ -40,18 +54,29 @@ struct PulseTheme: Equatable, Identifiable {
 
     // MARK: what views draw with
 
-    /// The theme a setting names; nil, an unknown id, or a file with no good version yet is Classic.
-    func theme(_ id: String?) -> PulseTheme { themes.first { $0.id == (id ?? "classic") } ?? themes[0] }
-    func scheme(_ id: String?) -> ColorScheme { theme(id).set.scheme(system: systemScheme) }
-    func skin(_ id: String?, contrast: ColorSchemeContrast = .standard) -> PulseSkin {
-        let half = theme(id).set.half(scheme(id))
-        return contrast == .increased ? half.increasedContrast() : half
+    /// The mode in effect: the system's in Auto, else the one pinned.
+    func mode(_ c: ThemeChoice) -> ColorScheme { c.mode == .auto ? systemScheme : c.mode == .light ? .light : .dark }
+
+    /// What a slot draws: its chosen theme if Pulse has it and it fits the slot, else the person's Classic.
+    func theme(for slot: ColorScheme, in c: ThemeChoice) -> PulseTheme {
+        let id = slot == .light ? c.light : c.dark
+        if let chosen = themes.first(where: { $0.id == id }), chosen.file.appearance.fits(slot) { return chosen }
+        return themes.first { $0.id == c.classic } ?? themes.first { $0.id == "classic-solid" }!
     }
+    /// The theme drawn now, the appearance its windows take, and its look (adjusted for Increase Contrast).
+    func current(_ c: ThemeChoice) -> PulseTheme { theme(for: mode(c), in: c) }
+    func scheme(_ c: ThemeChoice) -> ColorScheme { current(c).file.scheme }
+    func skin(_ c: ThemeChoice, contrast: ColorSchemeContrast = .standard) -> PulseSkin {
+        let look = current(c).file.look
+        return contrast == .increased ? look.increasedContrast() : look
+    }
+    /// A slot's menu: every theme that can be light, or dark ("any" in both).
+    func choices(for slot: ColorScheme) -> [PulseTheme] { themes.filter { $0.file.appearance.fits(slot) } }
 
     // MARK: the folder
 
     /// At launch: the examples and the guide into the folder, every file read, the folder watched, the system's
-    /// appearance followed, and the chosen theme's id mirrored. The application itself stays dark (`NSApp.appearance`,
+    /// appearance followed, and the person's choice mirrored. The application itself stays dark (`NSApp.appearance`,
     /// set at launch as always); only Pulse's own themed windows take a theme's appearance (`PulsePresentation`), so
     /// other windows (the Grok sign-in, the Codex approval alerts) keep the dark they always had.
     func start(_ state: AppState) {
@@ -59,18 +84,17 @@ struct PulseTheme: Equatable, Identifiable {
         reload()
         watch()
         followSystem()
-        follow(state.$persisted.map(\.skin))
+        follow(state.$persisted.map(\.themeChoice))
     }
 
-    /// The chosen theme's id, as a publisher gives it. Only the id: a view resolves it against `themes` when it draws,
-    /// so a reload that adds or removes a light half is read from the new list, never the one before it.
-    func follow<P: Publisher>(_ skin: P) where P.Output == String?, P.Failure == Never {
-        followed = skin.removeDuplicates().sink { [weak self] id in
-            MainActor.assumeIsolated { if self?.selected != id { self?.selected = id } }
+    /// The person's choice, as a publisher gives it. Only the ids: a view resolves them against `themes` when it draws,
+    /// so a reload is read from the new list, never the one before it.
+    func follow<P: Publisher>(_ choices: P) where P.Output == ThemeChoice, P.Failure == Never {
+        followed = choices.removeDuplicates().sink { [weak self] c in
+            MainActor.assumeIsolated { if self?.choice != c { self?.choice = c } }
         }
     }
     private var followed: AnyCancellable?
-    @Published private(set) var selected: String?   // the theme in use, as state.json names it
 
     func setSystem(_ scheme: ColorScheme) { if systemScheme != scheme { systemScheme = scheme } }
 
@@ -100,6 +124,22 @@ struct PulseTheme: Equatable, Identifiable {
         run { folder, cache in ThemeFolder.scan(folder, cache: cache) }
     }
 
+    /// A theme file from anywhere (Settings' Import…, or one dropped on Settings), checked as the folder's own are and
+    /// copied in under a free name, then the folder read again. `done` gets what to tell the person, on the main actor.
+    @discardableResult func importTheme(_ source: URL, done: @escaping @MainActor (String) -> Void = { _ in }) -> Int {
+        let number = run { folder, cache in
+            let result = ThemeFolder.importTheme(source, into: folder)
+            let message: String
+            switch result {
+            case .success(let added): message = "Imported \(added.name) as \(added.id).json."
+            case .failure(let problem): message = "\(source.lastPathComponent) wasn't imported:\n\(problem.text)"
+            }
+            DispatchQueue.main.async { MainActor.assumeIsolated { done(message) } }
+            return ThemeFolder.scan(folder, cache: cache)
+        }
+        return number
+    }
+
     private func run(_ job: @escaping @Sendable (URL, ThemeFolder.Cache) -> ThemeFolder.Scan?) -> Int {
         asked += 1
         let number = asked, folder = folder, cache = cache
@@ -112,7 +152,7 @@ struct PulseTheme: Equatable, Identifiable {
 
     private func publish(_ scan: ThemeFolder.Scan?, _ number: Int) {
         if let scan {
-            let all = PulseSkinSet.builtIn.map { PulseTheme(id: $0.id, set: $0.set, builtIn: true) } + scan.found
+            let all = PulseThemeFile.builtIn.map { PulseTheme(id: $0.id, file: $0.file, builtIn: true) } + scan.found
             if all != themes { themes = all }
             if scan.issues != problems { problems = scan.issues }
             if scan.notice != notice { notice = scan.notice }
@@ -182,18 +222,31 @@ struct PulseTheme: Equatable, Identifiable {
 
     struct Problem: Error, Equatable { let text: String }
 
-    nonisolated static func decode(_ data: Data) -> Result<PulseSkinSet, Problem> {
+    /// A theme file's bytes, or why it can't be used: its format first (a newer one is refused with that alone), then
+    /// unknown and missing keys, every value's type and range, the rings' geometry and the contrast floor.
+    nonisolated static func decode(_ data: Data) -> Result<PulseThemeFile, Problem> {
         guard data.count <= maxFileBytes else { return .failure(Problem(text: "- a theme file is at most \(maxFileBytes / 1024) KB")) }
         let raw: Any
         do { raw = try JSONSerialization.jsonObject(with: data) } catch {
             let detail = (error as NSError).userInfo[NSDebugDescriptionErrorKey] as? String ?? "\(error)"
             return .failure(Problem(text: "- not JSON: \(detail)"))
         }
-        var lines = unknownKeys(raw).map { "- \($0): not a key Pulse knows (a typo?)" }
+        guard let object = raw as? [String: Any] else { return .failure(Problem(text: "- a theme file is one JSON object, { … }")) }
+        let current = PulseThemeFile.currentFormat
+        switch object["format"] {
+        case nil: return .failure(Problem(text: "- format: missing; a theme file says which format it's written in, \"format\": \(current)"))
+        case let n as NSNumber where CFGetTypeID(n) != CFBooleanGetTypeID() && n.doubleValue == n.doubleValue.rounded():
+            if n.intValue > current {
+                return .failure(Problem(text: "- format \(n.intValue): this theme was made for a newer Pulse, which writes format \(n.intValue); this Pulse reads format \(current). Update Pulse to use it."))
+            }
+            if n.intValue < 1 { return .failure(Problem(text: "- format: \(n.intValue) isn't a format; this Pulse reads format \(current)")) }
+        default: return .failure(Problem(text: "- format: should be a whole number, \(current)"))
+        }
+        var lines = unknownKeys(raw).map { "- \($0): not a key Pulse knows (a typo, or a newer Pulse's)" }
         do {
-            let set = try JSONDecoder().decode(PulseSkinSet.self, from: data)
-            lines += set.problems().map { "- \($0)" }
-            return lines.isEmpty ? .success(set) : .failure(Problem(text: lines.prefix(20).joined(separator: "\n")))
+            let file = try JSONDecoder().decode(PulseThemeFile.self, from: data)
+            lines += file.problems().map { "- \($0)" }
+            return lines.isEmpty ? .success(file) : .failure(Problem(text: lines.prefix(20).joined(separator: "\n")))
         } catch let error as DecodingError {
             return .failure(Problem(text: (lines + ["- \(describe(error))"]).prefix(20).joined(separator: "\n")))
         } catch {
@@ -201,32 +254,32 @@ struct PulseTheme: Equatable, Identifiable {
         }
     }
 
-    /// Every key path the format has, as components, from the built-ins with each optional value filled (Groove
-    /// Black's porthole in Groove's light half): the dark and light halves share one list.
+    /// Every key path the format has, as components, from the built-ins with each optional value filled: White's
+    /// light disc colours, Black's porthole, and an author, a description and the Glass flag.
     nonisolated static let knownKeys: Set<[String]> = {
-        var sample = PulseSkinSet.groove
-        sample.light?.groove?.porthole = PulseSkin.grooveBlack.groove?.porthole
+        var sample = PulseThemeFile.grooveWhite
+        sample.author = "a"
+        sample.look.glass = true
+        sample.look.groove?.porthole = PulseSkin.grooveBlack.groove?.porthole
         var keys = Set<[String]>()
-        collectKeys(try! JSONSerialization.jsonObject(with: JSONEncoder().encode(sample)), []) { keys.insert($1) }
+        collectKeys(try! JSONSerialization.jsonObject(with: JSONEncoder().encode(sample)), []) { keys.insert($0) }
         return keys
     }()
 
-    /// Each key in a JSON object, as written and with a top-level "light" read as "dark". Components, never a joined
-    /// string, so a key with dots in it can't pass for a nested one.
-    nonisolated private static func collectKeys(_ object: Any, _ path: [String], _ found: ([String], [String]) -> Void) {
+    /// Each key in a JSON object, as components, never a joined string, so a key with dots in it can't pass for a
+    /// nested one.
+    nonisolated private static func collectKeys(_ object: Any, _ path: [String], _ found: ([String]) -> Void) {
         guard let dict = object as? [String: Any] else { return }
         for (key, value) in dict {
-            let shown = path + [key]
-            let general = shown.first == "light" ? ["dark"] + shown.dropFirst() : shown
-            found(shown, general)
-            collectKeys(value, shown, found)
+            found(path + [key])
+            collectKeys(value, path + [key], found)
         }
     }
 
     nonisolated private static func unknownKeys(_ raw: Any) -> [String] {
         var unknown: [String] = []
-        collectKeys(raw, []) { shown, general in
-            if !knownKeys.contains(general) { unknown.append(shown.map { $0.contains(".") ? "\"\($0)\"" : $0 }.joined(separator: ".")) }
+        collectKeys(raw, []) { path in
+            if !knownKeys.contains(path) { unknown.append(path.map { $0.contains(".") ? "\"\($0)\"" : $0 }.joined(separator: ".")) }
         }
         return unknown.sorted()
     }
@@ -247,7 +300,7 @@ struct PulseTheme: Equatable, Identifiable {
     }
 
     /// A theme as Pulse writes it: pretty-printed, each shadow on one line.
-    nonisolated static func file(_ set: PulseSkinSet) -> Data {
+    nonisolated static func file(_ set: PulseThemeFile) -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]   // the same bytes every time
         let text = String(decoding: try! encoder.encode(set), as: UTF8.self)
@@ -260,17 +313,26 @@ struct PulseTheme: Equatable, Identifiable {
 
 // MARK: - checks on a theme's values
 
-extension PulseSkinSet {
-    /// Everything wrong with a decoded theme, each as "path: why". Empty: Pulse may draw it.
+extension PulseThemeFile {
+    /// Everything wrong with a decoded theme, each as "key: why". Empty: Pulse may draw it.
     func problems() -> [String] {
         var out: [String] = []
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty || trimmed.count > 40 { out.append("name: 1 to 40 characters") }
-        out += dark.problems("dark", appearance: .dark)
-        if let light {
-            if light.groove == nil { out.append("light.groove: missing; the flat drawing (Classic's) is dark only, so a light half needs groove") }
-            out += light.problems("light", appearance: .light)
+        func text(_ key: String, _ value: String?, max: Int, lines: Bool = false) {
+            guard let value else { return }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed.count > max { out.append("\(key): 1 to \(max) characters") }
+            if value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) && !(lines && $0 == "\n") }) {
+                out.append("\(key): no control characters\(lines ? " (line breaks are fine)" : "")")
+            }
         }
+        text("name", name, max: 40)
+        text("author", author, max: 80)
+        text("description", description, max: 300, lines: true)
+        if look.groove == nil, scheme == .light {
+            out.append("appearance: a flat theme (no groove) uses Classic's drawing, which is dark only; give it a dark surface, or groove")
+        }
+        if look.glass != nil, look.groove != nil { out.append("glass: for a flat theme only; a theme with groove draws its own slab") }
+        out += look.problems("", appearance: scheme)
         return out
     }
 }
@@ -281,14 +343,14 @@ extension PulseSkin {
     func problems(_ at: String, appearance: ColorScheme) -> [String] {
         var out: [String] = []
         func range(_ path: String, _ v: Double, _ r: ClosedRange<Double>) {
-            if !r.contains(v) { out.append("\(at).\(path): \(v.formatted()) is outside \(r.lowerBound.formatted()) to \(r.upperBound.formatted())") }
+            if !r.contains(v) { out.append("\(at)\(path): \(v.formatted()) is outside \(r.lowerBound.formatted()) to \(r.upperBound.formatted())") }
         }
         func shadow(_ path: String, _ s: SkinShadow, reach: Double = 20, blur: Double = 24) {
             range("\(path) x", Double(s.x), -reach ... reach); range("\(path) y", Double(s.y), -reach ... reach)
             range("\(path) blur", Double(s.blur), 0 ... blur); range("\(path) opacity", s.opacity, 0 ... 1)
         }
         func shadows(_ path: String, _ list: [SkinShadow], max: Int = 4, reach: Double = 20, blur: Double = 24) {
-            if list.count > max { out.append("\(at).\(path): at most \(max) shadows") }
+            if list.count > max { out.append("\(at)\(path): at most \(max) shadows") }
             for (i, s) in list.enumerated() { shadow("\(path)[\(i)]", s, reach: reach, blur: blur) }
         }
         range("stale", stale, 0 ... 1)
@@ -297,14 +359,14 @@ extension PulseSkin {
         let assumedInk: SkinColor = appearance == .dark ? "#FFFFFF" : "#000000"   // the system's label colour
         let primaryInk = ink.primary ?? assumedInk
         func opaque(_ path: String, _ c: SkinColor) -> Bool {
-            if c.alpha < 1 { out.append("\(at).\(path): must be opaque (contrast is checked against it)") }
+            if c.alpha < 1 { out.append("\(at)\(path): must be opaque (contrast is checked against it)") }
             return c.alpha == 1
         }
         func floor(_ path: String, _ c: SkinColor, on groundPath: String, _ ground: SkinColor, _ needed: Double, _ what: String) {
             guard opaque(path, c), opaque(groundPath, ground) else { return }
             let r = c.contrast(with: ground)
             if r < needed {
-                out.append("\(at).\(path) \(c.hex) on \(at).\(groundPath) \(ground.hex): \(r.formatted(.number.precision(.fractionLength(2)))):1, \(what) needs \(needed.formatted()):1")
+                out.append("\(at)\(path) \(c.hex) on \(at)\(groundPath) \(ground.hex): \(r.formatted(.number.precision(.fractionLength(2)))):1, \(what) needs \(needed.formatted()):1")
             }
         }
         // text lies anywhere on the slab, so on every colour of its gradient: its middle and both ends
@@ -316,7 +378,7 @@ extension PulseSkin {
             }
             if primaryInk.alpha == 1, ground.alpha == 1 {   // a number from an earlier refresh, drawn at `stale`
                 let r = primaryInk.over(ground, opacity: stale).contrast(with: ground)
-                if r < 4.5 { out.append("\(at).stale: ink at \(stale.formatted()) on \(at).\(groundPath) is \(r.formatted(.number.precision(.fractionLength(2)))):1, text needs 4.5:1") }
+                if r < 4.5 { out.append("\(at)stale: ink at \(stale.formatted()) on \(at)\(groundPath) is \(r.formatted(.number.precision(.fractionLength(2)))):1, text needs 4.5:1") }
             }
         }
         let colours: [(String, SkinColor?)] = [("claude", accents.claude), ("codex", accents.codex), ("grok", accents.grok),
@@ -342,29 +404,29 @@ extension PulseSkin {
         range("groove.grain", g.grain, 0 ... 1)
         for (path, t) in [("groove.outer", g.outer), ("groove.inner", g.inner)] {
             range("\(path).radius", t.radius, 1 ... 60); range("\(path).channel", t.channel, 0.5 ... 30); range("\(path).tube", t.tube, 0.5 ... 30)
-            if t.tube > t.channel { out.append("\(at).\(path).tube: wider than its channel (\(t.channel.formatted()))") }
+            if t.tube > t.channel { out.append("\(at)\(path).tube: wider than its channel (\(t.channel.formatted()))") }
         }
         let outerEdge = g.outer.radius + g.outer.channel / 2, outerInside = g.outer.radius - g.outer.channel / 2
         let innerEdge = g.inner.radius + g.inner.channel / 2, innerInside = g.inner.radius - g.inner.channel / 2
-        if outerEdge > 60 { out.append("\(at).groove.outer: reaches \(outerEdge.formatted()), past the ring's box (60)") }
-        if innerEdge > outerInside { out.append("\(at).groove.inner: reaches \(innerEdge.formatted()), into the outer channel (from \(outerInside.formatted()))") }
+        if outerEdge > 60 { out.append("\(at)groove.outer: reaches \(outerEdge.formatted()), past the ring's box (60)") }
+        if innerEdge > outerInside { out.append("\(at)groove.inner: reaches \(innerEdge.formatted()), into the outer channel (from \(outerInside.formatted()))") }
         range("groove.hubSingle", g.hubSingle, 3 ... 60); range("groove.hubDouble", g.hubDouble, 3 ... 60)
-        if g.hubSingle > outerInside { out.append("\(at).groove.hubSingle: \(g.hubSingle.formatted()) covers the outer channel (from \(outerInside.formatted()))") }
-        if g.hubDouble > innerInside { out.append("\(at).groove.hubDouble: \(g.hubDouble.formatted()) covers the inner channel (from \(innerInside.formatted()))") }
+        if g.hubSingle > outerInside { out.append("\(at)groove.hubSingle: \(g.hubSingle.formatted()) covers the outer channel (from \(outerInside.formatted()))") }
+        if g.hubDouble > innerInside { out.append("\(at)groove.hubDouble: \(g.hubDouble.formatted()) covers the inner channel (from \(innerInside.formatted()))") }
         if let p = g.porthole {
             range("groove.porthole.radius", p.radius, 1 ... 58)
-            if p.radius < outerEdge { out.append("\(at).groove.porthole.radius: smaller than the outer channel (\(outerEdge.formatted()))") }
+            if p.radius < outerEdge { out.append("\(at)groove.porthole.radius: smaller than the outer channel (\(outerEdge.formatted()))") }
             shadow("groove.porthole.lip", p.lip, reach: 2, blur: 2); shadows("groove.porthole.inner", p.inner, reach: 10, blur: 10)
         }
         range("groove.barSlot", g.barSlot, 2 ... 20); range("groove.barFill", g.barFill, 1 ... 20); range("groove.barRadius", g.barRadius, 0 ... 10)
-        if g.barFill > g.barSlot { out.append("\(at).groove.barFill: wider than groove.barSlot") }
-        if g.barRadius * 2 > g.barSlot { out.append("\(at).groove.barRadius: more than half of groove.barSlot") }
+        if g.barFill > g.barSlot { out.append("\(at)groove.barFill: wider than groove.barSlot") }
+        if g.barRadius * 2 > g.barSlot { out.append("\(at)groove.barRadius: more than half of groove.barSlot") }
 
         // shadows: offsets and blurs that stay near what they shade (cost and the panel's 12 pt margin)
         shadows("groove.raise", g.raise)
         shadows("groove.drop", g.drop, max: 2)
         for (i, s) in g.drop.enumerated() where max(abs(s.x), abs(s.y)) + s.blur > 12 {
-            out.append("\(at).groove.drop[\(i)]: reaches \((max(abs(s.x), abs(s.y)) + s.blur).formatted()) pt; the panel leaves 12")
+            out.append("\(at)groove.drop[\(i)]: reaches \((max(abs(s.x), abs(s.y)) + s.blur).formatted()) pt; the panel leaves 12")
         }
         shadow("groove.pressLip", g.pressLip, reach: 3, blur: 3)
         shadows("groove.pressInner", g.pressInner); shadow("groove.tubeBleed", g.tubeBleed); shadow("groove.tubeInner", g.tubeInner)

@@ -6,21 +6,25 @@ enum ThemeChecks {
     @MainActor static func run() {
         checkBuiltIns()
         checkRefusals()
+        checkFormat()
         checkContrastFloor()
         checkGuide()
         checkFolder()
         checkOwnership()
         checkBounded()
-        checkLightHalfLive()
+        checkImportExport()
+        checkSlotLive()
         checkCapAndWatch()
-        checkAppearance()
-        print("Theme checks passed: built-ins round-trip, every refusal on the list, the contrast floor on gradients and the counter, the guide's example and keys, last good, .error files, live reload, built-in names, only Pulse's files touched, bounded reads off the main thread, a light half added and removed live with the app staying dark, the cap and the cache, the watch's teardown, appearance")
+        checkModesAndSlots()
+        checkMigration()
+        checkClassicInBothModes()
+        print("Theme checks passed: built-ins round-trip, every refusal on the list, the format and portability, the contrast floor on gradients and the counter, the guide's examples and keys, last good, .error files, live reload, built-in names, only Pulse's files touched, bounded reads off the main thread, import and export, a theme's appearance changed live with the app staying dark, the cap and the cache, the watch's teardown, modes and slots, migration, Classic identical in both modes")
     }
 
     // MARK: helpers
 
     /// A built-in's JSON with one value replaced (nil: the key removed). `path` is dot-separated; numbers index lists.
-    static func edited(_ set: PulseSkinSet, _ path: String, _ value: Any?) -> Data {
+    static func edited(_ file: PulseThemeFile, _ path: String, _ value: Any?) -> Data {
         func put(_ object: Any, _ keys: ArraySlice<Substring>, _ value: Any?) -> Any {
             guard let key = keys.first else { return value ?? NSNull() }
             if var list = object as? [Any], let i = Int(key) { list[i] = put(list[i], keys.dropFirst(), value); return list }
@@ -28,7 +32,7 @@ enum ThemeChecks {
             if keys.count == 1, value == nil { dict[String(key)] = nil } else { dict[String(key)] = put(dict[String(key)] as Any, keys.dropFirst(), value) }
             return dict
         }
-        let object = try! JSONSerialization.jsonObject(with: ThemeStore.file(set))
+        let object = try! JSONSerialization.jsonObject(with: ThemeStore.file(file))
         return try! JSONSerialization.data(withJSONObject: put(object, path.split(separator: ".")[...], value))
     }
 
@@ -38,8 +42,8 @@ enum ThemeChecks {
         return problem.text
     }
 
-    static func expectRefused(_ set: PulseSkinSet, _ path: String, _ value: Any?, mentioning words: [String]) {
-        let text = refusal(edited(set, path, value), "\(path) = \(String(describing: value))")
+    static func expectRefused(_ file: PulseThemeFile, _ path: String, _ value: Any?, mentioning words: [String]) {
+        let text = refusal(edited(file, path, value), "\(path) = \(String(describing: value))")
         for w in words { assert(text.contains(w), "refusing \(path) = \(String(describing: value)) should mention \(w): \(text)") }
     }
 
@@ -54,149 +58,215 @@ enum ThemeChecks {
         return done()
     }
 
-    static let guideExample: Data = {
-        let text = ThemeGuide.text
-        let start = text.range(of: "```json\n")!.upperBound, end = text.range(of: "\n```", range: start ..< text.endIndex)!.lowerBound
-        return Data(text[start ..< end].utf8)
+    /// The guide's worked examples, in order: Ember (dark), Ember Glass (any), Paper (light).
+    static let guideExamples: [Data] = {
+        var out: [Data] = [], text = ThemeGuide.text[...]
+        while let start = text.range(of: "```json\n") {
+            let rest = text[start.upperBound...], end = rest.range(of: "\n```")!
+            out.append(Data(rest[..<end.lowerBound].utf8))
+            text = rest[end.upperBound...]
+        }
+        return out
     }()
+    static var guideExample: Data { guideExamples[0] }
 
-    // MARK: the checks
+    static func folder(_ name: String) -> URL {
+        let url = FileManager.default.temporaryDirectory.appending(path: "pulse-theme-\(name)-\(UUID().uuidString)").resolvingSymlinksInPath()
+        try! FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    /// A choice with one theme in both slots, Auto.
+    static func both(_ id: String, classic: String = "classic-solid") -> ThemeChoice { ThemeChoice(mode: .auto, light: id, dark: id, classic: classic) }
+
+    // MARK: the format
 
     static func checkBuiltIns() {
-        for (id, set) in PulseSkinSet.builtIn {
-            guard case .success(let read) = ThemeStore.decode(ThemeStore.file(set)) else {
-                fatalError("\(id) is refused by its own checks: \(refusal(ThemeStore.file(set), id))")
+        assert(PulseThemeFile.builtIn.map(\.id) == ["classic-glass", "classic-solid", "groove", "groove-white", "groove-black"])
+        for (id, file) in PulseThemeFile.builtIn {
+            guard case .success(let read) = ThemeStore.decode(ThemeStore.file(file)) else {
+                fatalError("\(id) is refused by its own checks: \(refusal(ThemeStore.file(file), id))")
             }
-            assert(read == set, "\(id) round-trips through its own JSON")
+            assert(read == file, "\(id) round-trips through its own JSON")
         }
         let text = String(decoding: ThemeStore.file(.groove), as: UTF8.self)
         assert(text.contains(##""wall" : [4.4, 4.4, 3.2, "#000000", 0.8]"##), "a shadow is written on one line")
-        assert(text.contains(#""name" : "Groove""#) && text.contains(#""light" : {"#), "Groove's file has its light half")
+        assert(text.contains(#""format" : 1"#) && text.contains(#""name" : "Groove""#) && text.contains(#""appearance" : "dark""#), text.prefix(300).description)
+        assert(!text.contains(#""light""#) && !text.contains(#""dark" : {"#), "one look per file, no halves")
+        assert(String(decoding: ThemeStore.file(.classicGlass), as: UTF8.self).contains(#""glass" : true"#), "Classic Glass is Classic with the glass flag")
+        let glass = PulseThemeFile.classicGlass.look, solid = PulseThemeFile.classicSolid.look
+        assert(glass.material == .glass && solid.material == .solid && { var g = glass; g.glass = nil; return g }() == solid, "Glass and Solid differ in the flag only")
+        assert(PulseThemeFile.classicGlass.scheme == .dark && PulseThemeFile.classicSolid.scheme == .dark, "Classic draws dark, as always")
+        assert(PulseThemeFile.grooveWhite.scheme == .light && PulseThemeFile.grooveBlack.scheme == .light && PulseThemeFile.groove.scheme == .dark)
     }
 
     static func checkRefusals() {
         // Sol's list: what the decoder used to accept
-        expectRefused(.groove, "dark.groove.barSlot", -10, mentioning: ["dark.groove.barSlot", "outside"])
-        expectRefused(.groove, "dark.groove.outer.channel", -16, mentioning: ["dark.groove.outer.channel"])
-        expectRefused(.groove, "dark.groove.wall", [4.4, 4.4, -3.2, "#000000", 0.8], mentioning: ["dark.groove.wall blur"])
-        expectRefused(.groove, "dark.groove.wall", [4.4, 4.4, 3.2, "#000000", 1.5], mentioning: ["dark.groove.wall opacity"])
-        expectRefused(.groove, "dark.groove.grain", 2, mentioning: ["dark.groove.grain"])
-        expectRefused(.groove, "dark.stale", -0.1, mentioning: ["dark.stale"])
-        expectRefused(.groove, "dark.groove.outer.radius", 70, mentioning: ["dark.groove.outer"])
-        expectRefused(.groove, "dark.groove.wall", [4.4, 4.4, 3.2, "#000000", 0.8, 1], mentioning: ["dark.groove.wall", "exactly"])
-        expectRefused(.groove, "dark.groove.floor", "#+12345", mentioning: ["dark.groove.floor", "not a colour"])
-        expectRefused(.groove, "dark.groove.wall", [4.4, 4.4, 3.2, "#+12345", 0.8], mentioning: ["dark.groove.wall", "not a colour"])
-        expectRefused(.groove, "dark.accents.codex", "#4E6FC", mentioning: ["dark.accents.codex"])
+        expectRefused(.groove, "groove.barSlot", -10, mentioning: ["groove.barSlot", "outside"])
+        expectRefused(.groove, "groove.outer.channel", -16, mentioning: ["groove.outer.channel"])
+        expectRefused(.groove, "groove.wall", [4.4, 4.4, -3.2, "#000000", 0.8], mentioning: ["groove.wall blur"])
+        expectRefused(.groove, "groove.wall", [4.4, 4.4, 3.2, "#000000", 1.5], mentioning: ["groove.wall opacity"])
+        expectRefused(.groove, "groove.grain", 2, mentioning: ["groove.grain"])
+        expectRefused(.groove, "stale", -0.1, mentioning: ["stale"])
+        expectRefused(.groove, "groove.outer.radius", 70, mentioning: ["groove.outer"])
+        expectRefused(.groove, "groove.wall", [4.4, 4.4, 3.2, "#000000", 0.8, 1], mentioning: ["groove.wall", "exactly"])
+        expectRefused(.groove, "groove.floor", "#+12345", mentioning: ["groove.floor", "not a colour"])
+        expectRefused(.groove, "groove.wall", [4.4, 4.4, 3.2, "#+12345", 0.8], mentioning: ["groove.wall", "not a colour"])
+        expectRefused(.groove, "accents.codex", "#4E6FC", mentioning: ["accents.codex"])
         // the rest of the geometry, each its own refusal
-        expectRefused(.groove, "dark.groove.inner.radius", 40, mentioning: ["dark.groove.inner", "into the outer channel"])
-        expectRefused(.groove, "dark.groove.outer.tube", 17, mentioning: ["dark.groove.outer.tube", "wider than its channel"])
-        expectRefused(.groove, "dark.groove.hubSingle", 45, mentioning: ["dark.groove.hubSingle", "covers"])
-        expectRefused(.groove, "dark.groove.hubDouble", 28, mentioning: ["dark.groove.hubDouble", "covers"])
-        expectRefused(.groove, "dark.groove.barFill", 12, mentioning: ["dark.groove.barFill", "wider"])
-        expectRefused(.groove, "dark.groove.barRadius", 6, mentioning: ["dark.groove.barRadius", "half"])
-        expectRefused(.groove, "dark.groove.drop.0", [12, 16, 18, "#000000", 0.5], mentioning: ["dark.groove.drop[0]", "12"])
-        expectRefused(.grooveBlack, "light.groove.porthole.radius", 40, mentioning: ["light.groove.porthole.radius", "smaller"])
-        expectRefused(.groove, "dark.groove.type.0", [-2, -0.035, 0, "#FFFFFF", 0.85], mentioning: ["dark.groove.type[0] x"])
-        expectRefused(.groove, "dark.groove.raise", Array(repeating: [1, 1, 1, "#FFFFFF", 0.1], count: 5), mentioning: ["at most 4"])
+        expectRefused(.groove, "groove.inner.radius", 40, mentioning: ["groove.inner", "into the outer channel"])
+        expectRefused(.groove, "groove.outer.tube", 17, mentioning: ["groove.outer.tube", "wider than its channel"])
+        expectRefused(.groove, "groove.hubSingle", 45, mentioning: ["groove.hubSingle", "covers"])
+        expectRefused(.groove, "groove.hubDouble", 28, mentioning: ["groove.hubDouble", "covers"])
+        expectRefused(.groove, "groove.barFill", 12, mentioning: ["groove.barFill", "wider"])
+        expectRefused(.groove, "groove.barRadius", 6, mentioning: ["groove.barRadius", "half"])
+        expectRefused(.groove, "groove.drop.0", [12, 16, 18, "#000000", 0.5], mentioning: ["groove.drop[0]", "12"])
+        expectRefused(.grooveBlack, "groove.porthole.radius", 40, mentioning: ["groove.porthole.radius", "smaller"])
+        expectRefused(.groove, "groove.type.0", [-2, -0.035, 0, "#FFFFFF", 0.85], mentioning: ["groove.type[0] x"])
+        expectRefused(.groove, "groove.raise", Array(repeating: [1, 1, 1, "#FFFFFF", 0.1], count: 5), mentioning: ["at most 4"])
         // the format itself
-        expectRefused(.groove, "dark.groove.slabtop", "#000000", mentioning: ["dark.groove.slabtop", "not a key"])
-        expectRefused(.groove, "light.groove.flor", "#000000", mentioning: ["light.groove.flor", "not a key"])
+        expectRefused(.groove, "groove.slabtop", "#000000", mentioning: ["groove.slabtop", "not a key"])
         // a root key with dots in it isn't the nested key it spells (Sol's review of 4f91bdb)
-        var dotted = try! JSONSerialization.jsonObject(with: ThemeStore.file(.classic)) as! [String: Any]
-        dotted["dark.ink.primary"] = "an unknown root key that flattens to a known path"
-        assert(refusal(try! JSONSerialization.data(withJSONObject: dotted), "a dotted root key").contains("\"dark.ink.primary\": not a key"))
-        expectRefused(.groove, "dark.groove.floor", nil, mentioning: ["dark.groove.floor", "missing"])
-        expectRefused(.groove, "dark.stale", "half", mentioning: ["dark.stale", "a number"])
+        var dotted = try! JSONSerialization.jsonObject(with: ThemeStore.file(.classicSolid)) as! [String: Any]
+        dotted["ink.primary"] = "an unknown root key that flattens to a known path"
+        assert(refusal(try! JSONSerialization.data(withJSONObject: dotted), "a dotted root key").contains("\"ink.primary\": not a key"))
+        expectRefused(.groove, "groove.floor", nil, mentioning: ["groove.floor", "missing"])
+        expectRefused(.groove, "stale", "half", mentioning: ["stale", "a number"])
         expectRefused(.groove, "name", "  ", mentioning: ["name"])
-        expectRefused(.groove, "light.groove", nil, mentioning: ["light.groove", "dark only"])
         assert(refusal(Data("{\"name\": \"x\",".utf8), "broken JSON").contains("not JSON"))
         var big = Data(ThemeStore.file(.groove))
         big.append(Data(repeating: 0x20, count: ThemeStore.maxFileBytes))
         assert(refusal(big, "a big file").contains("64 KB"))
-        // what stays allowed: the wall left out or null, and every optional colour
+        // what stays allowed: the wall left out or null
         for wall in [nil, NSNull()] as [Any?] {
-            if case .failure(let p) = ThemeStore.decode(edited(.groove, "dark.groove.wall", wall)) { fatalError("no wall is allowed: \(p.text)") }
+            if case .failure(let p) = ThemeStore.decode(edited(.groove, "groove.wall", wall)) { fatalError("no wall is allowed: \(p.text)") }
         }
+    }
+
+    /// A version line, the appearance slot, optional author and description, and nothing that points outside the file.
+    static func checkFormat() {
+        // a newer format: only the plain message, whatever else the file holds
+        let newer = String(decoding: edited(.groove, "format", 2), as: UTF8.self).replacingOccurrences(of: "\"name\"", with: "\"futureKey\":{\"x\":1},\"name\"")
+        let newerText = refusal(Data(newer.utf8), "format 2")
+        assert(newerText.contains("made for a newer Pulse") && newerText.contains("format 1") && !newerText.contains("futureKey"), newerText)
+        expectRefused(.groove, "format", nil, mentioning: ["format: missing"])
+        expectRefused(.groove, "format", 0, mentioning: ["format"])
+        expectRefused(.groove, "format", 1.5, mentioning: ["whole number"])
+        expectRefused(.groove, "format", "1", mentioning: ["whole number"])
+        // appearance
+        expectRefused(.groove, "appearance", nil, mentioning: ["appearance", "missing"])
+        expectRefused(.groove, "appearance", "both", mentioning: ["appearance"])
+        expectRefused(.classicSolid, "appearance", "light", mentioning: ["appearance", "dark only"])
+        expectRefused(.classicSolid, "surface", "#F4F4F4", mentioning: ["appearance", "dark only"])   // "any" reads as light: a flat light theme
+        expectRefused(.groove, "glass", true, mentioning: ["glass", "flat theme only"])
+        // author and description: optional, kept, bounded
+        var credited = PulseThemeFile.groove
+        credited.author = "Someone"
+        credited.description = "Two lines,\nas a description may have."
+        guard case .success(let read) = ThemeStore.decode(ThemeStore.file(credited)) else { fatalError("author and description are allowed") }
+        assert(read.author == "Someone" && read.description == credited.description)
+        expectRefused(.groove, "author", String(repeating: "a", count: 81), mentioning: ["author: 1 to 80"])
+        expectRefused(.groove, "author", "line\nbreak", mentioning: ["author: no control characters"])
+        expectRefused(.groove, "description", String(repeating: "a", count: 301), mentioning: ["description: 1 to 300"])
+        // nothing outside the file: no key can name an image, another theme, a path or a URL
+        for key in ["image", "extends", "include", "url", "path", "font"] {
+            expectRefused(.groove, key, "elsewhere.json", mentioning: ["\(key): not a key"])
+        }
+        expectRefused(.groove, "groove.texture", "file:///tmp/a.png", mentioning: ["groove.texture: not a key"])
+        let everyString = ThemeStore.knownKeys.map { $0.joined(separator: ".") }
+        assert(!everyString.contains { ["image", "url", "path", "file", "extends", "include"].contains($0.split(separator: ".").last.map(String.init) ?? "") },
+               "the format has no key that refers outside the file")
     }
 
     static func checkContrastFloor() {
         // text hard to read on the slab, each kind on its own
-        expectRefused(.groove, "dark.ink.secondary", "#45484F", mentioning: ["dark.ink.secondary", "text needs 4.5:1"])
-        expectRefused(.groove, "dark.ink.primary", "#202226", mentioning: ["dark.ink.primary", "1.00:1"])
-        expectRefused(.groove, "light.ink.alert", "#FF6B61", mentioning: ["light.ink.alert", "text needs 4.5:1"])
-        expectRefused(.groove, "dark.stale", 0.3, mentioning: ["dark.stale", "text needs 4.5:1"])
-        // dark Groove's amber on White's floor: the reason Groove's light half deepens its colours
-        expectRefused(.groove, "light.accents.grok", "#DBB572", mentioning: ["light.accents.grok", "light.groove.floor", "needs 3:1"])
-        expectRefused(.groove, "dark.accents.codex", "#2A3A66", mentioning: ["dark.accents.codex", "dark.groove.barFloor"])
-        expectRefused(.groove, "dark.groove.onFace", "#2B2D32", mentioning: ["dark.groove.onFace", "a mark on the hub"])
-        expectRefused(.groove, "dark.ink.secondary", "#E6E6E640", mentioning: ["must be opaque"])
+        expectRefused(.groove, "ink.secondary", "#45484F", mentioning: ["ink.secondary", "text needs 4.5:1"])
+        expectRefused(.groove, "ink.primary", "#202226", mentioning: ["ink.primary", "1.00:1"])
+        expectRefused(.grooveWhite, "ink.alert", "#FF6B61", mentioning: ["ink.alert", "text needs 4.5:1"])
+        expectRefused(.groove, "stale", 0.3, mentioning: ["stale", "text needs 4.5:1"])
+        // dark Groove's amber on White's floor: the reason Groove White deepens its colours
+        expectRefused(.grooveWhite, "accents.grok", "#DBB572", mentioning: ["accents.grok", "groove.floor", "needs 3:1"])
+        expectRefused(.groove, "accents.codex", "#2A3A66", mentioning: ["accents.codex", "groove.barFloor"])
+        expectRefused(.groove, "groove.onFace", "#2B2D32", mentioning: ["groove.onFace", "a mark on the hub"])
+        expectRefused(.groove, "ink.secondary", "#E6E6E640", mentioning: ["must be opaque"])
         // Sol's two 1:1 cases on 4f91bdb: text on both ends of the slab's gradient, and the agents' "+3" on its disc
-        var ends = PulseSkinSet.groove
-        let ink = ends.dark.ink.primary!
-        ends.dark.groove!.slabTop = ink
-        ends.dark.groove!.slabBottom = ink
+        var ends = PulseThemeFile.groove
+        let ink = ends.look.ink.primary!
+        ends.look.groove!.slabTop = ink
+        ends.look.groove!.slabBottom = ink
         let endsText = refusal(ThemeStore.file(ends), "ink on both gradient ends")
-        assert(endsText.contains("dark.groove.slabTop") && endsText.contains("dark.groove.slabBottom") && endsText.contains("1.00:1"), endsText)
-        var counter = PulseSkinSet.groove
-        counter.dark.groove!.bubble = "#000000"
-        counter.dark.groove!.bubbleInk = "#000000"
+        assert(endsText.contains("groove.slabTop") && endsText.contains("groove.slabBottom") && endsText.contains("1.00:1"), endsText)
+        var counter = PulseThemeFile.groove
+        counter.look.groove!.bubble = "#000000"
+        counter.look.groove!.bubbleInk = "#000000"
         let counterText = refusal(ThemeStore.file(counter), "the counter on its disc")
-        assert(counterText.contains("dark.groove.bubbleInk #000000 on dark.groove.bubble #000000: 1.00:1"), counterText)
+        assert(counterText.contains("groove.bubbleInk #000000 on groove.bubble #000000: 1.00:1"), counterText)
         // the hub's gradient, and the counter's defaults on a face they can't be read on
-        expectRefused(.groove, "dark.groove.faceTop", "#F5F5F7", mentioning: ["dark.groove.onFace", "dark.groove.faceTop"])
-        expectRefused(.groove, "dark.groove.face", "#DEDEDE", mentioning: ["groove.bubbleInk (left out: light grey)"])
+        expectRefused(.groove, "groove.faceTop", "#F5F5F7", mentioning: ["groove.onFace", "groove.faceTop"])
+        expectRefused(.groove, "groove.face", "#DEDEDE", mentioning: ["groove.bubbleInk (left out: light grey)"])
         // Fable's #BF2318 alert reads 4.24:1 on White's darker slab end; White's is deepened to pass
-        expectRefused(.groove, "light.ink.alert", "#BF2318", mentioning: ["light.ink.alert", "light.groove.slabBottom"])
+        expectRefused(.grooveWhite, "ink.alert", "#BF2318", mentioning: ["ink.alert", "groove.slabBottom"])
         // a flat theme is held to its surface
-        expectRefused(.classic, "dark.accents.codex", "#202060", mentioning: ["dark.accents.codex", "dark.surface"])
+        expectRefused(.classicSolid, "accents.codex", "#202060", mentioning: ["accents.codex", "surface"])
     }
 
     static func checkGuide() {
-        guard case .success(let ember) = ThemeStore.decode(guideExample) else { fatalError("the guide's example is refused: \(refusal(guideExample, "guide"))") }
-        assert(ember.name == "Ember" && ember.dark.groove == nil && ember.light == nil)
-        for key in ThemeStore.knownKeys {
-            let last = key.last!
-            assert(ThemeGuide.text.contains(last), "the guide describes \(key)")
+        assert(guideExamples.count == 3, "three worked examples")
+        let expected: [(String, ThemeSlot)] = [("Ember", .dark), ("Ember Glass", .any), ("Paper", .light)]
+        for (data, (name, slot)) in zip(guideExamples, expected) {
+            guard case .success(let file) = ThemeStore.decode(data) else { fatalError("the guide's \(name) is refused: \(refusal(data, name))") }
+            assert(file.name == name && file.appearance == slot, "\(name) is the guide's \(slot) example")
         }
+        assert(ThemeStore.decode(guideExamples[2]) == .success(ThemeGuide.paper), "the light example is Paper, as written")
+        for key in ThemeStore.knownKeys {
+            assert(ThemeGuide.text.contains(key.last!), "the guide describes \(key)")
+        }
+        for id in PulseThemeFile.builtIn.map(\.id) { assert(ThemeGuide.text.contains("`\(id).json`"), "the guide names \(id).json") }
     }
 
+    // MARK: the folder
+
     @MainActor static func checkFolder() {
-        let folder = FileManager.default.temporaryDirectory.appending(path: "pulse-theme-check-\(UUID().uuidString)").resolvingSymlinksInPath()
+        let folder = folder("check")
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = ThemeStore(folder: folder)
         let fm = FileManager.default
+        func listed(_ id: String) -> PulseTheme? { store.themes.first { $0.id == id } }
         settle(store, store.writeExamples())
-        for (id, set) in PulseSkinSet.builtIn { assert(try! Data(contentsOf: folder.appending(path: "\(id).json")) == ThemeStore.file(set), "\(id) written as an example") }
+        for (id, file) in PulseThemeFile.builtIn {
+            assert(try! Data(contentsOf: folder.appending(path: "\(id).json")) == ThemeStore.file(file), "\(id) written as an example")
+        }
         assert(fm.fileExists(atPath: folder.appending(path: "AGENTS.md").path), "the guide is written into the folder")
         settle(store, store.reload())
-        assert(store.themes.map(\.id) == ["classic", "groove", "groove-black"] && store.problems.isEmpty, "the examples are the built-ins: \(store.problems)")
+        let builtIns = PulseThemeFile.builtIn.map(\.id)
+        assert(store.themes.map(\.id) == builtIns && store.problems.isEmpty, "the examples are the built-ins: \(store.problems)")
 
         let ember = folder.appending(path: "ember.json"), error = folder.appending(path: "ember.error")
         assert(store.watch())
         defer { store.stopWatching() }
         // live reload: a new file, then an edit, picked up without a call
         try! guideExample.write(to: ember)
-        assert(waitUntil { store.theme("ember").id == "ember" }, "a new theme file is listed by itself")
-        assert(store.themes.map(\.id) == ["classic", "groove", "groove-black", "ember"])
+        assert(waitUntil { listed("ember") != nil }, "a new theme file is listed by itself")
+        assert(store.themes.map(\.id) == builtIns + ["ember"])
         let renamed = String(decoding: guideExample, as: UTF8.self).replacingOccurrences(of: "\"Ember\"", with: "\"Ember Two\"")
         try! Data(renamed.utf8).write(to: ember)
-        assert(waitUntil { store.theme("ember").set.name == "Ember Two" }, "an edit is picked up by itself")
+        assert(waitUntil { listed("ember")?.file.name == "Ember Two" }, "an edit is picked up by itself")
         // a bad edit: the last good version stays, the reason goes beside the file, Settings has it
         try! Data(renamed.replacingOccurrences(of: "#FF7A45", with: "#FF7A4").utf8).write(to: ember)
         assert(waitUntil { store.problems["ember"] != nil }, "a bad edit is noticed")
-        assert(store.theme("ember").set.name == "Ember Two", "the last good version stays in use")
-        assert(store.skin("ember").accents.claude == "#FF7A45", "the bad value never draws")
+        assert(listed("ember")?.file.name == "Ember Two", "the last good version stays in use")
+        assert(store.skin(both("ember")).accents.claude == "#FF7A45", "the bad value never draws")
         let reason = try! String(contentsOf: error, encoding: .utf8)
-        assert(reason.contains("dark.accents.claude") && reason.contains("last good version"), "the .error names the key: \(reason)")
+        assert(reason.contains("accents.claude") && reason.contains("last good version"), "the .error names the key: \(reason)")
         // fixed: the error file goes
         try! guideExample.write(to: ember)
         assert(waitUntil { !fm.fileExists(atPath: error.path) && store.problems["ember"] == nil }, "a fixed file's .error is removed")
-        assert(store.theme("ember").set.name == "Ember")
-        // a theme that was never good: Classic draws, and the error says so
+        assert(listed("ember")?.file.name == "Ember")
+        // a theme that was never good: the person's Classic draws, and the error says so
         let broken = folder.appending(path: "broken.json")
-        try! Data("{\"name\": \"Broken\"}".utf8).write(to: broken)
+        try! Data("{\"format\": 1, \"name\": \"Broken\"}".utf8).write(to: broken)
         assert(waitUntil { store.problems["broken"] != nil })
-        assert(store.theme("broken").id == "classic" && store.skin("broken") == .classic)
+        assert(listed("broken") == nil && store.current(both("broken", classic: "classic-glass")).id == "classic-glass")
         assert(try! String(contentsOf: folder.appending(path: "broken.error"), encoding: .utf8).contains("draws Classic"))
         try! fm.removeItem(at: broken)
         assert(waitUntil { !fm.fileExists(atPath: folder.appending(path: "broken.error").path) }, "a removed file's .error is removed")
@@ -204,7 +274,7 @@ enum ThemeChecks {
         // a built-in's name: the built-in draws, the edit is reported, and the next launch's examples keep the edit aside
         try! edited(.groove, "name", "My Groove").write(to: folder.appending(path: "groove.json"))
         settle(store, store.reload())
-        assert(store.theme("groove").set == .groove && store.problems["groove"]?.contains("Pulse's own") == true)
+        assert(listed("groove")?.file == .groove && store.problems["groove"]?.contains("Pulse's own") == true)
         settle(store, store.writeExamples())
         assert(try! Data(contentsOf: folder.appending(path: "groove.json")) == ThemeStore.file(.groove))
         assert(try! fm.contentsOfDirectory(atPath: folder.path).contains { $0.hasPrefix("groove.json.replaced-") }, "the edited copy is kept")
@@ -214,7 +284,7 @@ enum ThemeChecks {
         // at most 50 theme files are read
         for i in 0 ..< ThemeStore.maxThemes { try! guideExample.write(to: folder.appending(path: String(format: "many-%02d.json", i))) }
         settle(store, store.reload())
-        assert(store.themes.count == 3 + ThemeStore.maxThemes, "\(store.themes.count) themes listed")
+        assert(store.themes.count == builtIns.count + ThemeStore.maxThemes, "\(store.themes.count) themes listed")
         assert(store.notice?.contains("at most \(ThemeStore.maxThemes)") == true && !store.problems.keys.contains { $0.hasPrefix("many-") },
                "the 51st file is in one notice, not a problem of its own: \(String(describing: store.notice))")
     }
@@ -223,7 +293,7 @@ enum ThemeChecks {
     /// folder, and an edited built-in whose backup name was taken were all lost).
     @MainActor static func checkOwnership() {
         let fm = FileManager.default
-        let folder = fm.temporaryDirectory.appending(path: "pulse-theme-owned-\(UUID().uuidString)").resolvingSymlinksInPath()
+        let folder = folder("owned")
         defer { try? fm.removeItem(at: folder) }
         let store = ThemeStore(folder: folder)
         settle(store, store.writeExamples())
@@ -259,7 +329,7 @@ enum ThemeChecks {
         assert(try! Data(contentsOf: groove) == edit, "the edit isn't overwritten when it can't be moved aside")
         settle(store, store.reload())
         assert(store.problems["groove"]?.contains("couldn't move your edit aside") == true, "and Settings says why: \(store.problems)")
-        assert(store.theme("groove").set == .groove, "the built-in still draws")
+        assert(store.themes.first { $0.id == "groove" }?.file == .groove, "the built-in still draws")
         // a folder or a link under a built-in's or the guide's name: left alone
         try! fm.removeItem(at: groove)
         try! fm.createDirectory(at: groove, withIntermediateDirectories: false)
@@ -275,15 +345,11 @@ enum ThemeChecks {
     }
 
     /// Reads are bounded and off the main actor (Sol's review of 4f91bdb: a link to an 8 MiB file was read whole, a pipe
-    /// held up the main thread, and every file past 50 got its own `.error`). Uses only `reload()` and `problems`, so it
-    /// runs against 4f91bdb's loader too.
+    /// held up the main thread, and every file past 50 got its own `.error`).
     @MainActor static func checkBounded() {
         let fm = FileManager.default
-        let folder = fm.temporaryDirectory.appending(path: "pulse-theme-bounded-\(UUID().uuidString)").resolvingSymlinksInPath()
-        let outside = fm.temporaryDirectory.appending(path: "pulse-theme-outside-\(UUID().uuidString)").resolvingSymlinksInPath()
+        let folder = folder("bounded"), outside = self.folder("outside")
         defer { try? fm.removeItem(at: folder); try? fm.removeItem(at: outside) }
-        try! fm.createDirectory(at: folder, withIntermediateDirectories: true)
-        try! fm.createDirectory(at: outside, withIntermediateDirectories: true)
         let store = ThemeStore(folder: folder)
         // an 8 MiB file, and links to it and to a good theme: refused without reading through the link
         var big = guideExample
@@ -314,51 +380,100 @@ enum ThemeChecks {
         assert(store.problems["big"]!.contains("over 64 KB"))
         assert(store.problems["linked-big"]!.contains("a link") && store.problems["linked-good"]!.contains("a link"), "links are refused as links")
         assert(store.problems["a-pipe"]!.contains("not a regular file"))
-        assert(store.problems["groove"] != nil && store.theme("groove").set == .groove, "a pipe named groove.json leaves the built-in drawing")
+        assert(store.problems["groove"] != nil && store.themes.first { $0.id == "groove" }?.file == .groove, "a pipe named groove.json leaves the built-in drawing")
         let errors = try! fm.contentsOfDirectory(atPath: folder.path).filter { $0.hasSuffix(".error") }
         assert(!errors.contains { $0.hasPrefix("many-") }, "no .error for a file past the cap: \(errors.sorted())")
         assert(errors.count <= 11, "at most 10 .error files written, beside the pipe: \(errors.sorted())")
     }
 
-    /// A light half added and removed while the theme is in use: the theme's appearance comes from the new list each
-    /// time, and the application's own appearance stays dark throughout (Sol's review of 4f91bdb: the sink read the
-    /// list from before the reload, and cleared `NSApp.appearance` for every window).
-    @MainActor static func checkLightHalfLive() {
+    /// Import… and a dropped file: the same checks as the folder's own files, copied in byte for byte under a free
+    /// name. Export…: one self-contained file that imports again on another Mac as the same theme.
+    @MainActor static func checkImportExport() {
+        let fm = FileManager.default
+        let folder = folder("import"), elsewhere = self.folder("elsewhere")
+        defer { try? fm.removeItem(at: folder); try? fm.removeItem(at: elsewhere) }
+        let store = ThemeStore(folder: folder)
+        settle(store, store.writeExamples())
+        var messages: [String] = []
+        func take(_ url: URL) { settle(store, store.importTheme(url) { messages.append($0) }) }
+        // a good file from elsewhere, named oddly: copied byte for byte, listed
+        let source = elsewhere.appending(path: "My Ember!.json")
+        try! guideExample.write(to: source)
+        take(source)
+        assert(try! Data(contentsOf: folder.appending(path: "my-ember.json")) == guideExample, "copied byte for byte under a tidy name")
+        assert(store.themes.contains { $0.id == "my-ember" && $0.file.name == "Ember" } && messages.last == "Imported Ember as my-ember.json.", messages.description)
+        // the same name again, and a built-in's name: a free name, never a replacement
+        take(source)
+        assert(fm.fileExists(atPath: folder.appending(path: "my-ember-2.json").path))
+        let named = elsewhere.appending(path: "groove.json")
+        try! guideExample.write(to: named)
+        take(named)
+        assert(try! Data(contentsOf: folder.appending(path: "groove.json")) == ThemeStore.file(.groove), "a built-in's file is never replaced")
+        assert(fm.fileExists(atPath: folder.appending(path: "groove-2.json").path))
+        // refused: a bad value, a newer format, a link, an oversized file; nothing is copied
+        let before = Set(try! fm.contentsOfDirectory(atPath: folder.path))
+        let bad = elsewhere.appending(path: "bad.json"), newer = elsewhere.appending(path: "newer.json")
+        try! edited(.groove, "accents.codex", "#4E6FC").write(to: bad)
+        try! edited(.groove, "format", 7).write(to: newer)
+        let link = elsewhere.appending(path: "link.json"), huge = elsewhere.appending(path: "huge.json")
+        try! fm.createSymbolicLink(at: link, withDestinationURL: source)
+        var big = guideExample
+        big.append(Data(repeating: 0x20, count: ThemeStore.maxFileBytes))
+        try! big.write(to: huge)
+        for url in [bad, newer, link, huge] { take(url) }
+        assert(Set(try! fm.contentsOfDirectory(atPath: folder.path)) == before, "nothing refused is copied")
+        let refusals = messages.suffix(4)
+        assert(refusals.allSatisfy { $0.contains("wasn't imported") }, refusals.description)
+        assert(refusals.contains { $0.contains("accents.codex") } && refusals.contains { $0.contains("made for a newer Pulse") }
+               && refusals.contains { $0.contains("a link") } && refusals.contains { $0.contains("64 KB") }, refusals.description)
+        // exported: one file holding the whole theme; on another Mac (another folder) it imports as the same theme
+        let exported = elsewhere.appending(path: "exported.json")
+        try! ThemeStore.file(.grooveWhite).write(to: exported)
+        let other = self.folder("other-mac")
+        defer { try? fm.removeItem(at: other) }
+        guard case .success(let added) = ThemeFolder.importTheme(exported, into: other) else { fatalError("an exported theme imports") }
+        guard case .success(let file) = ThemeFolder.load(other.appending(path: "\(added.id).json")) else { fatalError("and loads") }
+        assert(file == .grooveWhite && added.name == "Groove White", "the exported file is the whole theme")
+    }
+
+    /// A theme's appearance changed while it's in use: the drawn theme comes from the new list each time, and the
+    /// application's own appearance stays dark throughout (Sol's review of 4f91bdb: the sink read the list from before
+    /// the reload, and cleared `NSApp.appearance` for every window).
+    @MainActor static func checkSlotLive() {
         _ = NSApplication.shared
         NSApp.appearance = NSAppearance(named: .darkAqua)   // as PulseApp sets it at launch
         let fm = FileManager.default
-        let folder = fm.temporaryDirectory.appending(path: "pulse-theme-live-\(UUID().uuidString)").resolvingSymlinksInPath()
+        let folder = folder("live")
         defer { try? fm.removeItem(at: folder) }
-        try! fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let store = ThemeStore(folder: folder), file = folder.appending(path: "selected.json")
         store.setSystem(.light)
-        store.follow(Just<String?>("selected"))
-        var steps: [(light: Bool, scheme: ColorScheme, app: NSAppearance.Name?)] = []
-        for set in [PulseSkinSet.classic, .groove, .classic] {
-            try! ThemeStore.file(set).write(to: file)
+        store.follow(Just(both("selected")))
+        var steps: [(light: Bool, drawn: String, scheme: ColorScheme, app: NSAppearance.Name?)] = []
+        for theme in [PulseThemeFile.groove, .grooveWhite, .groove] {
+            try! ThemeStore.file(theme).write(to: file)
             settle(store, store.reload())
-            assert(waitUntil { (store.theme("selected").set.light != nil) == (set.light != nil) }, "the reload is published")
+            assert(waitUntil { store.themes.first { $0.id == "selected" }?.file.appearance == theme.appearance }, "the reload is published")
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-            steps.append((set.light != nil, store.scheme("selected"), NSApp.appearance?.name))
+            steps.append((theme.appearance == .light, store.current(store.choice).id, store.scheme(store.choice), NSApp.appearance?.name))
         }
         for step in steps {
-            assert(step.scheme == (step.light ? .light : .dark), "a light half added or removed is read from the new list: \(steps)")
+            // light mode: the file draws while it's a light theme; while it's dark, the light slot falls back to Classic
+            assert(step.drawn == (step.light ? "selected" : "classic-solid") && step.scheme == (step.light ? .light : .dark),
+                   "the slot is resolved from the new list: \(steps)")
             assert(step.app == .darkAqua, "the application stays dark; only Pulse's themed windows follow the theme: \(steps)")
         }
-        assert(store.skin("selected") == .classic)
     }
 
     /// A good theme pushed past the cap draws Classic and the notice says so, with no `.error` of its own; the cache
     /// holds only files read in the pass. The watch starts, stops, and outlives its store without reaching it.
     @MainActor static func checkCapAndWatch() {
         let fm = FileManager.default
-        let folder = fm.temporaryDirectory.appending(path: "pulse-theme-cap-\(UUID().uuidString)").resolvingSymlinksInPath()
+        let folder = folder("cap")
         defer { try? fm.removeItem(at: folder) }
-        try! fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let cache = ThemeFolder.Cache()
         try! ThemeStore.file(.groove).write(to: folder.appending(path: "zzz.json"))
         assert(ThemeFolder.scan(folder, cache: cache).found.map(\.id) == ["zzz"])
-        for i in 0 ..< ThemeStore.maxThemes { try! ThemeStore.file(.classic).write(to: folder.appending(path: String(format: "a-%03d.json", i))) }
+        for i in 0 ..< ThemeStore.maxThemes { try! ThemeStore.file(.classicSolid).write(to: folder.appending(path: String(format: "a-%03d.json", i))) }
         let scan = ThemeFolder.scan(folder, cache: cache)
         assert(!scan.found.contains { $0.id == "zzz" } && scan.issues["zzz"] == nil, "a file past the cap isn't drawn from the cache")
         assert(scan.notice?.contains("zzz.json") == true && scan.notice?.contains("draws Classic") == true, String(describing: scan.notice))
@@ -373,23 +488,122 @@ enum ThemeChecks {
             let gone = ThemeStore(folder: folder)
             assert(gone.watch())
         }
-        for i in 0 ..< 5 { try! ThemeStore.file(.classic).write(to: folder.appending(path: "late-\(i).json")) }
+        for i in 0 ..< 5 { try! ThemeStore.file(.classicSolid).write(to: folder.appending(path: "late-\(i).json")) }
         RunLoop.main.run(until: Date().addingTimeInterval(1.5))   // events for a released store: nothing to call, no crash
     }
 
-    @MainActor static func checkAppearance() {
-        let store = ThemeStore(folder: FileManager.default.temporaryDirectory.appending(path: "pulse-theme-none-\(UUID().uuidString)"))
+    // MARK: Settings › Appearance
+
+    /// The two menus, the three modes, a mismatched slot, and Increase Contrast.
+    @MainActor static func checkModesAndSlots() {
+        let folder = folder("modes")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = ThemeStore(folder: folder)
+        // a light theme and a dark one of the person's own, beside the built-ins
+        try! ThemeStore.file(ThemeGuide.paper).write(to: folder.appending(path: "paper.json"))
+        try! guideExamples[1].write(to: folder.appending(path: "ember-glass.json"))
+        settle(store, store.reload())
+        assert(store.choices(for: .light).map(\.id) == ["classic-glass", "classic-solid", "groove-white", "groove-black", "ember-glass", "paper"],
+               "the light menu: \(store.choices(for: .light).map(\.id))")
+        assert(store.choices(for: .dark).map(\.id) == ["classic-glass", "classic-solid", "groove", "ember-glass"], "the dark menu: \(store.choices(for: .dark).map(\.id))")
+
+        // Auto follows the system, live; Light and Dark keep to theirs
+        var choice = ThemeChoice(mode: .auto, light: "groove-white", dark: "groove", classic: "classic-glass")
         store.setSystem(.light)
-        assert(store.scheme("classic") == .dark && store.skin(nil) == .classic, "Classic stays dark in Light Mode")
-        assert(store.scheme("groove") == .light && store.skin("groove") == .grooveWhite, "Groove follows the system: White")
-        assert(store.skin("groove-black") == .grooveBlack)
-        let white = store.skin("groove", contrast: .increased)
+        assert(store.current(choice).id == "groove-white" && store.scheme(choice) == .light && store.skin(choice) == .grooveWhite)
+        store.setSystem(.dark)
+        assert(store.current(choice).id == "groove" && store.scheme(choice) == .dark && store.skin(choice) == .groove, "Auto follows a live change")
+        choice.mode = .light
+        assert(store.current(choice).id == "groove-white", "Light is pinned while the system is dark")
+        store.setSystem(.light)
+        choice.mode = .dark
+        assert(store.current(choice).id == "groove" && store.scheme(choice) == .dark, "Dark is pinned while the system is light")
+        // "any" draws the same in both; Classic stays dark in Light
+        let classic = ThemeChoice(mode: .light, light: "classic-solid", dark: "classic-solid", classic: "classic-solid")
+        assert(store.scheme(classic) == .dark && store.skin(classic) == .classic, "Classic in Light mode draws dark, as always")
+        assert(store.skin(both("ember-glass")).glass == true && store.scheme(both("ember-glass")) == .dark)
+
+        // a mismatched or unknown slot: the person's Classic draws there, and the menu shows it
+        let mismatched = ThemeChoice(mode: .dark, light: "groove", dark: "groove-white", classic: "classic-glass")
+        assert(store.theme(for: .dark, in: mismatched).id == "classic-glass" && store.theme(for: .light, in: mismatched).id == "classic-glass",
+               "a light theme in the dark slot, and a dark one in the light slot, fall back to Classic")
+        assert(store.theme(for: .light, in: ThemeChoice(mode: .light, light: "gone", dark: "groove", classic: "classic-solid")).id == "classic-solid")
+
+        // Increase Contrast
+        let white = store.skin(ThemeChoice(mode: .light, light: "groove-white", dark: "groove"), contrast: .increased)
         assert(white.ink.primary == "#000000" && white.groove?.onFace == "#000000" && white.accents == PulseSkin.grooveWhite.accents,
                "Increase Contrast on White: black ink, the deepened colours kept")
-        let black = store.skin("groove-black", contrast: .increased)
+        let black = store.skin(ThemeChoice(mode: .light, light: "groove-black", dark: "groove"), contrast: .increased)
         assert(black.ink.primary == "#000000" && black.groove?.onFace == "#FFFFFF" && black.accents == PulseSkin.classic.accents,
                "Increase Contrast on Black: black ink on the slab, white marks on the dark hub, full colours on the black floor")
-        store.setSystem(.dark)
-        assert(store.skin("groove") == .groove && store.skin("groove-black") == .groove, "both Groove themes are Groove in Dark Mode")
+    }
+
+    /// state.json from before Settings › Appearance, and after.
+    static func checkMigration() {
+        func persisted(_ json: String) -> AppState.Persisted { try! JSONDecoder().decode(AppState.Persisted.self, from: Data(json.utf8)) }
+        let base = #""enabled":[],"order":[],"alwaysOnTop":true,"showOverlay":true"#
+        // Classic with Glass, Classic with Solid: that Classic in both slots, Auto; nothing visibly changes
+        assert(persisted("{\(base),\"appearance\":\"glass\"}").themeChoice == ThemeChoice(mode: .auto, light: "classic-glass", dark: "classic-glass", classic: "classic-glass"))
+        assert(persisted("{\(base),\"appearance\":\"solid\"}").themeChoice == ThemeChoice(mode: .auto, light: "classic-solid", dark: "classic-solid", classic: "classic-solid"))
+        assert(persisted("{\(base),\"glassTint\":false}").themeChoice.light == "classic-glass", "the older Tint setting still picks Glass")
+        // Groove (the owner's Air): Auto, Groove White in light, Groove in dark
+        assert(persisted("{\(base),\"appearance\":\"solid\",\"skin\":\"groove\"}").themeChoice == ThemeChoice(mode: .auto, light: "groove-white", dark: "groove", classic: "classic-solid"))
+        assert(persisted("{\(base),\"skin\":\"groove-black\"}").themeChoice.light == "groove-black")
+        // an unknown skin: that install's Classic
+        assert(persisted("{\(base),\"appearance\":\"glass\",\"skin\":\"sunset\"}").themeChoice == ThemeChoice(mode: .auto, light: "classic-glass", dark: "classic-glass", classic: "classic-glass"))
+        // a choice survives a save and a load; choosing writes all three and the Classic
+        var p = persisted("{\(base),\"skin\":\"groove\"}")
+        p.themeChoice = ThemeChoice(mode: .dark, light: "paper", dark: "classic-glass", classic: "classic-glass")
+        let again = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(p))
+        assert(again.mode == .dark && again.lightTheme == "paper" && again.darkTheme == "classic-glass" && again.appearance == .glass)
+        assert(again.themeChoice == p.themeChoice)
+        // a mode this version doesn't know costs only the mode
+        assert(persisted("{\(base),\"mode\":\"dusk\",\"lightTheme\":\"paper\"}").themeChoice.mode == .auto)
+    }
+
+    /// Classic draws byte for byte the same through Settings › Appearance in either mode, Glass and Solid, as with the
+    /// values it always had (ClassicRenderChecks.sh compares those with f7e5f5c).
+    @MainActor static func checkClassicInBothModes() {
+        let store = ThemeStore(folder: folder("classic"))
+        func render(_ scheme: ColorScheme, _ skin: PulseSkin, _ material: PulseAppearance) -> Data {
+            let view = VStack(spacing: 12) {
+                RingView(account: .claude, percent: 81, secondary: 40, size: 52)
+                RingView(account: .codex, percent: 0, size: 52)
+                BatteryRing(reading: BatteryReading(percent: 60, onAC: false, minutesLeft: nil), level: .ok, size: 52)
+            }
+            .padding(16).pulseSurface(in: Capsule()).padding(8).background(Color.white)
+            .environment(\.colorScheme, scheme).environment(\.pulseSkin, skin).environment(\.pulseAppearance, material)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+            let image = renderer.cgImage!
+            // raw RGBA in sRGB, as ClassicRender writes it
+            let flags = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+            let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
+                                bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: flags)!
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            return Data(bytes: ctx.data!, count: image.width * image.height * 4)
+        }
+        // Solid: the pixels. Glass: Liquid Glass doesn't draw the same twice under ImageRenderer (measured: two renders of
+        // one view differ), so its inputs: dark, Glass, and Classic's look (the flag aside, which no view reads).
+        // The first two renders in a process differ from every later one (measured: a cache warming); after those, a
+        // render repeats byte for byte, so the comparison starts there.
+        for _ in 0 ..< 3 { _ = render(.dark, .classic, .solid) }
+        let before = render(.dark, .classic, .solid)
+        for mode in AppearanceMode.allCases {
+            for system in [ColorScheme.light, .dark] {
+                store.setSystem(system)
+                for id in ThemeStore.classicIDs {
+                    let choice = ThemeChoice(mode: mode, light: id, dark: id, classic: id)
+                    var look = store.skin(choice)
+                    let material = look.material
+                    look.glass = nil
+                    assert(store.scheme(choice) == .dark && look == .classic && material == (id == "classic-glass" ? .glass : .solid),
+                           "\(id) in \(mode) with the system \(system) gets Classic's inputs")
+                    if id == "classic-solid" {
+                        assert(render(store.scheme(choice), store.skin(choice), material) == before, "\(id) in \(mode) with the system \(system) draws as Classic always did")
+                    }
+                }
+            }
+        }
     }
 }

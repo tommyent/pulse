@@ -214,33 +214,30 @@ enum SettingsStateChecks {
     @MainActor private static func checkSkins() {
         let p = try! JSONDecoder().decode(AppState.Persisted.self, from: Data(#"{"enabled":[],"order":[],"alwaysOnTop":true,"showOverlay":true}"#.utf8))
         let themes = ThemeStore.shared   // the built-ins only: nothing read from a folder here
-        assert(p.skin == nil && themes.skin(p.skin) == .classic, "a state from before skins stays Classic")
+        assert(p.skin == nil && themes.skin(p.themeChoice) == .classic, "a state from before skins stays Classic")
         var groove = AppState.Persisted()
         groove.skin = "groove"
         let reread = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(groove))
-        assert(reread.skin == "groove" && themes.skin(reread.skin) == .groove, "Groove stays picked after a relaunch")
-        assert(themes.skin("a-skin-this-version-lacks") == .classic, "an unknown skin falls back to Classic")
-        assert(themes.theme("a-skin-this-version-lacks").id == "classic" && themes.theme(nil).id == "classic",
-               "the Skin picker shows Classic for a missing or unknown name, as it draws")
+        themes.setSystem(.dark)
+        assert(reread.skin == "groove" && themes.skin(reread.themeChoice) == .groove, "Groove stays picked after a relaunch")
+        let unknown = ThemeChoice(mode: .auto, light: "a-skin-this-version-lacks", dark: "a-skin-this-version-lacks", classic: "classic-solid")
+        assert(themes.skin(unknown) == .classic && themes.theme(for: .dark, in: unknown).id == "classic-solid",
+               "an unknown theme draws, and shows as, the person's Classic")
 
-        for (_, skin) in PulseSkinSet.builtIn {
-            let json = try! JSONEncoder().encode(skin)
-            assert(try! JSONDecoder().decode(PulseSkinSet.self, from: json) == skin, "\(skin.name) survives JSON")
+        for (_, file) in PulseThemeFile.builtIn {
+            let json = try! JSONEncoder().encode(file)
+            assert(try! JSONDecoder().decode(PulseThemeFile.self, from: json) == file, "\(file.name) survives JSON")
         }
-        assert(PulseSkinSet.classic.light == nil && PulseSkinSet.classic.half(.light) == .classic, "Classic stays dark in light appearance")
-        assert(PulseSkinSet.groove.half(.light) == .grooveWhite && PulseSkinSet.grooveBlack.half(.light) == .grooveBlack
-               && PulseSkinSet.grooveBlack.dark == .groove, "both Groove themes keep the dark half; each has its light one")
-        let file = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(PulseSkinSet.groove)) as! [String: Any]
-        assert(file["name"] as? String == "Groove" && file["light"] != nil)
-        let object = file["dark"] as! [String: Any]
-        let accents = object["accents"] as! [String: Any], g = object["groove"] as! [String: Any]
+        let file = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(PulseThemeFile.groove)) as! [String: Any]
+        assert(file["name"] as? String == "Groove" && file["appearance"] as? String == "dark" && file["format"] as? Int == 1)
+        let accents = file["accents"] as! [String: Any], g = file["groove"] as! [String: Any]
         assert(accents["claude"] as? String == "#CF7C5E" && accents["antigravity2"] as? String == "#79AAD2", "colours are hex strings")
         assert((g["wall"] as? [Any])?.count == 5 && (g["wall"] as! [Any])[3] as? String == "#000000", "shadows are [x, y, blur, colour, opacity]")
         assert((g["outer"] as? [String: Any])?["channel"] as? Double == 16, "depths are numbers")
-        // a skin file with a bad colour or shadow is refused, not drawn black
-        let broken = String(data: try! JSONEncoder().encode(PulseSkinSet.groove), encoding: .utf8)!
-        assert((try? JSONDecoder().decode(PulseSkinSet.self, from: Data(broken.replacingOccurrences(of: "#CF7C5E", with: "#CF7C5").utf8))) == nil)
-        assert((try? JSONDecoder().decode(PulseSkinSet.self, from: Data(broken.replacingOccurrences(of: "[4.4,4.4,3.2,\"#000000\",0.8]", with: "[4.4,4.4,\"#000000\",0.8]").utf8))) == nil)
+        // a theme file with a bad colour or shadow is refused, not drawn black
+        let broken = String(data: try! JSONEncoder().encode(PulseThemeFile.groove), encoding: .utf8)!
+        assert((try? JSONDecoder().decode(PulseThemeFile.self, from: Data(broken.replacingOccurrences(of: "#CF7C5E", with: "#CF7C5").utf8))) == nil)
+        assert((try? JSONDecoder().decode(PulseThemeFile.self, from: Data(broken.replacingOccurrences(of: "[4.4,4.4,3.2,\"#000000\",0.8]", with: "[4.4,4.4,\"#000000\",0.8]").utf8))) == nil)
 
         // Classic's colours are exactly the values Pulse had before skins (ClassicRenderChecks.sh compares whole renders)
         let env = EnvironmentValues()
@@ -264,7 +261,7 @@ enum SettingsStateChecks {
         }
 
         // Increase Contrast: full colours, white ink, nothing shading the colour
-        let contrast = themes.skin("groove", contrast: .increased)
+        let contrast = themes.skin(ThemeChoice(mode: .dark, light: "groove-white", dark: "groove"), contrast: .increased)
         assert(contrast.accents == PulseSkin.classic.accents && contrast.groove?.wall == nil && contrast.ink.primary == "#FFFFFF")
         assert(contrast.groove?.raise == PulseSkin.groove.groove?.raise, "the slab keeps its shape")
 

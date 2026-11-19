@@ -37,8 +37,9 @@ Live checks that use your accounts: `./scripts/grok-check.sh` may refresh Grok c
 | `PetApprovals.swift` | native approval, consent and question prompts, scoped replies and cancellation |
 | `HotKey.swift` | global shortcut registration and the Settings recorder |
 | `Views.swift` | rail, rings, usage cards, pet card, Settings |
-| `Skin.swift` | the built-in themes (Classic, Groove, Groove Black) as plain values, a dark and an optional light half each: colours, shadows, ring depths; Groove's slab, rings and bars |
-| `Themes.swift` | theme files: the Themes folder, reading and checking each file (ranges, geometry, the contrast floor), last good versions, `.error` files, the folder watch, and the appearance a theme draws in |
+| `Skin.swift` | a theme file's format (one look, its slot and format version) and the five built-in themes as plain values: colours, shadows, ring depths; Groove's slab, rings and bars |
+| `Themes.swift` | the theme store: Settings › Appearance's choice resolved to the theme drawn, the system's appearance, the folder watch, and the checks on a file (format, ranges, geometry, the contrast floor) |
+| `ThemeFolder.swift` | the Themes folder's file work, off the main thread: bounded reads, examples, passes, last good versions, `.error` files, import |
 | `ThemeGuide.swift` | the guide Pulse writes into the Themes folder (`AGENTS.md`) |
 | `Appearance.swift` | Glass and Solid surfaces, and which theme each window draws with |
 | `Breaks.swift` | break settings, schedule, colours and picking ideas |
