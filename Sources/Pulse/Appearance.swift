@@ -54,7 +54,7 @@ struct PulseSurface<S: Shape>: View {
         if let groove = skin.groove {
             GrooveSlab(groove: groove, shape: shape, floats: floats)
         } else if skin.liquid == true {
-            Color.clear.glassEffect(.clear, in: shape)   // prototype: Settings' background; panels put their content inside (SurfaceModifier)
+            Color.clear.liquidPanel(skin, in: shape)   // prototype: Settings' background; panels put their content inside (SurfaceModifier)
         } else {
             classic
         }
@@ -136,6 +136,22 @@ struct SettingsBackground: View {
     }
 }
 
+extension View {
+    /// Prototype, a liquid theme's panel: the content with the theme's halo behind it and its wash under it, inside the
+    /// system's glass (by default .clear: the most transparent, the strongest lensing at its edges; .regular frosts it
+    /// grey), which draws its own edge and light and adapts to what's behind; or on the older blur, which doesn't bend.
+    /// The halo is live shadows, not flattened like Groove's: a bitmap would lose the AppKit controls inside (the card's bars).
+    @ViewBuilder func liquidPanel<S: Shape>(_ skin: PulseSkin, in shape: S) -> some View {
+        let lit = (skin.halo ?? []).reduce(AnyView(self)) { view, s in AnyView(view.shadow(color: s.color(), radius: s.blur / 2, x: s.x, y: s.y)) }
+            .background(skin.wash?.color ?? .clear, in: shape)
+        switch skin.liquidMaterial ?? .clear {
+        case .clear: lit.glassEffect(.clear, in: shape)
+        case .regular: lit.glassEffect(.regular, in: shape)
+        case .ultraThin: lit.background(.ultraThinMaterial, in: shape)
+        }
+    }
+}
+
 private struct SurfaceModifier<S: Shape>: ViewModifier {
     @Environment(\.pulseSkin) private var skin
     let shape: S
@@ -143,12 +159,7 @@ private struct SurfaceModifier<S: Shape>: ViewModifier {
 
     func body(content: Content) -> some View {
         if skin.liquid == true {
-            // prototype: the content inside the system's clear glass (the most transparent, the strongest lensing at its edges;
-            // .regular frosts it grey), which draws its own edge and light and adapts to what's behind
-            // the theme's halo behind everything on it, so its ink reads on either side of what the glass shows; live shadows,
-            // not flattened like Groove's, since a bitmap would lose the AppKit controls inside (the card's bars)
-            (skin.halo ?? []).reduce(AnyView(content)) { view, s in AnyView(view.shadow(color: s.color(), radius: s.blur / 2, x: s.x, y: s.y)) }
-                .glassEffect(.clear, in: shape)
+            content.liquidPanel(skin, in: shape)
         } else {
             painted(content)
         }

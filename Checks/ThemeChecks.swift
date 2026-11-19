@@ -227,8 +227,15 @@ enum ThemeChecks {
         var liquid = PulseThemeFile.classicSolid
         liquid.look.liquid = true
         expectRefused(liquid, "halo", [[0, 0, 40, "#000000", 0.6]], mentioning: ["halo[0] blur", "outside"])
+        expectRefused(.classicSolid, "wash", "#8FA0FF29", mentioning: ["wash", "liquid theme only"])
+        expectRefused(.classicSolid, "liquidMaterial", "regular", mentioning: ["liquidMaterial", "liquid theme only"])
+        expectRefused(liquid, "liquidMaterial", "frosted", mentioning: ["liquidMaterial"])
         liquid.look.halo = [[0, 0, 3, "#000000", 0.6], [0, 0, 10, "#000000", 0.35]]
-        assert(ThemeStore.decode(ThemeStore.file(liquid)) == .success(liquid), "a liquid theme's halo round-trips")
+        liquid.look.wash = "srgb:0.56,0.63,1,0.16"
+        for material in [nil, PulseSkin.LiquidMaterial.clear, .regular, .ultraThin] {
+            liquid.look.liquidMaterial = material
+            assert(ThemeStore.decode(ThemeStore.file(liquid)) == .success(liquid), "a liquid theme's halo, wash and \(String(describing: material)) round-trip")
+        }
         // author and description: optional, kept, bounded
         var credited = PulseThemeFile.groove
         credited.author = "Someone"
