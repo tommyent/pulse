@@ -905,7 +905,7 @@ struct OverlayView: View {
             // shorter card shifts the rail inside the not yet resized panel. Then no later exit may come, so the
             // pointer is watched until it really leaves.
             guard pointerInside?() == true else { return state.collapseOverlay() }
-            // ponytail: a 250 ms check, only after an exit the pointer didn't make
+            // shortcut: a 250 ms check, only after an exit the pointer didn't make
             exitWatch = Task { @MainActor in
                 while !Task.isCancelled, pointerInside?() == true { try? await Task.sleep(for: .milliseconds(250)) }
                 if !Task.isCancelled, !state.petVisible, !state.agentsByKeyboard { state.collapseOverlay() }

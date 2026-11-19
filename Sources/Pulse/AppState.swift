@@ -224,7 +224,7 @@ final class AppState: ObservableObject {
         if cached[.claude]?.source == .officialUsagePage { ClaudeWeb.connected = true }   // signed in before this was remembered
         if let first = enabledAccounts.first { selected = first }
 
-        // ponytail: one flat 2-min poll for everything; per-adapter budgets if a provider ever throttles
+        // shortcut: one flat 2-min poll for everything; per-adapter budgets if a provider ever throttles
         Task {
             while true {
                 await refreshAll(manual: false)

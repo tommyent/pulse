@@ -281,7 +281,7 @@ final class VoiceBridge {
             return
         }
         prewarmDevice = (device, proc)
-        // ponytail: 100 ms x 20 is a guess at how long the profile switch takes; widen it if a
+        // shortcut: 100 ms x 20 is a guess at how long the profile switch takes; widen it if a
         // slower headset still trips the helper.
         var rate: Double = 0
         for _ in 0..<20 {

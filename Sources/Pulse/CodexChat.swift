@@ -362,7 +362,7 @@ final class CodexPetSession: ObservableObject {
     private func watchServer() {
         serverWatch?.cancel(); serverWatch = nil; idleSince = nil
         guard hidden || !cardOpen else { return }
-        // ponytail: a poll (2 s hidden, 10 s closed), since work ends on many paths (events, replies, timeouts) and a
+        // shortcut: a poll (2 s hidden, 10 s closed), since work ends on many paths (events, replies, timeouts) and a
         // server may still be starting; one completion hook per path if the poll ever matters
         serverWatch = Task { [weak self] in
             while let self, self.hidden || !self.cardOpen {
@@ -971,7 +971,7 @@ final class CodexPetSession: ObservableObject {
     /// this call fails visibly rather than overlap them.
     private func previousCallClosed() async throws {
         let deadline = Date.now.addingTimeInterval(3)
-        // ponytail: 20 ms poll, only while a just-ended call closes; a continuation if it ever matters
+        // shortcut: 20 ms poll, only while a just-ended call closes; a continuation if it ever matters
         while closesExpected > 0 && Date.now < deadline && !Task.isCancelled { try? await Task.sleep(for: .milliseconds(20)) }
         try Task.checkCancellation()
         guard closesExpected == 0 else { throw CodexAppServer.Failure.remote("The last call is still closing. Try again in a moment.") }
@@ -1444,7 +1444,7 @@ final class CodexPetSession: ObservableObject {
         var text = (agentText[result.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if text.hasPrefix("[FINAL]") { text = text.dropFirst(7).trimmingCharacters(in: .whitespaces) }
         guard !text.isEmpty else { voiceLog.notice("turn \(turn, privacy: .public) not spoken: empty result"); return false }
-        // ponytail: the CLI caps speech at 990 estimated tokens; ~4 UTF-8 bytes a token approximates its estimate
+        // shortcut: the CLI caps speech at 990 estimated tokens; ~4 UTF-8 bytes a token approximates its estimate
         let kind = result.asks ? "question pointer" : text.utf8.count > 990 * 4 ? "long-answer pointer" : "result"
         let speech = result.asks ? "Codex has a question for you in the pet chat."
             : text.utf8.count > 990 * 4 ? "Codex's answer is in the pet chat." : text

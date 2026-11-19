@@ -325,7 +325,7 @@ final class SharedWait {
     }
 }
 
-/// "Resets in 51 min" / "Resets in 4h 12m" / "Resets Mon 3:00 AM" / "Resets Fri, Sep 25, 12:21 PM".
+/// "Resets in 51 min" / "Resets in 4h 12m" / "Resets Mon 3:00 AM" / "Resets Fri, Sep 25 at 12:21 PM" (en_US).
 /// Time follows the user's locale and 12/24-hour setting. From six days out a weekday alone is
 /// ambiguous ("Fri" seen on a Friday means next week), so the date is added.
 func resetLabel(_ date: Date?, now: Date = .now) -> String {
