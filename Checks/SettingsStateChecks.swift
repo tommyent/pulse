@@ -218,6 +218,13 @@ enum SettingsStateChecks {
         for pane in SettingsPane.allCases { assert(NSImage(systemSymbolName: pane.symbol, accessibilityDescription: nil) != nil, "\(pane.symbol) exists") }
         assert(SettingsPane(named: "Breaks") == .breaks && SettingsPane(named: "Agents") == .agents && SettingsPane(named: "nonsense") == .general)
 
+        // captions take the theme's secondary ink: Classic's grey in Classic, as before; dark grey on Groove White
+        var env = EnvironmentValues()
+        assert(PulseSecondary().resolve(in: env) == PulsePalette.secondary.resolve(in: env), "Classic's captions are Classic's grey")
+        env.pulseSkin = .grooveWhite
+        assert(PulseSecondary().resolve(in: env) == PulseSkin.grooveWhite.secondary.resolve(in: env), "Groove White's captions are its own")
+        assert(PulseSkin.grooveWhite.ink.secondary.contrast(with: PulseSkin.grooveWhite.groove!.slab) >= 4.5)
+
         // ↓ from General reaches every pane in order and stops at Breaks; ↑ goes back and stops at General
         var walked = [SettingsPane.general]
         for _ in 0 ..< 10 { walked.append(walked.last!.moved(by: 1)) }

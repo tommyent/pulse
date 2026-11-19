@@ -332,7 +332,7 @@ struct BatteryCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(lines, id: \.self) { Text($0) }
                 }
-                .font(.caption).foregroundStyle(PulsePalette.secondary)
+                .font(.caption).foregroundStyle(.pulseSecondary)
                 .fixedSize(horizontal: false, vertical: true)   // wraps rather than cutting off the power line
             }
         }
@@ -518,14 +518,14 @@ struct PetCard: View {
         var body: some View {
             let m = message
             if m.role == .note {   // Pulse's own notice, not a message and not input: a small centered line
-                Text(m.text).font(.caption).foregroundStyle(PulsePalette.secondary).multilineTextAlignment(.center)
+                Text(m.text).font(.caption).foregroundStyle(.pulseSecondary).multilineTextAlignment(.center)
                     .textSelection(.enabled).frame(maxWidth: .infinity).padding(.vertical, 2).id(m.id)
             } else {
                 HStack {
                     if m.role == .user { Spacer(minLength: 40) }
                     VStack(alignment: .leading, spacing: 2) {
                         // Results of work a call started: never one of the spoken replies.
-                        if let caption = m.caption { Text(caption).font(.caption2).foregroundStyle(PulsePalette.secondary) }
+                        if let caption = m.caption { Text(caption).font(.caption2).foregroundStyle(.pulseSecondary) }
                         Text(m.role == .user ? AttributedString(m.text) : inlineMarkdown(m.text))
                             .font(.callout)
                             .textSelection(.enabled)
@@ -534,7 +534,7 @@ struct PetCard: View {
                                 .fill(m.role == .user ? AccountID.codex.accent.opacity(0.35)
                                                       : m.caption != nil ? Color.clear
                                                       : Color(white: 0.16)))
-                            .overlay { if m.caption != nil { RoundedRectangle(cornerRadius: 12).strokeBorder(PulsePalette.secondary.opacity(0.5)) } }
+                            .overlay { if m.caption != nil { RoundedRectangle(cornerRadius: 12).strokeBorder(.pulseSecondary.opacity(0.5)) } }
                     }
                     .accessibilityElement(children: .combine)
                     if m.role != .user { Spacer(minLength: 40) }
@@ -557,19 +557,19 @@ struct PetCard: View {
                     if !session.workModels.isEmpty {
                         workModelMenu(workDetail ?? "Choose a work model", label: modelLine ?? "Choose a work model")
                     } else if let model = modelLine {
-                        Text(model).font(.caption2).foregroundStyle(PulsePalette.secondary).lineLimit(1)
+                        Text(model).font(.caption2).foregroundStyle(.pulseSecondary).lineLimit(1)
                     }
                     if let split = splitLine {   // its own line: a menu label never wraps, so it would cut this off
-                        Text(split).font(.caption2).foregroundStyle(PulsePalette.secondary)   // wraps fully: pending notices can be long
+                        Text(split).font(.caption2).foregroundStyle(.pulseSecondary)   // wraps fully: pending notices can be long
                     }
                     if let place = placeDetail {
-                        Text(place).font(.caption2).foregroundStyle(PulsePalette.secondary).lineLimit(1).truncationMode(.middle)
+                        Text(place).font(.caption2).foregroundStyle(.pulseSecondary).lineLimit(1).truncationMode(.middle)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 if let showUsage {
                     Button("Usage", action: showUsage).buttonStyle(.borderless).font(.caption)
-                        .foregroundStyle(PulsePalette.secondary).fixedSize()
+                        .foregroundStyle(.pulseSecondary).fixedSize()
                 }
                 Button { session.clear() } label: { Image(systemName: "square.and.pencil") }
                     .buttonStyle(.borderless).help("New conversation: starts over and stops running helpers")
@@ -598,17 +598,17 @@ struct PetCard: View {
 
             if session.helpersWorking > 0 {
                 Label(session.helpersWorking == 1 ? "A helper is working" : "\(session.helpersWorking) helpers are working", systemImage: "person.2")
-                    .font(.caption).foregroundStyle(PulsePalette.secondary)
+                    .font(.caption).foregroundStyle(.pulseSecondary)
             }
 
             if session.microphonePaused {
                 Label("Microphone paused · voice still on", systemImage: "mic.slash.fill")
-                    .font(.caption).foregroundStyle(PulsePalette.secondary)
+                    .font(.caption).foregroundStyle(.pulseSecondary)
             }
 
             if let status = session.status {
                 Text(status).font(.caption)
-                    .foregroundStyle(status == CodexPetSession.reconnectNote ? PulsePalette.secondary : .red.opacity(0.85))
+                    .foregroundStyle(status == CodexPetSession.reconnectNote ? AnyShapeStyle(.pulseSecondary) : AnyShapeStyle(.red.opacity(0.85)))
                     .lineLimit(3).help(status)
                 if session.microphoneBlocked {
                     Button("Open Microphone Settings") {
@@ -657,23 +657,23 @@ struct PetCard: View {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     if session.canLoadEarlier {
                         Button("Load earlier messages") { session.loadEarlier() }
-                            .buttonStyle(.borderless).font(.caption).foregroundStyle(PulsePalette.secondary)
+                            .buttonStyle(.borderless).font(.caption).foregroundStyle(.pulseSecondary)
                     }
                     if session.messages.isEmpty {
                         Text(session.voiceState == .off ? "Type, or tap the waveform to talk. Same Codex sign-in, same threads."
                              : session.voiceState == .connecting ? "Starting microphone…"
                              : session.microphonePaused ? "Use the microphone button or shortcut to talk." : "Listening…")
-                            .font(.caption).foregroundStyle(PulsePalette.secondary)
+                            .font(.caption).foregroundStyle(.pulseSecondary)
                     }
                     ForEach(session.messages) { m in
                         Bubble(message: m)
                     }
                     if session.waitingOnYou {
                         Label("Waiting for your answer in the Codex prompt", systemImage: "hand.raised")
-                            .font(.caption).foregroundStyle(PulsePalette.secondary).id("thinking")
+                            .font(.caption).foregroundStyle(.pulseSecondary).id("thinking")
                     } else if session.thinking, !(session.messages.last?.live ?? false) {
                         HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Thinking…").font(.caption) }
-                            .foregroundStyle(PulsePalette.secondary).id("thinking")
+                            .foregroundStyle(.pulseSecondary).id("thinking")
                     }
                 }
                 .foregroundStyle(Color.primary)
@@ -765,7 +765,7 @@ struct PetCard: View {
                 Text(label).lineLimit(1).truncationMode(.tail)
                 Image(systemName: "chevron.down").font(.system(size: 7, weight: .semibold))
             }
-            .font(.caption2).foregroundStyle(PulsePalette.secondary)
+            .font(.caption2).foregroundStyle(.pulseSecondary)
         }
         .menuStyle(.button).buttonStyle(.plain)   // a plain label lines up with the lines around it
         .menuIndicator(.hidden)   // the label draws its own arrow
@@ -1196,7 +1196,7 @@ struct MenuBarPopover: View {
                                     }
                                 }
                                 if let msg = snap.healthMessage {
-                                    Text(msg).font(.caption).foregroundStyle(PulsePalette.secondary)
+                                    Text(msg).font(.caption).foregroundStyle(.pulseSecondary)
                                         .fixedSize(horizontal: false, vertical: true)   // wraps: a failure's reason is the part you need
                                 }
                                 ConnectButton(snapshot: snap)
@@ -1210,7 +1210,7 @@ struct MenuBarPopover: View {
             .frame(maxHeight: (NSScreen.main?.visibleFrame.height ?? 800) - 230)
             .fixedSize(horizontal: false, vertical: true)   // grows with its rows, and scrolls before they push the buttons off the screen
             if state.enabledAccounts.isEmpty {
-                Text("All accounts disabled").foregroundStyle(PulsePalette.secondary)
+                Text("All accounts disabled").foregroundStyle(.pulseSecondary)
             }
             Divider()
             if state.persisted.breaks.enabled {
@@ -1421,7 +1421,7 @@ struct SettingsView: View {
                                 // a stale row is still signed in the same way: only a refresh failed, and the caption says so
                                 let signedIn = state.snapshots[id]?.health == .ok || state.snapshots[id]?.health == .stale
                                 if state.snapshots[id]?.source == .officialProtocol, signedIn {
-                                    Text("via Claude Code").font(.caption).foregroundStyle(PulsePalette.secondary)
+                                    Text("via Claude Code").font(.caption).foregroundStyle(.pulseSecondary)
                                         .help("Reads Claude Code's own sign-in from the Keychain; no separate login needed")
                                 } else if state.snapshots[id]?.source == .officialUsagePage, signedIn {
                                     Button("Disconnect") {
@@ -1450,15 +1450,15 @@ struct SettingsView: View {
                                         Task { await WebLogin.disconnectGrok(); await state.refreshAll() }
                                     }
                                 } else {
-                                    Text("via Grok CLI").font(.caption).foregroundStyle(PulsePalette.secondary)
+                                    Text("via Grok CLI").font(.caption).foregroundStyle(.pulseSecondary)
                                 }
                             }
                             if id == .codex {
-                                Text("via Codex CLI").font(.caption).foregroundStyle(PulsePalette.secondary)
+                                Text("via Codex CLI").font(.caption).foregroundStyle(.pulseSecondary)
                                     .help("Codex signs in through its own CLI (codex login)")
                             }
                             if id == .antigravity {
-                                Text("via Antigravity CLI").font(.caption).foregroundStyle(PulsePalette.secondary)
+                                Text("via Antigravity CLI").font(.caption).foregroundStyle(.pulseSecondary)
                                     .help("Reads agy's own /usage report; sign in by running agy once")
                             }
                             Toggle("Enable \(id.displayName)", isOn: state.isEnabled(id)).labelsHidden().toggleStyle(.switch)
@@ -1480,7 +1480,7 @@ struct SettingsView: View {
                 }
                 Section {
                     Text("Subscription accounts only. API keys are not supported.")
-                        .font(.caption).foregroundStyle(PulsePalette.secondary)
+                        .font(.caption).foregroundStyle(.pulseSecondary)
                 }
             }
         case .rings:
@@ -1491,7 +1491,7 @@ struct SettingsView: View {
                     Toggle("Always on top", isOn: $state.persisted.alwaysOnTop)
                         .accessibilityLabel("Always on top")
                     Text("Drag or throw the usage rings to any screen edge; top and bottom arrange horizontally. Throw them into their own edge to minimize them to a sliver, and click it to bring them back.")
-                        .font(.caption).foregroundStyle(PulsePalette.secondary)
+                        .font(.caption).foregroundStyle(.pulseSecondary)
                     Toggle("Peek when the pointer rests on the minimized rings", isOn: state.tuckPeekBinding)
                         .accessibilityLabel("Peek when the pointer rests on the minimized rings")
                         .help("The rings slide out while the pointer stays on the sliver, and back when it leaves. Off, only a click brings them back.")
@@ -1512,7 +1512,7 @@ struct SettingsView: View {
                         .help("Chat and live voice with Codex, separate from the Codex usage ring. Off hides the pet, ends a call, frees the shortcut and starts nothing new; work already running finishes, then Codex stops.")
                     LabeledContent("Shortcut") { HotKeyRecorder(combo: state.voiceHotKeyBinding) }.disabled(!state.showsPet)
                     Text("Tap to start hands-free voice; tap again to pause or resume the microphone. Hold to talk; letting go pauses the microphone while replies keep playing. Double-tap to end the call; Escape also ends it and closes the card.")
-                        .font(.caption).foregroundStyle(PulsePalette.secondary)
+                        .font(.caption).foregroundStyle(.pulseSecondary)
                     Button("Reset remembered approvals") { PetApprovals.shared.resetRemembered() }
                         .help("Ask again for future command and folder-access requests. Current task grants expire when that task ends.")
                 }
@@ -1626,7 +1626,7 @@ struct BatterySettingsSection: View {
 
     var body: some View {
         if battery.reading == nil {
-            Text("This Mac has no battery.").foregroundStyle(PulsePalette.secondary)
+            Text("This Mac has no battery.").foregroundStyle(.pulseSecondary)
         } else {
             rows
         }
@@ -1684,7 +1684,7 @@ struct BatterySettingsSection: View {
             }
         }
         Text("An alert stays on screen with its sound until you click Dismiss or plug in. It never goes to Notification Center.")
-            .font(.caption).foregroundStyle(PulsePalette.secondary)
+            .font(.caption).foregroundStyle(.pulseSecondary)
         if battery.reading?.simulated == true {
             Text("Simulated battery. `defaults delete io.github.tommyent.pulse simulatedBattery` returns to the real one.")
                 .font(.caption).foregroundStyle(.orange)

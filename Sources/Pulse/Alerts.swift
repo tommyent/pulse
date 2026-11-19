@@ -125,7 +125,7 @@ struct LimitAlertView: View {
                 Text(LimitAlert.lines(snap, remaining: remaining))
                     .font(.body)
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(PulsePalette.secondary)
+                    .foregroundStyle(.pulseSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

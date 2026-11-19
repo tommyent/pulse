@@ -17,6 +17,15 @@ extension EnvironmentValues {
     }
 }
 
+/// Captions in the theme's own secondary ink: Classic's grey in Classic, as before, and a dark grey on a light theme's
+/// slab, where Classic's grey would be near-white on white. The break screen keeps Classic's grey: it's always dark.
+struct PulseSecondary: ShapeStyle {
+    func resolve(in environment: EnvironmentValues) -> Color.Resolved { environment.pulseSkin.secondary.resolve(in: environment) }
+}
+extension ShapeStyle where Self == PulseSecondary {
+    static var pulseSecondary: PulseSecondary { PulseSecondary() }
+}
+
 /// Classic's colours, for the views that don't change with the skin (Groove's secondary ink is the same).
 enum PulsePalette {
     static let surface = PulseSkin.classic.surface.color

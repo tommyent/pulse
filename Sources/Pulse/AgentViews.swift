@@ -157,11 +157,11 @@ struct AgentsCard: View {
                     Image(systemName: "person.2.fill").font(.system(size: 13, weight: .semibold))
                     Text("Agents").font(.headline)
                     Spacer()
-                    Text(board.summary).font(.caption).foregroundStyle(PulsePalette.secondary)
+                    Text(board.summary).font(.caption).foregroundStyle(.pulseSecondary)
                 }
                 .foregroundStyle(Color.primary)
                 if board.rows.isEmpty {
-                    Text("No agents are open in Rex.").font(.caption).foregroundStyle(PulsePalette.secondary)
+                    Text("No agents are open in Rex.").font(.caption).foregroundStyle(.pulseSecondary)
                 } else {
                     let selected = selection?.row(in: board.rows)?.id
                     let rows = AgentRows(rows: board.rows, now: context.date, contexts: contexts, selected: selected, show: show, clear: clear)
@@ -180,7 +180,7 @@ struct AgentsCard: View {
                     let time: (Date) -> String = { $0.formatted(date: .omitted, time: .shortened) }
                     if let line = hold?.line(time) {
                         Label(line, systemImage: "bell.slash.fill")
-                            .font(.caption).foregroundStyle(PulsePalette.secondary)
+                            .font(.caption).foregroundStyle(.pulseSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -221,7 +221,7 @@ struct AgentRows: View {
                 }
                 if idleStarts, i > 0 {   // with nobody else in the card, its header already says how many are idle
                     Text("Idle · \(rows.count - i)")
-                        .font(.caption.weight(.semibold)).foregroundStyle(PulsePalette.secondary)
+                        .font(.caption.weight(.semibold)).foregroundStyle(.pulseSecondary)
                         .padding(.horizontal, 8).padding(.top, 6).padding(.bottom, 2)
                         .accessibilityAddTraits(.isHeader)
                 }
@@ -250,11 +250,11 @@ private struct AgentRow: View {
                 BrandIcon(account: agent.app.account, size: 17).padding(.top, 1)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 8) {
-                        Text("\(Text(row.pane).fontWeight(.medium))\(Text(agent.host.isEmpty ? "" : " on \(agent.host)").foregroundStyle(PulsePalette.secondary.opacity(0.8)))")
+                        Text("\(Text(row.pane).fontWeight(.medium))\(Text(agent.host.isEmpty ? "" : " on \(agent.host)").foregroundStyle(.pulseSecondary.opacity(0.8)))")
                             .font(.system(size: 11)).lineLimit(1)
                         Spacer(minLength: 0)
                         Text(state).font(.caption).lineLimit(1).fixedSize()
-                            .foregroundStyle(row.state == .waiting ? Color.orange : row.state == .failed ? Color.red : PulsePalette.secondary)
+                            .foregroundStyle(row.state == .waiting ? AnyShapeStyle(Color.orange) : row.state == .failed ? AnyShapeStyle(Color.red) : AnyShapeStyle(.pulseSecondary))
                     }
                     // the agent's own line, as plain text; a failed row keeps the line for its ×; an idle one's context
                     // sits at its end, under the idle time
@@ -265,7 +265,7 @@ private struct AgentRow: View {
                             Spacer(minLength: 0)
                             if !context.isEmpty { Text(context).lineLimit(1).fixedSize() }
                         }
-                        .font(.caption).foregroundStyle(PulsePalette.secondary.opacity(0.82))
+                        .font(.caption).foregroundStyle(.pulseSecondary.opacity(0.82))
                     }
                 }
             }
@@ -326,7 +326,7 @@ struct AgentsAlertView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Color.primary)
             if let after {
-                Text(after).font(.body).foregroundStyle(PulsePalette.secondary)
+                Text(after).font(.body).foregroundStyle(.pulseSecondary)
             }
             Divider().padding(.vertical, 4)
             TimelineView(.periodic(from: .now, by: 30)) { context in
@@ -337,7 +337,7 @@ struct AgentsAlertView: View {
                         finished.isEmpty ? "" : "\(finished.count) more finished: \(finished.map(\.place).joined(separator: ", "))"]
                 .filter { !$0.isEmpty }.joined(separator: ". ")
             if !more.isEmpty {
-                Text(more).font(.caption).foregroundStyle(PulsePalette.secondary)
+                Text(more).font(.caption).foregroundStyle(.pulseSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 4)
@@ -371,7 +371,7 @@ struct AgentSettingsSection: View {
                 }
             }
             Text("While this is on, Pulse reads each pane's label and status line through the rex command all day. It never starts a Rex server and saves nothing to disk. While the card is open, it also reads how full each idle agent's context is, for agents on this Mac: it asks macOS when the agent's process started and which files it has open, then reads token counts only from the agent's own session files. It reads no messages from them, keeps the numbers in memory only and needs no permission. A click on an agent shows its pane in Rex; nothing is answered from Pulse. Rex has its own tab marks, Dock badge, sounds and notifications: Pulse sends no notifications, and holds its own sound and alert while Rex is in front.")
-                .font(.caption).foregroundStyle(PulsePalette.secondary)
+                .font(.caption).foregroundStyle(.pulseSecondary)
             LabeledContent {
                 HotKeyRecorder(combo: shortcut, fallback: .agentsDefault, clearable: true)
                     .accessibilityLabel("Shortcut for the agents card")
@@ -427,7 +427,7 @@ struct AgentSettingsSection: View {
                 Toggle("While the screen is locked", isOn: $settings.holdWhileLocked)
                     .accessibilityLabel("Hold agent sounds and alerts while the screen is locked")
                 Text("They always wait during a break on screen and while Rex is in front, too. The rail keeps counting. When the hold ends, one alert lists the agents still waiting, not one alert for each.")
-                    .font(.caption).foregroundStyle(PulsePalette.secondary)
+                    .font(.caption).foregroundStyle(.pulseSecondary)
             }
         }
         .disabled(!rexFound)

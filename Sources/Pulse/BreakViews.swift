@@ -748,17 +748,17 @@ struct BreakSettingsSection: View {
                 .accessibilityLabel("Remind me to take breaks")
             LabeledContent("Micro break") {
                 HStack(spacing: 6) {
-                    Text("every").foregroundStyle(PulsePalette.secondary)
+                    Text("every").foregroundStyle(.pulseSecondary)
                     minutes($settings.microEvery, [10, 15, 20, 25, 30, 45, 60])
-                    Text("for").foregroundStyle(PulsePalette.secondary)
+                    Text("for").foregroundStyle(.pulseSecondary)
                     seconds($settings.microLength, [10, 20, 30, 45, 60])
                 }
             }
             LabeledContent("Long break") {
                 HStack(spacing: 6) {
-                    Text("every").foregroundStyle(PulsePalette.secondary)
+                    Text("every").foregroundStyle(.pulseSecondary)
                     minutes($settings.longEvery, [30, 45, 60, 90, 120])
-                    Text("for").foregroundStyle(PulsePalette.secondary)
+                    Text("for").foregroundStyle(.pulseSecondary)
                     minutes($settings.longLength, [2, 3, 5, 10, 15])
                     Toggle("Long break", isOn: $settings.longEnabled).labelsHidden().toggleStyle(.switch)
                         .accessibilityLabel("Long break")
@@ -775,7 +775,7 @@ struct BreakSettingsSection: View {
             }
             .accessibilityLabel("Wait during calls")
             Text("Breaks keep to their times: every 10 minutes means every 10 minutes, however long each break takes. A long break takes the place of a micro break due within two minutes of it. A break waits while the screen is locked, during a Pulse voice call, and during other calls when Wait during calls is on. To skip breaks through a meeting, hover over the rail and choose Pause. Choose a fixed schedule if you watch the screen without touching the keyboard or mouse.")
-                .font(.caption).foregroundStyle(PulsePalette.secondary)
+                .font(.caption).foregroundStyle(.pulseSecondary)
         }
         Section("Break screen") {
             LabeledContent("Colour") {
@@ -835,11 +835,11 @@ struct BreakSettingsSection: View {
             .accessibilityLabel("Suggest something to do")
             LabeledContent {
                 HStack(spacing: 8) {
-                    Text("Easy").foregroundStyle(PulsePalette.secondary)
+                    Text("Easy").foregroundStyle(.pulseSecondary)
                     Slider(value: Binding(get: { Double(settings.ideaLevel) }, set: { settings.ideaLevel = Int($0.rounded()) }), in: 0...2, step: 1)
                         .labelsHidden()
                         .accessibilityValue(BreakSettings.levels[settings.ideaLevel])
-                    Text("Wild").foregroundStyle(PulsePalette.secondary)
+                    Text("Wild").foregroundStyle(.pulseSecondary)
                 }
             } label: { Text("Level") }
             LabeledContent("Your own ideas") {
@@ -850,7 +850,7 @@ struct BreakSettingsSection: View {
                     .accessibilityLabel("Your own ideas")
             }
             Text("One idea per line; yours come up about one break in three. Reroll picks another at your level, Surprise me one from any level.")
-                .font(.caption).foregroundStyle(PulsePalette.secondary)
+                .font(.caption).foregroundStyle(.pulseSecondary)
         }
         BreakHistorySection(history: controller.history)
     }
@@ -897,13 +897,13 @@ struct BreakHistorySection: View {
             LabeledContent("This week", value: BreakHistory.summary(history.counts(since: week)))
             let recent = history.records.suffix(6).reversed()
             if recent.isEmpty {
-                Text("No breaks yet.").foregroundStyle(PulsePalette.secondary)
+                Text("No breaks yet.").foregroundStyle(.pulseSecondary)
             } else {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(recent.enumerated()), id: \.offset) { _, r in
                         HStack {
                             Text(r.at.formatted(.dateTime.weekday(.abbreviated).hour().minute()))
-                                .monospacedDigit().foregroundStyle(PulsePalette.secondary)
+                                .monospacedDigit().foregroundStyle(.pulseSecondary)
                                 .frame(width: 92, alignment: .leading)
                             Text(r.kind == .micro ? "Micro break" : "Long break")
                             Spacer()
@@ -914,7 +914,7 @@ struct BreakHistorySection: View {
                 }
             }
             Text("Kept on this Mac for 90 days. Skipped means dismissed with Escape or the countdown's ×, or breaks turned off during one.")
-                .font(.caption).foregroundStyle(PulsePalette.secondary)
+                .font(.caption).foregroundStyle(.pulseSecondary)
         }
     }
 }

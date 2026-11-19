@@ -145,7 +145,7 @@ struct BatteryAlertView: View {
                  + "Plug in your Mac before it goes to sleep.")
                 .font(.body)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(PulsePalette.secondary)
+                .foregroundStyle(.pulseSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
