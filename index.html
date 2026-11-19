@@ -29,16 +29,16 @@
 :root {
   --night: #0f0d16; --night-2: #1a1630; --text: #f2f0f7; --muted: #b7b1c8; --faint: #8d86a3;
   --glow: #6e52cf; --bar: #a993ff; --on-bar: #150d33;
-  /* from the app's source (Models.swift, Appearance.swift, Battery.swift, Breaks.swift) */
-  --p-surface: #121214; --p-track: #252527;   /* PulseSurface, Solid */
-  --p-light: radial-gradient(ellipse 85% 85% at 16% -8%, rgba(255,255,255,.17), rgba(255,255,255,.05) 45%, transparent);   /* PulseLight: over the content */
-  --p-rim: linear-gradient(to bottom right, rgba(255,255,255,.42), #252527 50%, #1c1c1c);   /* PulseRim */
+  /* from the app's source (Skin.swift's Classic, Appearance.swift, Battery.swift, Breaks.swift) */
+  --p-surface: #060608; --p-track: #303033;   /* PulseSurface, Solid */
+  --p-light: radial-gradient(ellipse 85% 85% at 16% -8%, rgba(255,255,255,.36), rgba(255,255,255,.08) 26%, transparent 60%);   /* PulseLight: over the content */
+  --p-rim: linear-gradient(to bottom right, rgba(255,255,255,.42), #303033 50%, #1c1c1c);   /* PulseRim */
   --p-label: rgba(255, 255, 255, 0.85);   /* SwiftUI .primary in dark mode is labelColor, white at 85% */
-  --p-claude: #ff5700; --p-codex: #216dff; --p-grok: #ffb400; --p-agy: #a358ff; --p-agy2: #22baff;
+  --p-claude: #ff5700; --p-codex: #0053ff; --p-grok: #ffb400; --p-agy: #8021ff; --p-agy2: #00d0f7;
   --p-green: #30d158; --p-yellow: #ffd60a; --p-break-bar: #a993ff;
 }
 @supports (color: color(display-p3 1 1 1)) {
-  :root { --p-claude: color(display-p3 1 0.40 0.16); --p-codex: color(display-p3 0.22 0.42 1); --p-grok: color(display-p3 1 0.72 0.10); --p-agy: color(display-p3 0.60 0.36 1); --p-agy2: color(display-p3 0.35 0.72 1); }
+  :root { --p-claude: color(display-p3 1 0.40 0.16); --p-codex: color(display-p3 0.08 0.32 1); --p-grok: color(display-p3 1 0.72 0.10); --p-agy: color(display-p3 0.46 0.16 0.98); --p-agy2: color(display-p3 0.20 0.80 0.95); }
 }
 [data-theme="halloween"] { --night: #0d0a14; --night-2: #1d1330; --glow: #e8822a; --bar: #ffb050; --on-bar: #2a1203; }
 
@@ -300,7 +300,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
       </ul>
     </div>
     <div>
-      <img class="shot shot-logo" src="assets/usage-card.png" width="855" height="1289" loading="lazy" alt="Pulse with sample numbers and Show what's left on: the rail with the Codex pet, Claude, Codex, Grok, Antigravity's violet and sky blue rings and the battery, and the Claude card open with current session, all models and Fable">
+      <img class="shot shot-logo" src="assets/usage-card.png" width="855" height="1289" loading="lazy" alt="Pulse with sample numbers and Show what's left on: the rail with the Codex pet, Claude, Codex, Grok, Antigravity's indigo and aqua rings and the battery, and the Claude card open with current session, all models and Fable">
       <img class="shot shot-nologo" src="assets/usage-card-nologo.png" width="855" height="1289" loading="lazy" alt="The rail of usage rings with sample numbers and Show what's left on, and a usage card open: current session, all models and one model's limit">
     </div>
   </div>
@@ -518,7 +518,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
     shape.setAttribute("viewBox", `0 0 ${w} ${h}`);
     light.setAttribute("viewBox", `0 0 ${w} ${h}`);
     shape.innerHTML = `<path d="${d}" fill="var(--p-surface)"/>`;
-    light.innerHTML = `<defs><clipPath id="pill"><path d="${d}"/></clipPath><radialGradient id="coat" cx=".16" cy="-.08" r=".85"><stop offset="0" stop-color="#fff" stop-opacity=".17"/><stop offset=".45" stop-color="#fff" stop-opacity=".05"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient><linearGradient id="rim" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".42"/><stop offset=".5" stop-color="#252527"/><stop offset="1" stop-color="#1c1c1c"/></linearGradient></defs><path d="${d}" fill="url(#coat)"/><path d="${d}" fill="none" stroke="url(#rim)" stroke-width="2" clip-path="url(#pill)"/>`;
+    light.innerHTML = `<defs><clipPath id="pill"><path d="${d}"/></clipPath><radialGradient id="coat" cx=".16" cy="-.08" r=".85"><stop offset="0" stop-color="#fff" stop-opacity=".36"/><stop offset=".26" stop-color="#fff" stop-opacity=".08"/><stop offset=".6" stop-color="#fff" stop-opacity="0"/></radialGradient><linearGradient id="rim" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".42"/><stop offset=".5" stop-color="#303033"/><stop offset="1" stop-color="#1c1c1c"/></linearGradient></defs><path d="${d}" fill="url(#coat)"/><path d="${d}" fill="none" stroke="url(#rim)" stroke-width="2" clip-path="url(#pill)"/>`;
     chip.style.padding = phone.matches ? "0 12px 7px 7px" : "0 19px 0 7px";
   };
   const total = 30; let left = total, timer = null;
