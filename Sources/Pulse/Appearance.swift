@@ -4,6 +4,11 @@ enum PulseAppearance: String, Codable {
     case glass, solid
 }
 
+extension PulseSkin {
+    /// How a flat look's panels are drawn: Glass or Solid.
+    var material: PulseAppearance { glass == true ? .glass : .solid }
+}
+
 private struct PulseAppearanceKey: EnvironmentKey { static let defaultValue = PulseAppearance.solid }
 extension EnvironmentValues {
     var pulseAppearance: PulseAppearance {

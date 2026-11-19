@@ -82,9 +82,6 @@ struct PulseSkin: Codable, Equatable {
     var glass: Bool? = nil   // a flat look's panels: untinted dark Liquid Glass instead of `surface` (Classic Glass)
     var groove: Groove?      // nil = flat: Classic's surface, tracks and text
 
-    /// How a flat look's panels are drawn: Glass or Solid.
-    var material: PulseAppearance { glass == true ? .glass : .solid }
-
     struct Accents: Codable, Equatable {
         var claude, codex, grok, antigravity: SkinColor
         var antigravity2: SkinColor   // an account's later pool of models (Antigravity's Claude and GPT)
