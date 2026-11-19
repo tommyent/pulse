@@ -313,6 +313,14 @@ struct ThemeChoice: Equatable {
         }
     }
 
+    /// Settings' Copy Agent Prompt: one line that sends a coding agent to the guide, in the folder its theme goes in.
+    /// Without a name, the agent picks one.
+    nonisolated static func agentPrompt(folder: URL, name: String) -> String {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "Read \"\(folder.appending(path: guideName).path(percentEncoded: false))\" and make a Pulse theme"
+            + (name.isEmpty ? "" : " called \(name)") + "; save it as JSON in that folder."
+    }
+
     /// A theme as Pulse writes it: pretty-printed, each shadow on one line.
     /// Strings are copied exactly as the encoder wrote them; only the layout between values changes, so a name, an
     /// author or a description with brackets in it comes out as it went in.

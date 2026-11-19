@@ -1321,11 +1321,13 @@ private struct SettingsWindowReader: NSViewRepresentable {
 }
 
 /// Settings › Appearance: when Pulse is light or dark, a theme for each, and the theme files (Import…, Export…, a file
-/// dropped here, and what's wrong with any that can't be used).
+/// dropped here, what's wrong with any that can't be used, and a line to copy that sets an agent to make one).
 struct AppearanceSettings: View {
     @Binding var choice: ThemeChoice
     @ObservedObject var themes: ThemeStore
     @ObservedObject private var results = SettingsResults.shared
+    @State private var agentName = ""
+    @State private var promptCopied = false
 
     var body: some View {
         Section {
@@ -1374,6 +1376,28 @@ struct AppearanceSettings: View {
                 if themes.problems.isEmpty, themes.warnings.isEmpty, themes.notice == nil, results.themeImport == nil {
                     Text("One JSON file per theme: import one or drop it here. \(ThemeStore.guideName) in the folder describes the format")
                 }
+            }
+            LabeledContent {
+                HStack {
+                    TextField("Theme name", text: $agentName, prompt: Text("Theme name"))
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)   // a grouped form's plain field reads as a label
+                        .multilineTextAlignment(.leading)
+                        .frame(width: 140)
+                        .accessibilityLabel("Name for the agent's theme")
+                        .onChange(of: agentName) { promptCopied = false }
+                    Button("Copy Agent Prompt") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(ThemeStore.agentPrompt(folder: themes.folder, name: agentName), forType: .string)
+                        promptCopied = true
+                    }
+                    .help("Copies a line for a coding agent: read the guide in the Themes folder and save a theme there")
+                }
+            } label: {
+                Text("Make one with an agent")
+                // the same length or shorter than the line before it, so the button doesn't move under the pointer
+                Text(promptCopied ? "Copied. Paste it to an agent; its theme shows up here by itself"
+                     : "Copies one line that tells an agent where the folder and its guide are")
             }
         }
         .dropDestination(for: URL.self) { urls, _ in

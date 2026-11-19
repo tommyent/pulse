@@ -19,7 +19,16 @@ enum ThemeChecks {
         checkModesAndSlots()
         checkMigration()
         checkClassicInBothModes()
-        print("Theme checks passed: built-ins round-trip, every refusal on the list, the format and portability, low contrast warned along whole gradients and on the counter, never refused, the guide's examples and keys, last good, .error files, live reload, built-in names, only Pulse's files touched, bounded reads off the main thread, import and export, a theme's appearance changed live with the app staying dark, the cap and the cache, the watch's teardown, modes and slots, migration, Classic identical in both modes")
+        checkAgentPrompt()
+        print("Theme checks passed: built-ins round-trip, every refusal on the list, the format and portability, low contrast warned along whole gradients and on the counter, never refused, the guide's examples and keys, last good, .error files, live reload, built-in names, only Pulse's files touched, bounded reads off the main thread, import and export, a theme's appearance changed live with the app staying dark, the cap and the cache, the watch's teardown, modes and slots, migration, Classic identical in both modes, the agent prompt")
+    }
+
+    /// Settings' Copy Agent Prompt: the guide's whole path in quotes (spaces and all), the name when there is one.
+    static func checkAgentPrompt() {
+        let folder = URL(filePath: "/tmp/Application Support/Pulse/Themes", directoryHint: .isDirectory)
+        let guide = "Read \"/tmp/Application Support/Pulse/Themes/AGENTS.md\" and make a Pulse theme"
+        assert(ThemeStore.agentPrompt(folder: folder, name: "  Ember Two ") == guide + " called Ember Two; save it as JSON in that folder.")
+        assert(ThemeStore.agentPrompt(folder: folder, name: " \n") == guide + "; save it as JSON in that folder.", "no name: the agent picks one")
     }
 
     // MARK: helpers
