@@ -1,6 +1,8 @@
 #!/bin/zsh
 # Classic (Solid and Glass) draws byte for byte as it did before skins: ClassicRender.swift's fixture, rendered with the sources at
-# BASE (the last commit before skins) and with today's, must give identical RGBA bytes at 1x and 2x.
+# BASE (the last commit before skins) and with today's, must give identical RGBA bytes at 1x and 2x. Classic's colours changed
+# since, on purpose (0.5.0: surface, track, gloss, Codex and Antigravity), so BASE gets ClassicColours.patch first: the same
+# colours in the code before skins. A later colour change goes into that patch too.
 # Usage: Checks/ClassicRenderChecks.sh [base-revision]. Needs the repository's history.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -10,6 +12,7 @@ trap 'rm -rf "$OUT"' EXIT
 git cat-file -e "$BASE^{commit}" || { echo "Classic render check: $BASE is not in this checkout's history"; exit 1; }
 mkdir -p "$OUT/base" "$OUT/head-out" "$OUT/base-out"
 git archive "$BASE" Sources | tar -x -C "$OUT/base"
+(cd "$OUT/base" && git apply "$OLDPWD/Checks/ClassicColours.patch")
 SPARKLE="$PWD/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64"
 build() {   # sources folder, output binary
     swiftc -F "$SPARKLE" -Xlinker -rpath -Xlinker "$SPARKLE" \
@@ -22,7 +25,7 @@ build Sources/Pulse "$OUT/head-render"
 for look in classic classic-glass; do
     for scale in 1x 2x; do
         cmp -s "$OUT/base-out/$look-$scale.rgba" "$OUT/head-out/$look-$scale.rgba" \
-            || { echo "Classic render check FAILED for $look at $scale: pixels differ from $BASE"; exit 1; }
+            || { echo "Classic render check FAILED for $look at $scale: pixels differ from $BASE with ClassicColours.patch"; exit 1; }
     done
 done
-echo "Classic render check passed: identical bytes to $BASE at 1x and 2x, Solid and Glass"
+echo "Classic render check passed: identical bytes to $BASE with its colour patch at 1x and 2x, Solid and Glass"

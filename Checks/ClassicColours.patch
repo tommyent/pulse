@@ -1,0 +1,60 @@
+diff --git a/Sources/Pulse/Appearance.swift b/Sources/Pulse/Appearance.swift
+index 830e803..271cb8f 100644
+--- a/Sources/Pulse/Appearance.swift
++++ b/Sources/Pulse/Appearance.swift
+@@ -13,9 +13,10 @@ extension EnvironmentValues {
+ }
+ 
+ enum PulsePalette {
+-    static let surface = Color(.sRGB, red: 0.07, green: 0.07, blue: 0.08, opacity: 1)
+-    // Match the dark menu progress track with opaque ink, independent of glass and backdrop.
+-    static let track = Color(.sRGB, red: 37.0 / 255, green: 37.0 / 255, blue: 39.0 / 255, opacity: 1)
++    static let surface = Color(.sRGB, red: 6.0 / 255, green: 6.0 / 255, blue: 8.0 / 255, opacity: 1)
++    // Opaque ink, independent of glass and backdrop. Lighter than the dark menu progress track (37) it once matched,
++    // so an empty ring still shows on the near-black surface.
++    static let track = Color(.sRGB, red: 48.0 / 255, green: 48.0 / 255, blue: 51.0 / 255, opacity: 1)
+     static let secondary = Color(.sRGB, red: 0.9, green: 0.9, blue: 0.9, opacity: 1)
+ }
+ 
+@@ -48,15 +49,15 @@ struct PulseSurface<S: Shape>: View {
+     }
+ }
+ 
+-/// A clear coat: one soft light from the top left. It goes over the content, because under it the surface
+-/// would brighten past the rings' fixed track shade and hide empty rings; over it, both rise together.
++/// A gloss: one tight highlight from the top left that dies out partway down. It goes over the content, because under
++/// it the surface would brighten towards the rings' fixed track shade and hide empty rings; over it, both rise together.
+ private struct PulseLight<S: Shape>: View {
+     let shape: S
+ 
+     var body: some View {
+-        shape.fill(EllipticalGradient(stops: [.init(color: .white.opacity(0.17), location: 0),
+-                                              .init(color: .white.opacity(0.05), location: 0.45),
+-                                              .init(color: .clear, location: 1)],
++        shape.fill(EllipticalGradient(stops: [.init(color: .white.opacity(0.36), location: 0),
++                                              .init(color: .white.opacity(0.08), location: 0.26),
++                                              .init(color: .clear, location: 0.6)],
+                                       center: UnitPoint(x: 0.16, y: -0.08), startRadiusFraction: 0, endRadiusFraction: 0.85))
+     }
+ }
+diff --git a/Sources/Pulse/Models.swift b/Sources/Pulse/Models.swift
+index 19aafbc..9779a38 100644
+--- a/Sources/Pulse/Models.swift
++++ b/Sources/Pulse/Models.swift
+@@ -16,13 +16,13 @@ enum AccountID: String, Codable, CaseIterable, Identifiable {
+     var accent: Color {
+         switch self {
+         case .claude: Color(.displayP3, red: 1.0, green: 0.40, blue: 0.16)
+-        case .codex: Color(.displayP3, red: 0.22, green: 0.42, blue: 1.0)
++        case .codex: Color(.displayP3, red: 0.08, green: 0.32, blue: 1.0)
+         case .grok: Color(.displayP3, red: 1.0, green: 0.72, blue: 0.10)
+-        case .antigravity: Color(.displayP3, red: 0.60, green: 0.36, blue: 1.0)   // not green: the battery's ring is
++        case .antigravity: Color(.displayP3, red: 0.46, green: 0.16, blue: 0.98)   // not green: the battery's ring is
+         }
+     }
+     /// A later pool of models on one account (Antigravity's Claude and GPT) has its own colour, so its ring can't pass for the first.
+-    func accent(pool: Int) -> Color { pool == 0 ? accent : Color(.displayP3, red: 0.35, green: 0.72, blue: 1.0) }
++    func accent(pool: Int) -> Color { pool == 0 ? accent : Color(.displayP3, red: 0.20, green: 0.80, blue: 0.95) }   // aqua: clear of Codex's blue and the battery's green
+     var glyph: String {
+         switch self {
+         case .claude: "asterisk"

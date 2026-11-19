@@ -112,7 +112,7 @@ enum SettingsStateChecks {
         checkSkins()
         ThemeChecks.run()
         checkSettingsPanes()
-        print("Settings state checks passed: saved values preserved, Tint migrated, unreadable values cost only themselves and are kept in a copy, plain menu-grey tracks without keylines in both looks")
+        print("Settings state checks passed: saved values preserved, Tint migrated, unreadable values cost only themselves and are kept in a copy, plain track grey without keylines in both looks")
     }
 
     @MainActor private static func checkUnreadableValues() {
@@ -363,17 +363,18 @@ enum SettingsStateChecks {
         assert((try? JSONDecoder().decode(PulseThemeFile.self, from: Data(broken.replacingOccurrences(of: "#CF7C5E", with: "#CF7C5").utf8))) == nil)
         assert((try? JSONDecoder().decode(PulseThemeFile.self, from: Data(broken.replacingOccurrences(of: "[4.4,4.4,3.2,\"#000000\",0.8]", with: "[4.4,4.4,\"#000000\",0.8]").utf8))) == nil)
 
-        // Classic's colours are exactly the values Pulse had before skins (ClassicRenderChecks.sh compares whole renders)
+        // Classic's colours are exactly the values in the code before skins with ClassicColours.patch (ClassicRenderChecks.sh
+        // compares whole renders)
         let env = EnvironmentValues()
         func same(_ a: Color, _ b: Color) -> Bool { a.resolve(in: env) == b.resolve(in: env) }
         let c = PulseSkin.classic
         assert(same(c.accent(.claude), Color(.displayP3, red: 1.0, green: 0.40, blue: 0.16)))
-        assert(same(c.accent(.codex), Color(.displayP3, red: 0.22, green: 0.42, blue: 1.0)))
+        assert(same(c.accent(.codex), Color(.displayP3, red: 0.08, green: 0.32, blue: 1.0)))
         assert(same(c.accent(.grok), Color(.displayP3, red: 1.0, green: 0.72, blue: 0.10)))
-        assert(same(c.accent(.antigravity), Color(.displayP3, red: 0.60, green: 0.36, blue: 1.0)))
-        assert(same(c.accent(.antigravity, pool: 1), Color(.displayP3, red: 0.35, green: 0.72, blue: 1.0)))
-        assert(same(c.surface.color, Color(.sRGB, red: 0.07, green: 0.07, blue: 0.08, opacity: 1)))
-        assert(same(c.track.color, Color(.sRGB, red: 37.0 / 255, green: 37.0 / 255, blue: 39.0 / 255, opacity: 1)))
+        assert(same(c.accent(.antigravity), Color(.displayP3, red: 0.46, green: 0.16, blue: 0.98)))
+        assert(same(c.accent(.antigravity, pool: 1), Color(.displayP3, red: 0.20, green: 0.80, blue: 0.95)))
+        assert(same(c.surface.color, Color(.sRGB, red: 6.0 / 255, green: 6.0 / 255, blue: 8.0 / 255, opacity: 1)))
+        assert(same(c.track.color, Color(.sRGB, red: 48.0 / 255, green: 48.0 / 255, blue: 51.0 / 255, opacity: 1)))
         assert(same(c.secondary, Color(.sRGB, red: 0.9, green: 0.9, blue: 0.9, opacity: 1)))
         assert(c.groove == nil && AccountID.codex.accent == c.accent(.codex))
         // the colour forms a skin file can use, and ones it can't
@@ -443,14 +444,14 @@ enum SettingsStateChecks {
                         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
                         let pixel = context.data!.assumingMemoryBound(to: UInt8.self).advanced(by: ((image.height / 2) * image.width + 10) * 4)
                         let sample = Array(UnsafeBufferPointer(start: pixel, count: 4))
-                        assert(sample == [37, 37, 39, 255],
-                               "ring and battery tracks must match the menu grey, opaque in both looks and sizes over any backdrop: \(sample)")
+                        assert(sample == [48, 48, 51, 255],
+                               "ring and battery tracks must be the one fixed track grey, opaque in both looks and sizes over any backdrop: \(sample)")
                         let edgeX = Int(ceil(8 - size * 0.12))
                         let edgePixel = context.data!.assumingMemoryBound(to: UInt8.self)
                             .advanced(by: ((image.height / 2) * image.width + edgeX) * 4)
                         let edge = Array(UnsafeBufferPointer(start: edgePixel, count: 4))
-                        assert(edge == [37, 37, 39, 255],
-                               "the outer track must remain plain menu grey without a light keyline: \(edge)")
+                        assert(edge == [48, 48, 51, 255],
+                               "the outer track must remain the plain track grey without a light keyline: \(edge)")
                     }
                 }
             }

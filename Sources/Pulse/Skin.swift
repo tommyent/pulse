@@ -127,13 +127,14 @@ struct PulseSkin: Codable, Equatable {
     }
 
     static let classic = PulseSkin(
-        // exact components, not hex: Classic draws exactly as it did before skins
-        accents: Accents(claude: "p3:1,0.40,0.16", codex: "p3:0.22,0.42,1", grok: "p3:1,0.72,0.10",
-                         antigravity: "p3:0.60,0.36,1",   // not green: the battery's ring is
-                         antigravity2: "p3:0.35,0.72,1"),
-        surface: "srgb:0.07,0.07,0.08",
-        // Match the dark menu progress track with opaque ink, independent of glass and backdrop.
-        track: "#252527",
+        // exact components (hex only for whole 255ths): Classic draws exactly as the code before skins does with these colours
+        accents: Accents(claude: "p3:1,0.40,0.16", codex: "p3:0.08,0.32,1", grok: "p3:1,0.72,0.10",
+                         antigravity: "p3:0.46,0.16,0.98",   // indigo, not green: the battery's ring is
+                         antigravity2: "p3:0.20,0.80,0.95"),   // aqua: clear of Codex's blue and the battery's green
+        surface: "#060608",
+        // Opaque ink, independent of glass and backdrop. Lighter than the dark menu progress track (37) it once matched,
+        // so an empty ring still shows on the near-black surface.
+        track: "#303033",
         ink: Ink(primary: nil, secondary: "srgb:0.9,0.9,0.9"),
         stale: 0.5,
         groove: nil)

@@ -73,15 +73,15 @@ struct PulseSurface<S: Shape>: View {
     }
 }
 
-/// A clear coat: one soft light from the top left. It goes over the content, because under it the surface
-/// would brighten past the rings' fixed track shade and hide empty rings; over it, both rise together.
+/// A gloss: one tight highlight from the top left that dies out partway down. It goes over the content, because under
+/// it the surface would brighten towards the rings' fixed track shade and hide empty rings; over it, both rise together.
 private struct PulseLight<S: Shape>: View {
     let shape: S
 
     var body: some View {
-        shape.fill(EllipticalGradient(stops: [.init(color: .white.opacity(0.17), location: 0),
-                                              .init(color: .white.opacity(0.05), location: 0.45),
-                                              .init(color: .clear, location: 1)],
+        shape.fill(EllipticalGradient(stops: [.init(color: .white.opacity(0.36), location: 0),
+                                              .init(color: .white.opacity(0.08), location: 0.26),
+                                              .init(color: .clear, location: 0.6)],
                                       center: UnitPoint(x: 0.16, y: -0.08), startRadiusFraction: 0, endRadiusFraction: 0.85))
     }
 }
