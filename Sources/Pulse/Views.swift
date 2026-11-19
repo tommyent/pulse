@@ -1275,12 +1275,15 @@ private struct ThemePicker: View {
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([themes.folder]) }
         } label: {
             Text("Theme files")
-            ForEach(themes.problems.keys.sorted(), id: \.self) { id in
+            let ids = themes.problems.keys.sorted()
+            ForEach(ids.prefix(5), id: \.self) { id in
                 let first = themes.problems[id]?.split(separator: "\n").first.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "- ")) } ?? ""
                 Text("⚠︎ \(id).json can't be used: \(first) (more in \(id).error)")
                     .foregroundStyle(skinAlert)
             }
-            if themes.problems.isEmpty {
+            if ids.count > 5 { Text("⚠︎ and \(ids.count - 5) more theme files that can't be used").foregroundStyle(skinAlert) }
+            if let notice = themes.notice { Text("⚠︎ \(notice)").foregroundStyle(skinAlert) }
+            if themes.problems.isEmpty, themes.notice == nil {
                 Text("One JSON file per theme, read again when it changes; \(ThemeStore.guideName) there describes the format")
             }
         }

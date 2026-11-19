@@ -9,6 +9,7 @@ enum ThemeChecks {
         checkGuide()
         checkFolder()
         checkOwnership()
+        checkBounded()
         checkAppearance()
         print("Theme checks passed: built-ins round-trip, every refusal on the list, the contrast floor, the guide's example and keys, last good, .error files, live reload, built-in names, appearance")
     }
@@ -37,6 +38,11 @@ enum ThemeChecks {
     static func expectRefused(_ set: PulseSkinSet, _ path: String, _ value: Any?, mentioning words: [String]) {
         let text = refusal(edited(set, path, value), "\(path) = \(String(describing: value))")
         for w in words { assert(text.contains(w), "refusing \(path) = \(String(describing: value)) should mention \(w): \(text)") }
+    }
+
+    /// Until the store's background job `number` is done and its results are published.
+    @MainActor static func settle(_ store: ThemeStore, _ number: Int) {
+        assert(waitUntil { store.finished >= number }, "theme job \(number) finished")
     }
 
     static func waitUntil(_ seconds: Double = 5, _ done: () -> Bool) -> Bool {
@@ -135,10 +141,10 @@ enum ThemeChecks {
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = ThemeStore(folder: folder)
         let fm = FileManager.default
-        store.writeExamples()
+        settle(store, store.writeExamples())
         for (id, set) in PulseSkinSet.builtIn { assert(try! Data(contentsOf: folder.appending(path: "\(id).json")) == ThemeStore.file(set), "\(id) written as an example") }
         assert(fm.fileExists(atPath: folder.appending(path: "AGENTS.md").path), "the guide is written into the folder")
-        store.reload()
+        settle(store, store.reload())
         assert(store.themes.map(\.id) == ["classic", "groove", "groove-black"] && store.problems.isEmpty, "the examples are the built-ins: \(store.problems)")
 
         let ember = folder.appending(path: "ember.json"), error = folder.appending(path: "ember.error")
@@ -172,19 +178,20 @@ enum ThemeChecks {
 
         // a built-in's name: the built-in draws, the edit is reported, and the next launch's examples keep the edit aside
         try! edited(.groove, "name", "My Groove").write(to: folder.appending(path: "groove.json"))
-        store.reload()
+        settle(store, store.reload())
         assert(store.theme("groove").set == .groove && store.problems["groove"]?.contains("Pulse's own") == true)
-        store.writeExamples()
+        settle(store, store.writeExamples())
         assert(try! Data(contentsOf: folder.appending(path: "groove.json")) == ThemeStore.file(.groove))
         assert(try! fm.contentsOfDirectory(atPath: folder.path).contains { $0.hasPrefix("groove.json.replaced-") }, "the edited copy is kept")
-        store.reload()
+        settle(store, store.reload())
         assert(store.problems["groove"] == nil)
 
         // at most 50 theme files are read
         for i in 0 ..< ThemeStore.maxThemes { try! guideExample.write(to: folder.appending(path: String(format: "many-%02d.json", i))) }
-        store.reload()
+        settle(store, store.reload())
         assert(store.themes.count == 3 + ThemeStore.maxThemes, "\(store.themes.count) themes listed")
-        assert(store.problems.values.filter { $0.contains("at most \(ThemeStore.maxThemes)") }.count == 1, "the 51st file is reported, not read")
+        assert(store.notice?.contains("at most \(ThemeStore.maxThemes)") == true && !store.problems.keys.contains { $0.hasPrefix("many-") },
+               "the 51st file is in one notice, not a problem of its own: \(String(describing: store.notice))")
     }
 
     /// Pulse removes and replaces only what it wrote (Sol's review of 4f91bdb: an unrelated `.error` file, a `.error`
@@ -194,7 +201,7 @@ enum ThemeChecks {
         let folder = fm.temporaryDirectory.appending(path: "pulse-theme-owned-\(UUID().uuidString)").resolvingSymlinksInPath()
         defer { try? fm.removeItem(at: folder) }
         let store = ThemeStore(folder: folder)
-        store.writeExamples()
+        settle(store, store.writeExamples())
         // someone else's .error file and a .error folder: kept through reloads, fixed or not
         let unrelated = folder.appending(path: "unrelated.error"), notes = folder.appending(path: "notes.error")
         try! Data("disposable file".utf8).write(to: unrelated)
@@ -204,14 +211,14 @@ enum ThemeChecks {
         let theirs = folder.appending(path: "mine.error")
         try! Data("my own notes about mine.json".utf8).write(to: theirs)
         try! Data("{}".utf8).write(to: folder.appending(path: "mine.json"))
-        store.reload()
-        store.reload()
+        settle(store, store.reload())
+        settle(store, store.reload())
         assert(try! Data(contentsOf: unrelated) == Data("disposable file".utf8), "an unrelated .error file is kept")
         assert(try! Data(contentsOf: notes.appending(path: "note.txt")) == Data("disposable note".utf8), "a .error folder is kept")
         assert(try! Data(contentsOf: theirs) == Data("my own notes about mine.json".utf8), "a .error Pulse didn't write isn't overwritten")
         assert(store.problems["mine"] != nil, "the problem is still shown")
         try! fm.removeItem(at: folder.appending(path: "mine.json"))
-        store.reload()
+        settle(store, store.reload())
         assert(fm.fileExists(atPath: theirs.path), "nor removed once its theme is gone")
 
         // an edited built-in whose backup names are all taken: the edit stays, and the reason is shown
@@ -223,9 +230,9 @@ enum ThemeChecks {
                 .replacingOccurrences(of: ":", with: "")
             try! Data("an older backup".utf8).write(to: folder.appending(path: "groove.json.replaced-\(stamp)"))
         }
-        store.writeExamples()
+        settle(store, store.writeExamples())
         assert(try! Data(contentsOf: groove) == edit, "the edit isn't overwritten when it can't be moved aside")
-        store.reload()
+        settle(store, store.reload())
         assert(store.problems["groove"]?.contains("couldn't move your edit aside") == true, "and Settings says why: \(store.problems)")
         assert(store.theme("groove").set == .groove, "the built-in still draws")
         // a folder or a link under a built-in's or the guide's name: left alone
@@ -235,11 +242,57 @@ enum ThemeChecks {
         try! fm.removeItem(at: guide)
         try! Data("not Pulse's".utf8).write(to: elsewhere)
         try! fm.createSymbolicLink(at: guide, withDestinationURL: elsewhere)
-        store.writeExamples()
+        settle(store, store.writeExamples())
         var isDir: ObjCBool = false
         assert(fm.fileExists(atPath: groove.path, isDirectory: &isDir) && isDir.boolValue, "a folder named groove.json is left alone")
         assert(try! fm.destinationOfSymbolicLink(atPath: guide.path) == elsewhere.path && (try! Data(contentsOf: elsewhere)) == Data("not Pulse's".utf8),
                "a linked AGENTS.md isn't replaced or written through")
+    }
+
+    /// Reads are bounded and off the main actor (Sol's review of 4f91bdb: a link to an 8 MiB file was read whole, a pipe
+    /// held up the main thread, and every file past 50 got its own `.error`). Uses only `reload()` and `problems`, so it
+    /// runs against 4f91bdb's loader too.
+    @MainActor static func checkBounded() {
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appending(path: "pulse-theme-bounded-\(UUID().uuidString)").resolvingSymlinksInPath()
+        let outside = fm.temporaryDirectory.appending(path: "pulse-theme-outside-\(UUID().uuidString)").resolvingSymlinksInPath()
+        defer { try? fm.removeItem(at: folder); try? fm.removeItem(at: outside) }
+        try! fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        try! fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        let store = ThemeStore(folder: folder)
+        // an 8 MiB file, and links to it and to a good theme: refused without reading through the link
+        var big = guideExample
+        big.append(Data(repeating: 0x20, count: 8 << 20))
+        try! big.write(to: outside.appending(path: "big.json"))
+        try! guideExample.write(to: outside.appending(path: "good.json"))
+        try! big.write(to: folder.appending(path: "big.json"))
+        try! fm.createSymbolicLink(at: folder.appending(path: "linked-big.json"), withDestinationURL: outside.appending(path: "big.json"))
+        try! fm.createSymbolicLink(at: folder.appending(path: "linked-good.json"), withDestinationURL: outside.appending(path: "good.json"))
+        // pipes under a theme's, a built-in's and a .error's name, whose writer comes only after 750 ms
+        try! Data("{}".utf8).write(to: folder.appending(path: "invalid.json"))
+        for name in ["a-pipe.json", "groove.json", "invalid.error"] {
+            let path = folder.appending(path: name).path
+            assert(mkfifo(path, 0o600) == 0)
+            DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(750)) {
+                let fd = open(path, O_WRONLY | O_NONBLOCK)
+                if fd >= 0 { close(fd) }
+            }
+        }
+        // 60 good theme files: with the 5 above, 50 are read in order of name, and the rest get no .error of their own
+        for i in 0 ..< 60 { try! guideExample.write(to: folder.appending(path: String(format: "many-%02d.json", i))) }
+        let start = Date()
+        store.reload()
+        assert(Date().timeIntervalSince(start) < 0.25, "reload() leaves the folder to a background queue: \(Date().timeIntervalSince(start)) s on the main thread")
+        assert(waitUntil { store.problems["linked-good"] != nil && store.problems["a-pipe"] != nil && store.problems["big"] != nil },
+               "the pass finishes: \(store.problems.keys.sorted())")
+        assert(Date().timeIntervalSince(start) < 0.7, "no pipe is waited on: \(Date().timeIntervalSince(start)) s")
+        assert(store.problems["big"]!.contains("over 64 KB"))
+        assert(store.problems["linked-big"]!.contains("a link") && store.problems["linked-good"]!.contains("a link"), "links are refused as links")
+        assert(store.problems["a-pipe"]!.contains("not a regular file"))
+        assert(store.problems["groove"] != nil && store.theme("groove").set == .groove, "a pipe named groove.json leaves the built-in drawing")
+        let errors = try! fm.contentsOfDirectory(atPath: folder.path).filter { $0.hasSuffix(".error") }
+        assert(!errors.contains { $0.hasPrefix("many-") }, "no .error for a file past the cap: \(errors.sorted())")
+        assert(errors.count <= 11, "at most 10 .error files written, beside the pipe: \(errors.sorted())")
     }
 
     @MainActor static func checkAppearance() {
