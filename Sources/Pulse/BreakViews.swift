@@ -125,16 +125,23 @@ struct BreakOverlayView: View {
     var petOnRight = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.pulseSkin) private var skin
-    @Environment(\.colorScheme) private var scheme
+    @Environment(\.glassSetting) private var glass
     @State private var perches: [BreakPerch] = []   // where the agents can jump up, in this view's points
 
     var body: some View {
         let s = min(1.3, max(0.7, size.width / 1440))   // the mockup's sizes, scaled to this screen
         let holiday = holidayScreen ? controller.holiday : nil
         let colors = holiday.map { (glow: $0.glow, bar: $0.bar) } ?? BreakColor.pair(controller.settings.color)
-        let light = BreakFrost.followsTheme && scheme == .light, ink = inks(film: false)
+        // prototype: at a glass level, the wallpaper under the glass instead of the apps, in the words it asks for
+        let picture = glass.flatMap(Wallpaper.picture)
+        let reading = glass.flatMap { g in picture.flatMap { WallpaperReader.read($0, size: size, level: g.level) } }
+        let ink = inks(film: false, reading: reading)
         ZStack {
-            BreakFrost(light: light)
+            if let glass {
+                WallpaperLayer(level: glass.level, picture: picture?.image, reading: reading, shape: Rectangle())
+            } else {
+                PulseSurface(shape: Rectangle())
+            }
             if holiday != nil {
                 if let still = controller.holidayStill {
                     Image(nsImage: still).resizable().scaledToFill().frame(width: size.width, height: size.height).clipped()
@@ -157,7 +164,7 @@ struct BreakOverlayView: View {
                     buttons(s).padding(.top, 72 * s)
                 }
                 .foregroundStyle(ink.primary)
-                .environment(\.colorScheme, light ? .light : .dark)   // the buttons too
+                .environment(\.colorScheme, reading?.light == false ? .light : .dark)   // the buttons too
             }
             if agents {
                 BreakAgentsLayer(rex: controller.rex, size: size, start: controller.breakStarted,
@@ -176,7 +183,7 @@ struct BreakOverlayView: View {
     /// On a holiday the countdown, the idea and the buttons share a band along the bottom, so the video's story
     /// plays uncovered above it. The band sits above the pets' floor.
     private func band(_ s: CGFloat, bar: UInt32) -> some View {
-        let ink = inks(film: true)
+        let ink = inks(film: true, reading: nil)
         return VStack(spacing: 0) {
             Spacer(minLength: 0)
             HStack(alignment: .bottom, spacing: 28 * s) {
@@ -197,10 +204,11 @@ struct BreakOverlayView: View {
         .shadow(color: .black.opacity(0.5), radius: 10 * s)
     }
 
-    /// The words' colours: white on the dark frost and over a holiday's film; the theme's own ink on frost that follows it.
-    private func inks(film: Bool) -> BreakInk {
-        BreakFrost.followsTheme && !film ? BreakInk(primary: skin.primary, secondary: skin.secondary, idea: skin.primary)
-                                         : BreakInk(primary: .white, secondary: PulsePalette.secondary, idea: Color(white: 0.92))
+    /// The words' colours: white on the dark screen and over a holiday's film; on a wallpaper, the ones its reading asks for.
+    private func inks(film: Bool, reading: WallpaperReading?) -> BreakInk {
+        guard !film, let reading else { return BreakInk(primary: .white, secondary: PulsePalette.secondary, idea: Color(white: 0.92)) }
+        let s = skin.reading(reading)
+        return BreakInk(primary: s.primary, secondary: s.secondary, idea: s.primary)
     }
 
     private func title(size: CGFloat, _ s: CGFloat) -> some View {
@@ -293,21 +301,6 @@ struct BreakOverlayView: View {
 }
 
 private struct BreakInk { let primary, secondary, idea: Color }
-
-/// Prototype (the owner, 2026-11-19): every theme's break screen lies on frosted glass, dark with white words, so they
-/// always read. With `defaults write … prototypeBreakFrost theme` the frost follows the theme instead: light, with the
-/// theme's own ink, in a light theme. A holiday's film covers it either way.
-private struct BreakFrost: View {
-    static var followsTheme: Bool { UserDefaults.standard.string(forKey: "prototypeBreakFrost") == "theme" }
-    let light: Bool
-
-    var body: some View {
-        Color.clear.glassEffect(.regular, in: Rectangle())
-            .overlay(light ? Color.white.opacity(0.55) : Color.black.opacity(0.6))
-            .environment(\.colorScheme, light ? .light : .dark)
-            .environment(\.appearsActive, true)
-    }
-}
 
 /// Collects the frames the agents can jump up on, in the overlay's coordinate space.
 private struct BreakPerchKey: PreferenceKey {

@@ -108,10 +108,15 @@ private struct PulsePresentation: ViewModifier {
         // the theme drawn now (Settings › Appearance) and the appearance its windows take: a light theme's light, a dark
         // or Classic one's dark
         let choice = state.persisted.themeChoice, scheme = themes.scheme(choice), look = themes.skin(choice, contrast: contrast)
+        // prototype: a glass level takes over every flat theme but Classic Solid (the owner's pick: its opaque look stays)
+        let level = themes.current(choice).id == "classic-solid" || look.groove != nil ? nil : state.persisted.glassLevel
+        let glass = level.map { GlassSetting(level: $0, wallpaper: scheme == .light ? state.persisted.wallpaperLight : state.persisted.wallpaperDark,
+                                             light: scheme == .light) }
         content.preferredColorScheme(scheme)
             .background(PulseWindowBacking(scheme: scheme))
             .environment(\.pulseAppearance, look.material)
             .environment(\.pulseSkin, look)
+            .environment(\.glassSetting, glass)
             .environment(\.appearsActive, true)
     }
 }
@@ -189,11 +194,14 @@ extension View {
 
 private struct SurfaceModifier<S: Shape>: ViewModifier {
     @Environment(\.pulseSkin) private var skin
+    @Environment(\.glassSetting) private var glass
     let shape: S
     let bordered: Bool   // false: the window supplies its own rim and shadow (the menu bar popover)
 
     func body(content: Content) -> some View {
-        if skin.liquid == true {
+        if let glass {
+            content.modifier(LevelPanel(setting: glass, shape: shape))
+        } else if skin.liquid == true {
             content.liquidPanel(skin, in: shape)
         } else {
             painted(content)

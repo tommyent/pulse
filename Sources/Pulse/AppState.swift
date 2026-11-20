@@ -17,6 +17,9 @@ final class AppState: ObservableObject {
         var mode: AppearanceMode?   // nil = not chosen yet: see `themeChoice`
         var lightTheme: String?     // a theme's id: a built-in's or a theme file's name (`ThemeStore`)
         var darkTheme: String?
+        var glassLevel: GlassLevel?   // prototype, nil = off: `GlassLevels.swift`
+        var wallpaperLight: String?   // prototype, nil = the desktop picture or Pulse's; "pulse"; or a file in `Wallpaper.folder`
+        var wallpaperDark: String?
 
         /// Settings › Appearance. Until it's first chosen, it's what Pulse drew before: Classic (Glass or Solid) in both
         /// modes, or for Groove, Groove White in light and Groove in dark (Groove Black: Groove Black in light), in Auto.
@@ -90,6 +93,9 @@ final class AppState: ObservableObject {
             mode = c.lenient(AppearanceMode.self, forKey: .mode, in: decoder)
             lightTheme = c.lenient(String.self, forKey: .lightTheme, in: decoder)
             darkTheme = c.lenient(String.self, forKey: .darkTheme, in: decoder)
+            glassLevel = c.lenient(GlassLevel.self, forKey: .glassLevel, in: decoder)
+            wallpaperLight = c.lenient(String.self, forKey: .wallpaperLight, in: decoder)
+            wallpaperDark = c.lenient(String.self, forKey: .wallpaperDark, in: decoder)
             dock = c.lenient(DockEdge.self, forKey: .dock, in: decoder)
             tucked = c.lenient(Bool.self, forKey: .tucked, in: decoder)
             tuckPeek = c.lenient(Bool.self, forKey: .tuckPeek, in: decoder)

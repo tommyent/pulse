@@ -36,6 +36,22 @@ enum SettingsStateChecks {
         switched.hiddenPools = ["antigravity.Claude and GPT"]
         let reread = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(switched))
         assert(reread.hiddenPools == ["antigravity.Claude and GPT"], "a switched-off pool stays off after a relaunch")
+        // prototype glass levels: the level and wallpapers survive a save; an unknown level costs only itself
+        var levelled = AppState.Persisted()
+        levelled.glassLevel = .frosted; levelled.wallpaperLight = "light-1a2b3c4d.jpg"; levelled.wallpaperDark = "pulse"
+        let levelledBack = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(levelled))
+        assert(levelledBack.glassLevel == .frosted && levelledBack.wallpaperLight == "light-1a2b3c4d.jpg" && levelledBack.wallpaperDark == "pulse")
+        assert(try! JSONDecoder().decode(AppState.Persisted.self, from: Data(#"{"glassLevel":"shiny","showPet":false}"#.utf8)).glassLevel == nil)
+        // the words on a wallpaper: dark on white, light on black, and a wash only when neither reaches 4.5:1
+        let onWhite = WallpaperReading.choose(dark: 1, bright: 1), onBlack = WallpaperReading.choose(dark: 0, bright: 0)
+        assert(!onWhite.light && onWhite.wash == 0 && onWhite.contrast > 15 && onBlack.light && onBlack.wash == 0 && onBlack.contrast > 15)
+        let busy = WallpaperReading.choose(dark: 0.02, bright: 0.6)   // dark shadows and bright highlights in one panel
+        assert(busy.wash > 0 && busy.contrast >= WallpaperReading.target, "a busy picture gets a wash up to 4.5:1: \(busy)")
+        assert(Wallpaper.isApples(URL(fileURLWithPath: "/System/Library/CoreServices/DefaultDesktop.heic"))
+               && !Wallpaper.isApples(URL(fileURLWithPath: "/Users/someone/Downloads/photo.jpeg")))
+        assert(Wallpaper.isFileName("dark-1a2b3c4d.jpeg") && !Wallpaper.isFileName("../state.json") && !Wallpaper.isFileName(".hidden.jpg"))
+        assert(Bundle.pulseResources.url(forResource: "Resources/wallpapers/default-dark", withExtension: "jpg") != nil
+               && Bundle.pulseResources.url(forResource: "Resources/wallpapers/default-light", withExtension: "jpg") != nil, "Pulse's own two pictures ship")
 
         // Saving migrates Tint to Appearance, drops obsolete appearance keys, and preserves unrelated settings.
         let again = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(p)) as! [String: Any]

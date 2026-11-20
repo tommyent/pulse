@@ -1573,6 +1573,7 @@ struct SettingsView: View {
         case .appearance:
             form {
                 AppearanceSettings(choice: $state.persisted.themeChoice, themes: ThemeStore.shared)
+                GlassSettings(state: state)
             }
         case .accounts:
             form {
