@@ -37,3 +37,23 @@ struct CheckForUpdatesButton: View {
             .onReceive(Updates.shared.controller.updater.publisher(for: \.canCheckForUpdates)) { canCheck = $0 }
     }
 }
+
+/// What this build is: "Pulse 0.5.0 (10)" at the foot of Settings and in the standard About panel. Builds that aren't
+/// releases carry their commit in Info.plist (`PulseCommit`, written by package.sh), shown after the build number,
+/// so two test builds of one version can be told apart.
+enum AboutPulse {
+    static func build(_ info: [String: Any]) -> String {
+        let build = info["CFBundleVersion"] as? String ?? "?"
+        return (info["PulseCommit"] as? String).map { "\(build), \($0)" } ?? build
+    }
+
+    static func line(_ info: [String: Any] = Bundle.main.infoDictionary ?? [:]) -> String {
+        guard let version = info["CFBundleShortVersionString"] as? String else { return "Pulse (development build)" }
+        return "Pulse \(version) (\(build(info)))"
+    }
+
+    @MainActor static func show() {
+        NSApp.activate()   // an accessory app: without this the panel can open behind the front app
+        NSApp.orderFrontStandardAboutPanel(options: [.version: build(Bundle.main.infoDictionary ?? [:])])
+    }
+}

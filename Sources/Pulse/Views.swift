@@ -1240,7 +1240,14 @@ struct MenuBarPopover: View {
                 }
                 Button("Quit") { NSApp.terminate(nil) }
             }
-            CheckForUpdatesButton()
+            HStack {
+                CheckForUpdatesButton()
+                Spacer()
+                Button("About Pulse") {
+                    AboutPulse.show()
+                    dismiss()
+                }
+            }
         }
         .padding(14)
         .frame(width: 300)
@@ -1711,7 +1718,12 @@ struct SettingsLayout<Pane: View>: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            SettingsSidebar(selection: $selection, accent: accent, footer: footer)
+            VStack(alignment: .leading, spacing: 0) {
+                SettingsSidebar(selection: $selection, accent: accent, footer: footer)
+                Text(AboutPulse.line()).font(.caption).foregroundStyle(.pulseSecondary)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 20).padding(.bottom, 12)
+            }
             Divider()
             pane.frame(width: SettingsPane.paneWidth)
                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom } action: { _, height in

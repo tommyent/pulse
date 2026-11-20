@@ -9,6 +9,16 @@ final class OverlayHostingView<Content: View>: NSHostingView<Content> {}
 @main
 enum SettingsStateChecks {
     @MainActor static func main() {
+        // What this build is, for About Pulse and the foot of Settings: a release shows its version and build, any other
+        // build its commit too (package.sh writes PulseCommit for those), and a bundle without Info.plist says so.
+        let release: [String: Any] = ["CFBundleShortVersionString": "0.5.0", "CFBundleVersion": "10"]
+        assert(AboutPulse.line(release) == "Pulse 0.5.0 (10)", AboutPulse.line(release))
+        assert(AboutPulse.build(release) == "10", "the About panel's version is the build alone for a release")
+        let test = release.merging(["PulseCommit": "3d439a4"]) { $1 }
+        assert(AboutPulse.line(test) == "Pulse 0.5.0 (10, 3d439a4)", AboutPulse.line(test))
+        assert(AboutPulse.build(test) == "10, 3d439a4", "a test build's About panel shows its commit")
+        assert(AboutPulse.line([:]) == "Pulse (development build)", AboutPulse.line([:]))
+
         // a state.json written before breaks existed: every value it holds survives, and breaks get their defaults
         let legacy = Data("""
         {"enabled":["claude","codex","grok"],"order":["codex","claude","grok","antigravity"],"alwaysOnTop":false,

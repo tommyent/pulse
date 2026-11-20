@@ -25,7 +25,7 @@ fi
 TEAM="${${DEVELOPER_ID##*\(}%\)}"
 
 ./scripts/check.sh
-./package.sh --only-use-versions-from-resolved-file
+PULSE_RELEASE=1 ./package.sh --only-use-versions-from-resolved-file   # no PulseCommit: a release is named by its version
 PLIST=.build/Pulse.app/Contents/Info.plist
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
 BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")"

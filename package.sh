@@ -32,7 +32,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.5.0</string>
-    <key>CFBundleVersion</key><string>9</string>
+    <key>CFBundleVersion</key><string>10</string>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>LSUIElement</key><true/>
     <key>NSMicrophoneUsageDescription</key><string>Live voice with the Codex pet uses your microphone.</string>
@@ -40,6 +40,13 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
     <key>SUPublicEDKey</key><string>b+88Zfi9JKSrvlROjgKWtc55KNWhZp5Pa/XkLT+2EQ4=</string>
 </dict></plist>
 EOF
+# A build that isn't a release names its commit (About Pulse, the foot of Settings), so test builds of one version
+# can be told apart; release.sh sets PULSE_RELEASE.
+if [[ -z "${PULSE_RELEASE:-}" ]]; then
+    COMMIT="$(git rev-parse --short=7 HEAD 2>/dev/null || echo unknown)"
+    git diff --quiet HEAD -- 2>/dev/null || COMMIT+="-dirty"
+    /usr/libexec/PlistBuddy -c "Add :PulseCommit string $COMMIT" "$APP/Contents/Info.plist"
+fi
 
 cp "$BIN_DIR/Pulse" "$APP/Contents/MacOS/Pulse"
 cp -R "$BIN_DIR/Pulse_Pulse.bundle" "$APP/Contents/Resources/"
