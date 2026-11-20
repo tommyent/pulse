@@ -597,6 +597,7 @@ struct PetCard: View {
     }
 
     private struct Bubble: View, Equatable {
+        @Environment(\.colorScheme) private var scheme
         let message: ChatMessage
 
         static func == (lhs: Self, rhs: Self) -> Bool {
@@ -622,7 +623,7 @@ struct PetCard: View {
                             .background(RoundedRectangle(cornerRadius: 12)
                                 .fill(m.role == .user ? AccountID.codex.accent.opacity(0.35)
                                                       : m.caption != nil ? Color.clear
-                                                      : Color(white: 0.16)))
+                                                      : Color(white: scheme == .light ? 0.90 : 0.16)))
                             .overlay { if m.caption != nil { RoundedRectangle(cornerRadius: 12).strokeBorder(.pulseSecondary.opacity(0.5)) } }
                     }
                     .accessibilityElement(children: .combine)
