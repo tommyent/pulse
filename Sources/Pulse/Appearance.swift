@@ -107,9 +107,11 @@ private struct PulsePresentation: ViewModifier {
     func body(content: Content) -> some View {
         // the theme drawn now (Settings › Appearance) and the appearance its windows take: a light theme's light, a dark
         // or Classic one's dark
-        let choice = state.persisted.themeChoice, scheme = themes.scheme(choice), look = themes.skin(choice, contrast: contrast)
-        // prototype: a glass level takes over every flat theme but Classic Solid (the owner's pick: its opaque look stays)
-        let level = themes.current(choice).id == "classic-solid" || look.groove != nil ? nil : state.persisted.glassLevel
+        let choice = state.persisted.themeChoice, scheme = themes.scheme(choice)
+        // prototype: a glass level takes over every theme but Classic Solid (the owner's pick: its opaque look stays), and
+        // the theme keeps only its colours: a Groove theme's slab goes too
+        let level = themes.current(choice).id == "classic-solid" ? nil : state.persisted.glassLevel
+        let look = { var l = themes.skin(choice, contrast: contrast); if level != nil { l.groove = nil }; return l }()
         let glass = level.map { GlassSetting(level: $0, wallpaper: scheme == .light ? state.persisted.wallpaperLight : state.persisted.wallpaperDark,
                                              light: scheme == .light) }
         content.preferredColorScheme(scheme)

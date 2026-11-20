@@ -6,7 +6,7 @@ import os
 private let log = Logger(subsystem: "io.github.tommyent.pulse", category: "glass")
 
 // Prototype (the owner, 2026-11-19): glass by levels. "Let the background do the work." Off, every theme draws as its
-// file says. At a level, every flat theme but Classic Solid keeps only its colours: each panel (rail, card, popover,
+// file says. At a level, every theme but Classic Solid keeps only its colours: each panel (rail, card, popover,
 // break screen) is a wallpaper under glass, and its words turn light or dark by how bright the picture is behind it.
 
 /// Settings › Appearance › Glass, from the clearest to the most blurred.
@@ -210,7 +210,7 @@ struct GlassSettings: View {
                 ForEach(GlassLevel.allCases, id: \.self) { Text($0.name).tag(Optional($0)) }
             }
             .pickerStyle(.segmented)
-            .help("Prototype. Off: each theme as it is. Liquid, Glass, Frosted: the theme's colours on a wallpaper, from the clearest glass to the most blurred. Classic Solid and Groove stay as they are")
+            .help("Prototype. Off: each theme as it is. Liquid, Glass, Frosted: the theme's colours on a wallpaper, from the clearest glass to the most blurred. Classic Solid stays as it is")
             wallpaper("Light wallpaper", \.wallpaperLight, light: true)
             wallpaper("Dark wallpaper", \.wallpaperDark, light: false)
             if let problem { Text(problem).foregroundStyle(.red) }
