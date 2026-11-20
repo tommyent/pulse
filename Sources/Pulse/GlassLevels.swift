@@ -193,6 +193,7 @@ extension PulseSkin {
 
 /// The wallpaper under a level's glass, filling `shape`, with the reading's wash over the picture.
 struct WallpaperLayer<S: Shape>: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     let level: GlassLevel
     let picture: CGImage?
     let reading: WallpaperReading?
@@ -202,34 +203,47 @@ struct WallpaperLayer<S: Shape>: View {
 
     var body: some View {
         let wash = usesWallpaperFinish ? 0 : reading?.wash ?? 0
-        Color.clear.glassEffect(level.material, in: shape)
-            .materialActiveAppearance(.active)
+        Color.clear
+            .overlay {
+                if picture != nil, !reduceTransparency {
+                    // The window server switches the glass backdrop when the panel loses focus.
+                    // Put the wallpaper inside the glass too, with fixed native diffusion for regular glass.
+                    wallpaper
+                        .overlay {
+                            if level != .liquid {
+                                shape.fill(Material.thin.materialActiveAppearance(.active))
+                                    .environment(\.colorScheme, reading?.light == false ? .light : .dark)
+                            }
+                        }
+                        .opacity(0.92)
+                }
+            }
+            .glassEffect(level.material, in: shape)
+            .background { wallpaper }
             // Keep the frost above the material so it doesn't depend on a key window's glass tint.
             .overlay { shape.fill(.white.opacity(level.frostOpacity)) }
             .overlay { shape.fill((reading?.light == false ? Color.white : .black).opacity(wash)) }
-            .background {
-                if let picture {
-                    Color.clear
-                        .overlay {
-                            GeometryReader { proxy in
-                                let source = CGSize(width: picture.width, height: picture.height)
-                                let visible = crop.rect(image: source, panel: proxy.size)
-                                if visible.width > 0 {
-                                    let unturned = crop.sizeBeforeRotation(proxy.size)
-                                    let scale = unturned.width / visible.width
-                                    Image(decorative: picture, scale: 1).resizable().interpolation(.high)
-                                        .frame(width: source.width * scale, height: source.height * scale)
-                                        .offset(x: -visible.minX * scale, y: -visible.minY * scale)
-                                        .frame(width: unturned.width, height: unturned.height, alignment: .topLeading)
-                                        .rotationEffect(.degrees(crop.rotated ? -90 : 0))
-                                        .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
-                                }
-                            }
-                        }
-                        .clipShape(shape)
+            .environment(\.appearsActive, true)
+    }
+
+    @ViewBuilder private var wallpaper: some View {
+        if let picture {
+            GeometryReader { proxy in
+                let source = CGSize(width: picture.width, height: picture.height)
+                let visible = crop.rect(image: source, panel: proxy.size)
+                if visible.width > 0 {
+                    let unturned = crop.sizeBeforeRotation(proxy.size)
+                    let scale = unturned.width / visible.width
+                    Image(decorative: picture, scale: 1).resizable().interpolation(.high)
+                        .frame(width: source.width * scale, height: source.height * scale)
+                        .offset(x: -visible.minX * scale, y: -visible.minY * scale)
+                        .frame(width: unturned.width, height: unturned.height, alignment: .topLeading)
+                        .rotationEffect(.degrees(crop.rotated ? -90 : 0))
+                        .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
                 }
             }
-            .environment(\.appearsActive, true)
+            .clipShape(shape)
+        }
     }
 }
 
