@@ -1087,8 +1087,8 @@ struct OverlayView: View {
         .focusEffectDisabled()   // the panel can be key now (pet composer); no focus ring on the rail
         .padding(vertical ? .vertical : .horizontal, expanded ? (vertical ? 16 : 20) : 14)
         .padding(vertical ? .horizontal : .vertical, expanded ? 12 : 8)
-        .pulseSurface(in: Capsule())
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { railFrame = $0; onRailFrame?($0) }
+        .pulseSurface(in: Capsule(), rail: true)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { railFrame = $0; state.measuredRailSize = $0.size; onRailFrame?($0) }
         .overlay {
             // Tucked, the sliver and 12 pt beside it are one handle: a click brings the rail back; the drag below pulls it out.
             // kept while it's dragged out by the sliver: removing the view a drag began on would cancel the drag
@@ -1438,7 +1438,7 @@ struct SettingsView: View {
     @ViewBuilder private func pane(_ pane: SettingsPane) -> some View {
         switch pane {
         case .appearance:
-            AppearanceSettings(saved: $state.persisted, themes: ThemeStore.shared)
+            AppearanceSettings(saved: $state.persisted, themes: ThemeStore.shared, railSize: { state.measuredRailSize })
         case .accounts:
             form {
                 Section {

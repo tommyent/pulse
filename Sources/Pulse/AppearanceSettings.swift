@@ -5,13 +5,16 @@ import UniformTypeIdentifiers
 extension AppState.Persisted {
     func glass(for theme: PulseTheme, slot: ColorScheme) -> GlassSetting? {
         guard theme.id != "classic-solid", let glassLevel else { return nil }
-        return GlassSetting(level: glassLevel, wallpaper: slot == .light ? wallpaperLight : wallpaperDark, light: slot == .light)
+        return GlassSetting(level: glassLevel, wallpaper: slot == .light ? wallpaperLight : wallpaperDark,
+                            railFocus: slot == .light ? railFocusLight : railFocusDark, light: slot == .light)
     }
 }
 
 struct AppearanceSettings: View {
     @Binding var saved: AppState.Persisted
     @ObservedObject var themes: ThemeStore
+    var railSize: () -> CGSize = { .zero }
+    @State private var crop: CropSelection?
     @ObservedObject private var results = SettingsResults.shared
     @State private var editing: ColorScheme?
     @State private var managesThemes = false
@@ -118,6 +121,12 @@ struct AppearanceSettings: View {
             return !urls.isEmpty
         } isTargeted: { isDropTarget = $0 }
         .sheet(isPresented: $managesThemes) { ThemeManagement(choice: saved.themeChoice, themes: themes) }
+        .sheet(item: $crop) { selection in
+            WallpaperCropEditor(selection: selection) { point in
+                let focus = point == WallpaperCrop.middle ? nil : point
+                if selection.setting.light { saved.railFocusLight = focus } else { saved.railFocusDark = focus }
+            }
+        }
         .onChange(of: saved.themeChoice.mode) { editing = nil }
         .onChange(of: active) { editing = nil }
         .onChange(of: slot) { pictureError = nil }
@@ -138,8 +147,21 @@ struct AppearanceSettings: View {
         }
         return HStack(spacing: 10) {
             if let image = picture?.image {
-                Image(decorative: image, scale: 1).resizable().scaledToFill()
-                    .frame(width: 54, height: 36).clipShape(RoundedRectangle(cornerRadius: 6))
+                Button {
+                    let measured = railSize()
+                    let vertical = (saved.dock ?? .right).isVertical
+                    let fallback = vertical ? CGSize(width: 44, height: 94) : CGSize(width: 94, height: 44)
+                    crop = CropSelection(image: image, setting: setting, theme: theme,
+                                         rail: measured.width > 0 && measured.height > 0 ? measured : fallback)
+                } label: {
+                    VStack(spacing: 3) {
+                        Image(decorative: image, scale: 1).resizable().scaledToFill()
+                            .frame(width: 54, height: 36).clipShape(RoundedRectangle(cornerRadius: 6))
+                        Text("Adjust crop…").font(.caption2)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Adjust " + name.lowercased() + " rail wallpaper crop")
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Wallpaper")
@@ -178,13 +200,17 @@ private struct LookPreview: View {
         fetchedAt: .now, source: .mock)
 
     var body: some View {
-        HStack(spacing: 3) {
-            VStack(spacing: 10) {
+        let vertical = (saved.dock ?? .right).isVertical
+        let panels = vertical ? AnyLayout(HStackLayout(spacing: 3)) : AnyLayout(VStackLayout(spacing: 3))
+        let rings = vertical ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 10))
+        return panels {
+            rings {
                 RingView(account: .codex, percent: 7, size: 28, showPercent: false)
                 RingView(account: .claude, percent: 62, size: 28, showPercent: false)
             }
-            .padding(8).pulseSurface(in: Capsule())
-            UsageCard(snapshot: Self.sample, windows: Self.sample.windows, tailEdge: .leading, tailAt: 30)
+            .padding(8).pulseSurface(in: Capsule(), rail: true)
+            UsageCard(snapshot: Self.sample, windows: Self.sample.windows, tailEdge: vertical ? .leading : .top,
+                      tailAt: vertical ? 30 : nil)
         }
         .modifier(PanelLook(theme: theme, slot: slot, saved: saved))
         .environment(\.showsRemaining, saved.showRemaining ?? false)

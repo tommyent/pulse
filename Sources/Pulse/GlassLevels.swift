@@ -23,6 +23,7 @@ enum GlassLevel: String, Codable, CaseIterable {
 struct GlassSetting: Equatable {
     var level: GlassLevel
     var wallpaper: String?   // the mode's: nil, the desktop picture or Pulse's; "pulse"; or a file in `Wallpaper.folder`
+    var railFocus: CGPoint? = nil
     var light: Bool          // which of Pulse's own pictures fits the mode
 }
 
@@ -103,6 +104,21 @@ extension EnvironmentValues {
     }
 }
 
+/// The visible source rectangle for aspect-fill. Focus is normalized from the top left of the image.
+enum WallpaperCrop {
+    static let middle = CGPoint(x: 0.5, y: 0.5)
+
+    static func rect(image: CGSize, panel: CGSize, focus: CGPoint) -> CGRect {
+        guard image.width > 0, image.height > 0, panel.width > 0, panel.height > 0 else { return .zero }
+        let aspect = panel.width / panel.height
+        let width = min(image.width, image.height * aspect)
+        let height = min(image.height, image.width / aspect)
+        return CGRect(x: min(max(0, image.width * focus.x - width / 2), image.width - width),
+                      y: min(max(0, image.height * focus.y - height / 2), image.height - height),
+                      width: width, height: height)
+    }
+}
+
 /// How the words read on the part of a picture a panel shows: light words if the picture is dark there, else dark ones,
 /// and a black (or white) wash over the picture only if they'd still fall short of 4.5:1.
 struct WallpaperReading: Equatable {
@@ -115,10 +131,9 @@ struct WallpaperReading: Equatable {
 
     /// `size`: the panel, in points; the picture fills it as `scaledToFill` does. Sampled about every 6 points, or every
     /// `blur` points when the picture is blurred, so a sharp picture's detail counts and a blurred one's doesn't.
-    static func read(_ image: CGImage, size: CGSize, blur: CGFloat) -> WallpaperReading? {
+    static func read(_ image: CGImage, size: CGSize, blur: CGFloat, focus: CGPoint = WallpaperCrop.middle) -> WallpaperReading? {
         guard size.width >= 1, size.height >= 1 else { return nil }
-        let W = CGFloat(image.width), H = CGFloat(image.height), scale = max(size.width / W, size.height / H)
-        let crop = CGRect(x: (W - size.width / scale) / 2, y: (H - size.height / scale) / 2, width: size.width / scale, height: size.height / scale)
+        let crop = WallpaperCrop.rect(image: CGSize(width: image.width, height: image.height), panel: size, focus: focus)
         let step = max(6, blur), cols = max(2, Int(size.width / step)), rows = max(2, Int(size.height / step))
         guard let part = image.cropping(to: crop.integral),
               let ctx = CGContext(data: nil, width: cols, height: rows, bitsPerComponent: 8, bytesPerRow: cols * 4,
@@ -152,13 +167,13 @@ struct WallpaperReading: Equatable {
 }
 
 @MainActor enum WallpaperReader {
-    private static var cache: [String: WallpaperReading] = [:]
-    static func read(_ picture: (image: CGImage, key: String), size: CGSize, level: GlassLevel) -> WallpaperReading? {
+    private static var cache: [String: (focus: CGPoint, reading: WallpaperReading)] = [:]
+    static func read(_ picture: (image: CGImage, key: String), size: CGSize, level: GlassLevel, focus: CGPoint = WallpaperCrop.middle) -> WallpaperReading? {
         let key = "\(picture.key)|\(Int(size.width))x\(Int(size.height))|\(level.rawValue)"
-        if let hit = cache[key] { return hit }
-        let r = WallpaperReading.read(picture.image, size: size, blur: level.blur)
+        if let hit = cache[key], hit.focus == focus { return hit.reading }
+        let r = WallpaperReading.read(picture.image, size: size, blur: level.blur, focus: focus)
         if let r {
-            cache[key] = r
+            cache[key] = (focus, r)
             log.info("reading \((picture.key as NSString).lastPathComponent, privacy: .public) \(Int(size.width))x\(Int(size.height)) \(level.rawValue, privacy: .public): \(r.light ? "light" : "dark", privacy: .public) words, wash \(r.wash, format: .fixed(precision: 2)), \(r.contrast, format: .fixed(precision: 1)):1")
         }
         return r
@@ -183,6 +198,7 @@ struct WallpaperLayer<S: Shape>: View {
     let picture: CGImage?
     let reading: WallpaperReading?
     let shape: S
+    var focus = WallpaperCrop.middle
 
     var body: some View {
         let wash = reading.map { ($0.light ? Color.black : .white).opacity($0.wash) } ?? .clear
@@ -201,7 +217,19 @@ struct WallpaperLayer<S: Shape>: View {
         .background {
             if let picture {
                 Color.clear
-                    .overlay { Image(decorative: picture, scale: 1).resizable().scaledToFill().blur(radius: level.blur, opaque: true) }
+                    .overlay {
+                        GeometryReader { proxy in
+                            let source = CGSize(width: picture.width, height: picture.height)
+                            let crop = WallpaperCrop.rect(image: source, panel: proxy.size, focus: focus)
+                            if crop.width > 0 {
+                                let scale = proxy.size.width / crop.width
+                                Image(decorative: picture, scale: 1).resizable()
+                                    .frame(width: source.width * scale, height: source.height * scale)
+                                    .blur(radius: level.blur, opaque: true)
+                                    .offset(x: -crop.minX * scale, y: -crop.minY * scale)
+                            }
+                        }
+                    }
                     .clipShape(shape)
             }
         }
@@ -214,15 +242,16 @@ struct LevelPanel<S: Shape>: ViewModifier {
     @Environment(\.pulseSkin) private var skin
     let setting: GlassSetting
     let shape: S
+    var focus = WallpaperCrop.middle
     @State private var size = CGSize.zero
 
     func body(content: Content) -> some View {
         let picture = Wallpaper.picture(setting)
-        let reading = picture.flatMap { WallpaperReader.read($0, size: size, level: setting.level) }
+        let reading = picture.flatMap { WallpaperReader.read($0, size: size, level: setting.level, focus: focus) }
         content
             .environment(\.pulseSkin, reading.map(skin.reading) ?? skin)
             .environment(\.colorScheme, reading?.light == false ? .light : .dark)
-            .background { WallpaperLayer(level: setting.level, picture: picture?.image, reading: reading, shape: shape) }
+            .background { WallpaperLayer(level: setting.level, picture: picture?.image, reading: reading, shape: shape, focus: focus) }
             .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
     }
 }

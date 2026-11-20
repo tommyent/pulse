@@ -18,8 +18,10 @@ final class AppState: ObservableObject {
         var lightTheme: String?     // a theme's id: a built-in's or a theme file's name (`ThemeStore`)
         var darkTheme: String?
         var glassLevel: GlassLevel?   // prototype, nil = off: `GlassLevels.swift`
-        var wallpaperLight: String?   // prototype, nil = the desktop picture or Pulse's; "pulse"; or a file in `Wallpaper.folder`
-        var wallpaperDark: String?
+        var wallpaperLight: String? { didSet { if wallpaperLight != oldValue { railFocusLight = nil } } }
+        var wallpaperDark: String? { didSet { if wallpaperDark != oldValue { railFocusDark = nil } } }
+        var railFocusLight: CGPoint?
+        var railFocusDark: CGPoint?
 
         /// Settings › Appearance. Until it's first chosen, it's what Pulse drew before: Classic (Glass or Solid) in both
         /// modes, or for Groove, Groove White in light and Groove in dark (Groove Black: Groove Black in light), in Auto.
@@ -96,6 +98,8 @@ final class AppState: ObservableObject {
             glassLevel = c.lenient(GlassLevel.self, forKey: .glassLevel, in: decoder)
             wallpaperLight = c.lenient(String.self, forKey: .wallpaperLight, in: decoder)
             wallpaperDark = c.lenient(String.self, forKey: .wallpaperDark, in: decoder)
+            railFocusLight = c.lenient(CGPoint.self, forKey: .railFocusLight, in: decoder)
+            railFocusDark = c.lenient(CGPoint.self, forKey: .railFocusDark, in: decoder)
             dock = c.lenient(DockEdge.self, forKey: .dock, in: decoder)
             tucked = c.lenient(Bool.self, forKey: .tucked, in: decoder)
             tuckPeek = c.lenient(Bool.self, forKey: .tuckPeek, in: decoder)
@@ -158,6 +162,7 @@ final class AppState: ObservableObject {
         Binding(get: { self.persisted.agentsHotKey ?? .agentsDefault }, set: { self.persisted.agentsHotKey = $0 == .agentsDefault ? nil : $0 })
     }
 
+    var measuredRailSize: CGSize = .zero
     var dock: DockEdge { persisted.dock ?? .right }
 
     /// Tucked and not peeking out: the rail rests past its edge with only a sliver on screen. Dragged out by its sliver,
