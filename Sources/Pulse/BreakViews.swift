@@ -132,13 +132,15 @@ struct BreakOverlayView: View {
         let s = min(1.3, max(0.7, size.width / 1440))   // the mockup's sizes, scaled to this screen
         let holiday = holidayScreen ? controller.holiday : nil
         let colors = holiday.map { (glow: $0.glow, bar: $0.bar) } ?? BreakColor.pair(controller.settings.color)
-        // prototype: at a glass level, the wallpaper under the glass instead of the apps, in the words it asks for
-        let picture = glass.flatMap(Wallpaper.picture)
-        let reading = glass.flatMap { g in picture.flatMap { WallpaperReader.read($0, size: size, level: g.level) } }
+        // prototype: at a glass level, Pulse's own dark picture under the glass instead of the apps, whatever the rail's
+        // wallpaper (the owner, 2026-11-19), in the words it asks for
+        let breakGlass = glass.map { GlassSetting(level: $0.level, wallpaper: "pulse", light: false) }
+        let picture = breakGlass.flatMap(Wallpaper.picture)
+        let reading = breakGlass.flatMap { g in picture.flatMap { WallpaperReader.read($0, size: size, level: g.level) } }
         let ink = inks(film: false, reading: reading)
         ZStack {
-            if let glass {
-                WallpaperLayer(level: glass.level, picture: picture?.image, reading: reading, shape: Rectangle())
+            if let breakGlass {
+                WallpaperLayer(level: breakGlass.level, picture: picture?.image, reading: reading, shape: Rectangle())
             } else {
                 PulseSurface(shape: Rectangle()).environment(\.pulseSkin, skin.breakGround)
             }
