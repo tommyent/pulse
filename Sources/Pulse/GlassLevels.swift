@@ -81,23 +81,6 @@ extension EnvironmentValues {
         return (image, url.path)
     }
 
-    /// Choose Picture…'s work once a picture is picked: copied in, and the mode's wallpaper set to the copy.
-    static func choose(_ url: URL, light: Bool, in state: AppState) throws {
-        let name = try copyIn(url, light: light)
-        if light { state.persisted.wallpaperLight = name } else { state.persisted.wallpaperDark = name }
-    }
-
-    /// Test-only, on test/glass-play and never in a release branch; off unless set:
-    /// `defaults write io.github.tommyent.pulse testWallpaper "dark:/path/to/picture"` (or "light:…") runs `choose` at the
-    /// next launch, as the open panel would, then clears itself. Agents can't drive the system's open panel on the test Mac.
-    static func takeTestPick(_ state: AppState) {
-        guard let spec = UserDefaults.standard.string(forKey: "testWallpaper") else { return }
-        UserDefaults.standard.removeObject(forKey: "testWallpaper")
-        let light = spec.hasPrefix("light:"), path = String(spec.drop(while: { $0 != ":" }).dropFirst())
-        do { try choose(URL(fileURLWithPath: path), light: light, in: state); log.info("test pick: \(spec, privacy: .public) copied") }
-        catch { log.error("test pick \(spec, privacy: .public) failed: \(error.localizedDescription, privacy: .public)") }
-    }
-
     /// Copies a picked picture into Pulse's folder under a new name (so nothing cached shows the old one), removes the
     /// mode's previous copy, and returns the new file's name.
     static func copyIn(_ url: URL, light: Bool) throws -> String {

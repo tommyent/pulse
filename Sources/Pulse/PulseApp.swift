@@ -44,7 +44,6 @@ struct PulseApp: App {
         let state = AppState()
         _state = StateObject(wrappedValue: state)   // the pet's folder waits for its first use: no Documents prompt at launch
         ThemeStore.shared.start(state)
-        Wallpaper.takeTestPick(state)   // prototype, test-only: off unless the testWallpaper default is set
         overlay = OverlayController(state: state)
         batteryAlerts = BatteryAlerts(state: state)
         BreakController.shared.attach(state)
