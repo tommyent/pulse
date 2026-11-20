@@ -124,14 +124,17 @@ struct BreakOverlayView: View {
     var showPet = true
     var petOnRight = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.pulseSkin) private var skin
+    @Environment(\.colorScheme) private var scheme
     @State private var perches: [BreakPerch] = []   // where the agents can jump up, in this view's points
 
     var body: some View {
         let s = min(1.3, max(0.7, size.width / 1440))   // the mockup's sizes, scaled to this screen
         let holiday = holidayScreen ? controller.holiday : nil
         let colors = holiday.map { (glow: $0.glow, bar: $0.bar) } ?? BreakColor.pair(controller.settings.color)
+        let light = BreakFrost.followsTheme && scheme == .light, ink = inks(film: false)
         ZStack {
-            PulseSurface(shape: Rectangle())
+            BreakFrost(light: light)
             if holiday != nil {
                 if let still = controller.holidayStill {
                     Image(nsImage: still).resizable().scaledToFill().frame(width: size.width, height: size.height).clipped()
@@ -148,12 +151,13 @@ struct BreakOverlayView: View {
                 BreakGlow(rgb: colors.glow, size: size)
                 VStack(spacing: 0) {
                     title(size: 50 * s, s).perch(.text)   // words the floating rings keep clear of
-                    clock(s, digits: 172 * s, bar: 368 * s, color: colors.bar, align: .center).perch(.text).padding(.top, 34 * s)
-                    label(s).padding(.top, 20 * s)
-                    ideaLine(s, width: 760 * s, font: 22 * s, top: 46 * s, bar: colors.bar)
+                    clock(s, digits: 172 * s, bar: 368 * s, color: colors.bar, align: .center, ink: ink).perch(.text).padding(.top, 34 * s)
+                    label(s, ink: ink).padding(.top, 20 * s)
+                    ideaLine(s, width: 760 * s, font: 22 * s, top: 46 * s, bar: colors.bar, ink: ink)
                     buttons(s).padding(.top, 72 * s)
                 }
-                .foregroundStyle(.white)
+                .foregroundStyle(ink.primary)
+                .environment(\.colorScheme, light ? .light : .dark)   // the buttons too
             }
             if agents {
                 BreakAgentsLayer(rex: controller.rex, size: size, start: controller.breakStarted,
@@ -172,17 +176,18 @@ struct BreakOverlayView: View {
     /// On a holiday the countdown, the idea and the buttons share a band along the bottom, so the video's story
     /// plays uncovered above it. The band sits above the pets' floor.
     private func band(_ s: CGFloat, bar: UInt32) -> some View {
-        VStack(spacing: 0) {
+        let ink = inks(film: true)
+        return VStack(spacing: 0) {
             Spacer(minLength: 0)
             HStack(alignment: .bottom, spacing: 28 * s) {
                 VStack(alignment: .leading, spacing: 0) {
                     title(size: 22 * s, s)
-                    clock(s, digits: 92 * s, bar: 240 * s, color: bar, align: .leading).padding(.top, 6 * s)
-                    label(s).padding(.top, 12 * s)
+                    clock(s, digits: 92 * s, bar: 240 * s, color: bar, align: .leading, ink: ink).padding(.top, 6 * s)
+                    label(s, ink: ink).padding(.top, 12 * s)
                 }
                 .perch(.text)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                ideaLine(s, width: 480 * s, font: 19 * s, top: 0, bar: bar)
+                ideaLine(s, width: 480 * s, font: 19 * s, top: 0, bar: bar, ink: ink)
                 buttons(s * 0.85).frame(maxWidth: .infinity, alignment: .trailing)
             }
             .padding(.horizontal, 60 * s)
@@ -192,13 +197,19 @@ struct BreakOverlayView: View {
         .shadow(color: .black.opacity(0.5), radius: 10 * s)
     }
 
+    /// The words' colours: white on the dark frost and over a holiday's film; the theme's own ink on frost that follows it.
+    private func inks(film: Bool) -> BreakInk {
+        BreakFrost.followsTheme && !film ? BreakInk(primary: skin.primary, secondary: skin.secondary, idea: skin.primary)
+                                         : BreakInk(primary: .white, secondary: PulsePalette.secondary, idea: Color(white: 0.92))
+    }
+
     private func title(size: CGFloat, _ s: CGFloat) -> some View {
         Text("Time to take a break")
             .font(.system(size: size, weight: .medium))
             .tracking(-size * 0.014)
     }
 
-    private func clock(_ s: CGFloat, digits: CGFloat, bar: CGFloat, color: UInt32, align: HorizontalAlignment) -> some View {
+    private func clock(_ s: CGFloat, digits: CGFloat, bar: CGFloat, color: UInt32, align: HorizontalAlignment, ink: BreakInk) -> some View {
         let paused = controller.phase.isPaused
         return TimelineView(.periodic(from: .now, by: 0.5)) { context in
             let r = controller.remaining(context.date)
@@ -206,7 +217,7 @@ struct BreakOverlayView: View {
                 Text(Self.clock(r.left))
                     .font(.system(size: digits, weight: .bold).monospacedDigit())
                     .tracking(-digits * 0.029)
-                    .foregroundStyle(paused ? Color(white: 0.55) : .white)
+                    .foregroundStyle(paused ? Color(white: 0.55) : ink.primary)
                 ProgressView(value: max(0, min(1, r.left / r.total)))
                     .tint(paused ? PulsePalette.secondary : Color(rgb: color))
                     .frame(width: bar)
@@ -218,11 +229,11 @@ struct BreakOverlayView: View {
         }
     }
 
-    private func label(_ s: CGFloat) -> some View {
+    private func label(_ s: CGFloat, ink: BreakInk) -> some View {
         Text(controller.phase.isPaused ? "paused" : "left in your break")
             .font(.system(size: 17 * s))
             .tracking(0.8 * s)
-            .foregroundStyle(PulsePalette.secondary)
+            .foregroundStyle(ink.secondary)
     }
 
     private func buttons(_ s: CGFloat) -> some View {
@@ -253,7 +264,7 @@ struct BreakOverlayView: View {
     }
 
     /// `top`: the space above it, only while it shows, so a hidden idea leaves the layout as it was.
-    @ViewBuilder private func ideaLine(_ s: CGFloat, width: CGFloat, font: CGFloat, top: CGFloat, bar: UInt32) -> some View {
+    @ViewBuilder private func ideaLine(_ s: CGFloat, width: CGFloat, font: CGFloat, top: CGFloat, bar: UInt32, ink: BreakInk) -> some View {
         if case let .shown(shown) = controller.idea {
             VStack(spacing: 14 * s) {
                 Text("\(Text(Image(systemName: "sparkle")).foregroundStyle(Color(rgb: bar)))  \(shown.text)")
@@ -261,7 +272,7 @@ struct BreakOverlayView: View {
                 .multilineTextAlignment(.center)
                 .perch(.ideaRow)   // measured on the words themselves, not the wider frame
                 .frame(maxWidth: width)
-                .foregroundStyle(Color(white: 0.92))
+                .foregroundStyle(ink.idea)
                 HStack(spacing: 26 * s) {
                     Button { controller.reroll() } label: { Label("Reroll", systemImage: "arrow.clockwise") }
                         .help("Another idea at your level")
@@ -278,6 +289,23 @@ struct BreakOverlayView: View {
     static func clock(_ seconds: TimeInterval) -> String {
         let t = Int(seconds.rounded(.up))
         return String(format: "%d:%02d", t / 60, t % 60)
+    }
+}
+
+private struct BreakInk { let primary, secondary, idea: Color }
+
+/// Prototype (the owner, 2026-11-19): every theme's break screen lies on frosted glass, dark with white words, so they
+/// always read. With `defaults write … prototypeBreakFrost theme` the frost follows the theme instead: light, with the
+/// theme's own ink, in a light theme. A holiday's film covers it either way.
+private struct BreakFrost: View {
+    static var followsTheme: Bool { UserDefaults.standard.string(forKey: "prototypeBreakFrost") == "theme" }
+    let light: Bool
+
+    var body: some View {
+        Color.clear.glassEffect(.regular, in: Rectangle())
+            .overlay(light ? Color.white.opacity(0.55) : Color.black.opacity(0.6))
+            .environment(\.colorScheme, light ? .light : .dark)
+            .environment(\.appearsActive, true)
     }
 }
 
