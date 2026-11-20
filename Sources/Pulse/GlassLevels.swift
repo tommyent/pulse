@@ -8,22 +8,12 @@ private let log = Logger(subsystem: "io.github.tommyent.pulse", category: "glass
 // At the Default finish each theme draws as its file says. Other finishes put wallpaper under glass and choose ink
 // for the picture's brightness. Classic Solid always draws its own surface.
 
-/// Settings › Appearance › Glass, from the clearest to the most blurred.
+/// Settings › Appearance › Finish, from clear glass to the strongest tint.
 enum GlassLevel: String, Codable, CaseIterable {
     case liquid, glass, frosted
     var name: String { rawValue.capitalized }
-    // A softened feature occupies the same fraction of the photograph in every linked surface.
-    func wallpaperBlur(image: CGSize, scale: CGFloat) -> CGFloat {
-        let shortSide = min(image.width, image.height) * scale
-        switch self {
-        case .liquid: return 0
-        case .glass: return shortSide * 0.002
-        case .frosted: return shortSide * 0.008
-        }
-    }
-
-    var material: Glass { self == .frosted ? .regular : .clear }
-    var materialBlur: CGFloat { switch self { case .liquid: 0; case .glass: 8; case .frosted: 30 } }   // for surfaces using a full native material
+    var material: Glass { self == .liquid ? .clear : .regular }
+    var tintOpacity: Double { switch self { case .liquid: 0; case .glass: 0.06; case .frosted: 0.18 } }
 }
 
 /// What the panels draw at a level: nil, the person's theme as its file says.
@@ -139,13 +129,12 @@ struct WallpaperReading: Equatable {
     static let target = 4.5
     static let darkInk: SkinColor = "#15171C"
 
-    /// `size`: the panel, in points; the picture fills it as `scaledToFill` does. Sampled about every 6 points, or every
-    /// `blur` points when the picture is blurred, so a sharp picture's detail counts and a blurred one's doesn't.
-    static func read(_ image: CGImage, size: CGSize, blur: CGFloat, crop: WallpaperCrop = WallpaperCrop()) -> WallpaperReading? {
+    /// Sample the original picture's visible crop about every six points in the panel.
+    static func read(_ image: CGImage, size: CGSize, crop: WallpaperCrop = WallpaperCrop()) -> WallpaperReading? {
         guard size.width >= 1, size.height >= 1 else { return nil }
         let visible = crop.rect(image: CGSize(width: image.width, height: image.height), panel: size)
         let sampleSize = crop.sizeBeforeRotation(size)
-        let step = max(6, blur), cols = max(2, Int(sampleSize.width / step)), rows = max(2, Int(sampleSize.height / step))
+        let cols = max(2, Int(sampleSize.width / 6)), rows = max(2, Int(sampleSize.height / 6))
         guard let part = image.cropping(to: visible.integral),
               let ctx = CGContext(data: nil, width: cols, height: rows, bitsPerComponent: 8, bytesPerRow: cols * 4,
                                   space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
@@ -179,20 +168,13 @@ struct WallpaperReading: Equatable {
 
 @MainActor enum WallpaperReader {
     private static var cache: [String: (crop: WallpaperCrop, reading: WallpaperReading)] = [:]
-    static func read(_ picture: (image: CGImage, key: String), size: CGSize, level: GlassLevel, crop: WallpaperCrop = WallpaperCrop(), usesWallpaperFinish: Bool = false) -> WallpaperReading? {
-        let key = "\(picture.key)|\(Int(size.width))x\(Int(size.height))|\(level.rawValue)|\(usesWallpaperFinish)"
+    static func read(_ picture: (image: CGImage, key: String), size: CGSize, crop: WallpaperCrop = WallpaperCrop()) -> WallpaperReading? {
+        let key = "\(picture.key)|\(Int(size.width))x\(Int(size.height))"
         if let hit = cache[key], hit.crop == crop { return hit.reading }
-        var blur = level.materialBlur
-        if usesWallpaperFinish {
-            let source = CGSize(width: picture.image.width, height: picture.image.height)
-            let visible = crop.rect(image: source, panel: size)
-            guard visible.width > 0 else { return nil }
-            blur = level.wallpaperBlur(image: source, scale: crop.sizeBeforeRotation(size).width / visible.width)
-        }
-        let r = WallpaperReading.read(picture.image, size: size, blur: blur, crop: crop)
+        let r = WallpaperReading.read(picture.image, size: size, crop: crop)
         if let r {
             cache[key] = (crop, r)
-            log.info("reading \((picture.key as NSString).lastPathComponent, privacy: .public) \(Int(size.width))x\(Int(size.height)) \(level.rawValue, privacy: .public): \(r.light ? "light" : "dark", privacy: .public) words, wash \(r.wash, format: .fixed(precision: 2)), \(r.contrast, format: .fixed(precision: 1)):1")
+            log.info("reading \((picture.key as NSString).lastPathComponent, privacy: .public) \(Int(size.width))x\(Int(size.height)): \(r.light ? "light" : "dark", privacy: .public) words, wash \(r.wash, format: .fixed(precision: 2)), \(r.contrast, format: .fixed(precision: 1)):1")
         }
         return r
     }
@@ -221,18 +203,20 @@ struct WallpaperLayer<S: Shape>: View {
     var drawsGlassRim = true
 
     var body: some View {
-        let wash = reading.map { ($0.light ? Color.black : .white).opacity($0.wash) } ?? .clear
+        // The tint stays visible in inactive panels and reinforces the ink picked from the photograph.
+        let wash = usesWallpaperFinish ? 0 : reading?.wash ?? 0
+        let tint = (reading?.light == false ? Color.white : .black).opacity(wash + (1 - wash) * level.tintOpacity)
         Group {
             if (level == .liquid || usesWallpaperFinish), picture != nil, !reduceTransparency {
                 // A full native material changes the photograph when the host window loses focus.
-                shape.fill(wash).overlay {
+                shape.fill(tint).overlay {
                     if drawsGlassRim {
                         Color.clear.glassEffect(level.material, in: shape)
                             .mask { shape.stroke(lineWidth: 8) }
                     }
                 }
             } else {
-                Color.clear.background(wash, in: shape)
+                Color.clear.background(tint, in: shape)
                     .glassEffect(level.material, in: shape)
             }
         }
@@ -248,7 +232,6 @@ struct WallpaperLayer<S: Shape>: View {
                                 let scale = unturned.width / visible.width
                                 Image(decorative: picture, scale: 1).resizable().interpolation(.high)
                                     .frame(width: source.width * scale, height: source.height * scale)
-                                    .blur(radius: usesWallpaperFinish ? level.wallpaperBlur(image: source, scale: scale) : level.materialBlur, opaque: true)
                                     .offset(x: -visible.minX * scale, y: -visible.minY * scale)
                                     .frame(width: unturned.width, height: unturned.height, alignment: .topLeading)
                                     .rotationEffect(.degrees(crop.rotated ? -90 : 0))
@@ -280,7 +263,7 @@ struct LevelPanel<S: Shape>: ViewModifier {
         let usesWallpaperFinish = crop != nil && !reduceTransparency && picture != nil
         let sample = usesWallpaperFinish ? readingSize ?? size : size
         let reading = picture.flatMap {
-            WallpaperReader.read($0, size: sample, level: setting.level, crop: framing, usesWallpaperFinish: usesWallpaperFinish)
+            WallpaperReader.read($0, size: sample, crop: framing)
         }
         content
             .environment(\.pulseSkin, reading.map(skin.reading) ?? skin)
@@ -290,7 +273,7 @@ struct LevelPanel<S: Shape>: ViewModifier {
                     WallpaperLabelContrast(labels: labels, lightInk: reading.light)
                 }
             }
-            .background { WallpaperLayer(level: setting.level, picture: picture?.image, reading: usesWallpaperFinish ? nil : reading, shape: shape, crop: framing, usesWallpaperFinish: usesWallpaperFinish, drawsGlassRim: drawsGlassRim) }
+            .background { WallpaperLayer(level: setting.level, picture: picture?.image, reading: reading, shape: shape, crop: framing, usesWallpaperFinish: usesWallpaperFinish, drawsGlassRim: drawsGlassRim) }
             .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
     }
 }

@@ -135,7 +135,7 @@ struct BreakOverlayView: View {
         // With a glass finish, the break screen uses Pulse's own dark picture and ink suited to it.
         let breakGlass = glass.map { GlassSetting(level: $0.level, wallpaper: "pulse", light: false) }
         let picture = breakGlass.flatMap(Wallpaper.picture)
-        let reading = breakGlass.flatMap { g in picture.flatMap { WallpaperReader.read($0, size: size, level: g.level) } }
+        let reading = picture.flatMap { WallpaperReader.read($0, size: size) }
         let ink = inks(film: false, reading: reading)
         ZStack {
             if let breakGlass {

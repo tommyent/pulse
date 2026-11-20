@@ -46,7 +46,7 @@ enum SettingsStateChecks {
         switched.hiddenPools = ["antigravity.Claude and GPT"]
         let reread = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(switched))
         assert(reread.hiddenPools == ["antigravity.Claude and GPT"], "a switched-off pool stays off after a relaunch")
-        // prototype glass levels: the level and wallpapers survive a save; an unknown level costs only itself
+        // The finish and wallpapers survive a save. An unknown finish costs only itself.
         var levelled = AppState.Persisted()
         levelled.glassLevel = .frosted; levelled.wallpaperLight = "light-1a2b3c4d.jpg"; levelled.wallpaperDark = "pulse"
         levelled.railFocusLight = CGPoint(x: 0.1, y: 0.4)
