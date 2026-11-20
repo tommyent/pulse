@@ -221,13 +221,16 @@ struct GlassSettings: View {
 
     private func wallpaper(_ title: String, _ key: WritableKeyPath<AppState.Persisted, String?>, light: Bool) -> some View {
         let name = state.persisted[keyPath: key]
+        let shown = name == nil ? "Desktop picture or Pulse's" : name == "pulse" ? "Pulse's picture" : "Your picture"
         return LabeledContent(title) {
-            Menu(name == nil ? "Desktop picture or Pulse's" : name == "pulse" ? "Pulse's picture" : "Your picture") {
-                Button("Desktop Picture (Pulse's if it's yours)") { state.persisted[keyPath: key] = nil }
+            Menu(shown) {
+                Button("Desktop Picture (or Pulse's)") { state.persisted[keyPath: key] = nil }
                 Button("Pulse's Picture") { state.persisted[keyPath: key] = "pulse" }
                 Button("Choose Picture…") { choose(key, light: light) }
             }
             .fixedSize()
+            .accessibilityLabel(title)   // the two menus apart, by purpose
+            .accessibilityValue(shown)
             .help("Out of the box: the Mac's desktop picture if it's one of Apple's, else Pulse's own. A picture you choose is copied into Pulse's folder")
         }
     }
@@ -235,6 +238,7 @@ struct GlassSettings: View {
     private func choose(_ key: WritableKeyPath<AppState.Persisted, String?>, light: Bool) {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
+        NSApp.activate()   // a menu bar app: bring the panel to the front with the keyboard (⌘⇧G and a path)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do { state.persisted[keyPath: key] = try Wallpaper.copyIn(url, light: light); problem = nil }
         catch { problem = error.localizedDescription }
