@@ -19,7 +19,7 @@ struct WallpaperCropEditor: View {
     init(selection: CropSelection, save: @escaping (WallpaperCrop) -> Void) {
         self.selection = selection
         self.save = save
-        _draft = State(initialValue: selection.setting.railCrop)
+        _draft = State(initialValue: selection.setting.wallpaperCrop)
     }
 
     private var source: CGSize { CGSize(width: selection.image.width, height: selection.image.height) }
@@ -29,8 +29,8 @@ struct WallpaperCropEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Adjust rail crop").font(.title2.bold())
-            Text("The outline shows what fits in the rail. Zoom in, then drag it to choose a detail.")
+            Text("Adjust wallpaper crop").font(.title2.bold())
+            Text("Drag to choose a detail for the rail, cards, and menu. The outline shows how it fits the rail.")
                 .foregroundStyle(.secondary)
             HStack(spacing: 18) {
                 pictureControl
@@ -47,13 +47,13 @@ struct WallpaperCropEditor: View {
                     let center = CGPoint(x: crop.midX / source.width, y: crop.midY / source.height)
                     draft = WallpaperCrop(focus: center, zoom: percent.rounded() / 100, rotated: draft.rotated)
                 }), in: (WallpaperCrop.zoomRange.lowerBound * 100)...(WallpaperCrop.zoomRange.upperBound * 100))
-                .accessibilityLabel("Rail wallpaper zoom, percent")
+                .accessibilityLabel("Wallpaper zoom, percent")
                 Text(zoomLabel).monospacedDigit()
                     .frame(width: 46, alignment: .trailing)
             }
             Toggle("Rotate crop 90°", isOn: $draft.rotated)
                 .toggleStyle(.checkbox)
-                .help("Turn the selected part of the wallpaper a quarter turn counterclockwise in the rail.")
+                .help("Turn the selected part of the wallpaper a quarter turn counterclockwise.")
             Divider()
             HStack {
                 Button("Center") { draft.focus = WallpaperCrop.middle; editingPicture = true }

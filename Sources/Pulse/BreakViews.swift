@@ -96,7 +96,7 @@ struct BreakPill: View {
             .padding(.leading, 7).padding(.trailing, 12)
             .frame(height: 52)
             .padding(Edge.Set(tail), PillShape.tailWidth)
-            .pulseSurface(in: PillShape(edge: tail))
+            .pulseSurface(in: PillShape(edge: tail), followsWallpaperCrop: false)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onFrame?($0) }
             .transition(.scale(scale: 0.5, anchor: UnitPoint(edge: tail)))
         }

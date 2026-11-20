@@ -23,7 +23,7 @@ enum GlassLevel: String, Codable, CaseIterable {
 struct GlassSetting: Equatable {
     var level: GlassLevel
     var wallpaper: String?   // the mode's: nil, the desktop picture or Pulse's; "pulse"; or a file in `Wallpaper.folder`
-    var railCrop = WallpaperCrop()
+    var wallpaperCrop = WallpaperCrop()
     var light: Bool          // which of Pulse's own pictures fits the mode
 }
 
@@ -41,7 +41,11 @@ extension EnvironmentValues {
 @MainActor enum Wallpaper {
     static let maxBytes = 32 * 1024 * 1024
     static var folder: URL { ThemeStore.shared.folder.deletingLastPathComponent().appending(path: "Wallpapers") }
-    private static var cache: [String: CGImage] = [:]
+    private static let cache: NSCache<NSURL, CGImage> = {
+        let images = NSCache<NSURL, CGImage>()
+        images.countLimit = 2   // The current light and dark wallpapers.
+        return images
+    }()
 
     /// The picture for a setting, and the key it's cached under.
     static func picture(_ s: GlassSetting) -> (image: CGImage, key: String)? {
@@ -58,14 +62,14 @@ extension EnvironmentValues {
     static func isFileName(_ name: String) -> Bool { name.count <= 80 && !name.hasPrefix(".") && !name.contains("/") && !name.contains(":") }
 
     private static func load(_ url: URL) -> (image: CGImage, key: String)? {
-        if let image = cache[url.path] { return (image, url.path) }
+        if let image = cache.object(forKey: url as NSURL) { return (image, url.path) }
         guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= maxBytes,
               let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
                                                                           kCGImageSourceCreateThumbnailWithTransform: true,
-                                                                          kCGImageSourceThumbnailMaxPixelSize: 1600] as CFDictionary)
+                                                                          kCGImageSourceThumbnailMaxPixelSize: 3200] as CFDictionary)
         else { return nil }
-        cache[url.path] = image
+        cache.setObject(image, forKey: url as NSURL)
         return (image, url.path)
     }
 
@@ -244,7 +248,7 @@ struct WallpaperLayer<S: Shape>: View {
                             if visible.width > 0 {
                                 let unturned = crop.sizeBeforeRotation(proxy.size)
                                 let scale = unturned.width / visible.width
-                                Image(decorative: picture, scale: 1).resizable()
+                                Image(decorative: picture, scale: 1).resizable().interpolation(.high)
                                     .frame(width: source.width * scale, height: source.height * scale)
                                     .blur(radius: level.blur, opaque: true)
                                     .offset(x: -visible.minX * scale, y: -visible.minY * scale)
@@ -264,19 +268,56 @@ struct WallpaperLayer<S: Shape>: View {
 /// A panel at a level: its content on the wallpaper, in the words its own part of the picture asks for.
 struct LevelPanel<S: Shape>: ViewModifier {
     @Environment(\.pulseSkin) private var skin
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     let setting: GlassSetting
     let shape: S
-    var crop = WallpaperCrop()
+    var crop: WallpaperCrop?
     var drawsGlassRim = true
     @State private var size = CGSize.zero
 
     func body(content: Content) -> some View {
         let picture = Wallpaper.picture(setting)
-        let reading = picture.flatMap { WallpaperReader.read($0, size: size, level: setting.level, crop: crop) }
+        let framing = crop ?? WallpaperCrop()
+        let clearPicture = crop != nil && setting.level == .liquid && !reduceTransparency && picture != nil
+        let reading = picture.flatMap { WallpaperReader.read($0, size: size, level: setting.level, crop: framing) }
         content
             .environment(\.pulseSkin, reading.map(skin.reading) ?? skin)
             .environment(\.colorScheme, reading?.light == false ? .light : .dark)
-            .background { WallpaperLayer(level: setting.level, picture: picture?.image, reading: reading, shape: shape, crop: crop, drawsGlassRim: drawsGlassRim) }
+            .backgroundPreferenceValue(Text.LayoutKey.self) { labels in
+                if clearPicture, let reading, !labels.isEmpty {
+                    LiquidLabelContrast(labels: labels, lightInk: reading.light)
+                }
+            }
+            .background { WallpaperLayer(level: setting.level, picture: picture?.image, reading: clearPicture ? nil : reading, shape: shape, crop: framing, drawsGlassRim: drawsGlassRim) }
             .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+    }
+}
+
+/// Keep only the pixels immediately behind the letters within a readable brightness range.
+struct LiquidLabelContrast: View {
+    let labels: [Text.LayoutKey.AnchoredLayout]
+    let lightInk: Bool
+
+    var body: some View {
+        GeometryReader { geometry in
+            Canvas { context, _ in
+                // Grow the glyph mask just beyond the ink, then soften its edge at Retina scale.
+                let backing = Color(white: lightInk ? 0.33 : 0.62)
+                context.addFilter(.alphaThreshold(min: 0.08, color: backing))
+                context.addFilter(.blur(radius: 1.1))
+                context.drawLayer { mask in
+                    for label in labels {
+                        let origin = geometry[label.origin]
+                        var glyphs = mask
+                        glyphs.translateBy(x: origin.x, y: origin.y)
+                        for line in label.layout { glyphs.draw(line) }
+                    }
+                }
+            }
+            .blur(radius: 0.45)
+            .blendMode(lightInk ? .darken : .lighten)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }

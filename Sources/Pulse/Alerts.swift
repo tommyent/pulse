@@ -51,7 +51,7 @@ struct AlertCard<Content: View>: View {
         .padding(.horizontal, 28)
         .padding(.vertical, 24)
         .frame(width: 320)
-        .pulseSurface(in: RoundedRectangle(cornerRadius: 26))
+        .pulseSurface(in: RoundedRectangle(cornerRadius: 26), followsWallpaperCrop: false)
         .padding(12)   // room for the dark card's shadow
         .task {
             try? await Task.sleep(for: .seconds(1))

@@ -9,7 +9,7 @@ extension AppState.Persisted {
         let zoom = slot == .light ? railZoomLight : railZoomDark
         let rotated = slot == .light ? railRotatedLight : railRotatedDark
         return GlassSetting(level: glassLevel, wallpaper: slot == .light ? wallpaperLight : wallpaperDark,
-                            railCrop: WallpaperCrop(focus: focus ?? WallpaperCrop.middle, zoom: zoom ?? 1, rotated: rotated ?? false), light: slot == .light)
+                            wallpaperCrop: WallpaperCrop(focus: focus ?? WallpaperCrop.middle, zoom: zoom ?? 1, rotated: rotated ?? false), light: slot == .light)
     }
 
     mutating func setRailCrop(_ crop: WallpaperCrop, light: Bool) {
@@ -175,7 +175,7 @@ struct AppearanceSettings: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Adjust " + name.lowercased() + " rail wallpaper crop")
+                .accessibilityLabel("Adjust " + name.lowercased() + " wallpaper crop")
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Wallpaper")
@@ -222,7 +222,7 @@ private struct LookPreview: View {
                 RingView(account: .codex, percent: 7, size: 28, showPercent: false)
                 RingView(account: .claude, percent: 62, size: 28, showPercent: false)
             }
-            .padding(8).pulseSurface(in: Capsule(), rail: true)
+            .padding(8).pulseSurface(in: Capsule())
             UsageCard(snapshot: Self.sample, windows: Self.sample.windows, tailEdge: vertical ? .leading : .top,
                       tailAt: vertical ? 30 : nil)
         }

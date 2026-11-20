@@ -58,18 +58,18 @@ enum SettingsStateChecks {
         let classicSolid = ThemeStore.shared.themes.first { $0.id == "classic-solid" }!
         assert(levelledBack.glass(for: classicGlass, slot: .light)?.wallpaper == levelled.wallpaperLight)
         assert(levelledBack.glass(for: classicGlass, slot: .dark)?.wallpaper == levelled.wallpaperDark)
-        assert(levelledBack.glass(for: classicGlass, slot: .light)?.railCrop.focus == levelled.railFocusLight)
-        assert(levelledBack.glass(for: classicGlass, slot: .dark)?.railCrop.focus == levelled.railFocusDark)
+        assert(levelledBack.glass(for: classicGlass, slot: .light)?.wallpaperCrop.focus == levelled.railFocusLight)
+        assert(levelledBack.glass(for: classicGlass, slot: .dark)?.wallpaperCrop.focus == levelled.railFocusDark)
         levelled.wallpaperDark = "replacement.jpg"
         assert(levelled.railRotatedDark == nil && levelled.railZoomDark == nil && levelled.railFocusDark == nil && levelled.railFocusLight == levelledBack.railFocusLight)
         let wide = CGSize(width: 400, height: 100), tall = CGSize(width: 20, height: 100)
         assert(WallpaperCrop().rect(image: wide, panel: tall) == CGRect(x: 190, y: 0, width: 20, height: 100))
         assert(WallpaperCrop(focus: .zero).rect(image: wide, panel: tall) == CGRect(x: 0, y: 0, width: 20, height: 100))
         assert(WallpaperCrop(focus: CGPoint(x: 1, y: 1)).rect(image: tall, panel: wide) == CGRect(x: 0, y: 95, width: 20, height: 5))
-        assert(levelledBack.glass(for: classicGlass, slot: .light)?.railCrop.zoom == 1)
-        assert(levelledBack.glass(for: classicGlass, slot: .dark)?.railCrop.zoom == 2)
-        assert(levelledBack.glass(for: classicGlass, slot: .dark)?.railCrop.rotated == true)
-        assert(levelledBack.glass(for: classicGlass, slot: .light)?.railCrop.rotated == false)
+        assert(levelledBack.glass(for: classicGlass, slot: .light)?.wallpaperCrop.zoom == 1)
+        assert(levelledBack.glass(for: classicGlass, slot: .dark)?.wallpaperCrop.zoom == 2)
+        assert(levelledBack.glass(for: classicGlass, slot: .dark)?.wallpaperCrop.rotated == true)
+        assert(levelledBack.glass(for: classicGlass, slot: .light)?.wallpaperCrop.rotated == false)
         let quarterTurn = WallpaperCrop(focus: .zero, zoom: 2, rotated: true)
         assert(quarterTurn.rect(image: tall, panel: wide) == CGRect(x: 0, y: 0, width: 10, height: 40))
         assert(quarterTurn.rect(image: wide, panel: tall) == CGRect(x: 0, y: 0, width: 200, height: 40))
@@ -532,6 +532,48 @@ enum SettingsStateChecks {
         for (x, y) in [(48, 0), (48, 23), (0, 12), (95, 12)] {
             let pixel = context(result, x: x, y: y, width: 96)
             assert(pixel == [255, 255, 255, 255], "wallpaper reaches each edge of the menu surface")
+        }
+
+        // An existing saved rail selection also drives the wide card and tall menu at their own aspect ratios.
+        let crop = WallpaperCrop(focus: CGPoint(x: 0.2, y: 0.18), zoom: 2.72, rotated: true)
+        let glass = GlassSetting(level: .liquid, wallpaper: "pulse", wallpaperCrop: crop, light: false)
+        let picture = Wallpaper.picture(glass)!.image
+        for (width, height) in [(40, 180), (180, 64), (80, 190)] {
+            let surface = Color.clear.frame(width: CGFloat(width), height: CGFloat(height))
+                .pulseSurface(in: Rectangle(), bordered: false).environment(\.glassSetting, glass)
+            let expected = WallpaperLayer(level: .liquid, picture: picture, reading: nil, shape: Rectangle(), crop: crop, drawsGlassRim: false)
+            func samples(_ view: some View) -> [[UInt8]] {
+                let cg = ImageRenderer(content: view.frame(width: CGFloat(width), height: CGFloat(height))).cgImage!
+                let buffer = bitmap(width, height)
+                buffer.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+                return [1, 2, 3].map { n in context(buffer, x: width * n / 4, y: height * n / 4, width: width) }
+            }
+            assert(samples(surface) == samples(expected), "every linked surface must render the selected detail")
+            let centered = WallpaperLayer(level: .liquid, picture: picture, reading: nil, shape: Rectangle(), drawsGlassRim: false)
+            assert(samples(expected) != samples(centered), "the chosen fixture must distinguish a centered crop")
+        }
+
+        // A label on difficult pixels gets an outline. The same label on legible pixels leaves its background alone.
+        for lightInk in [true, false] {
+            func label(_ outline: Bool, matchingInk: Bool) -> [UInt8] {
+                let ink = lightInk ? Color.white : .black
+                let contrasting = lightInk ? Color.black : .white
+                let view = Text("98%").foregroundStyle(ink).frame(width: 80, height: 30)
+                    .backgroundPreferenceValue(Text.LayoutKey.self) { labels in
+                        if outline { LiquidLabelContrast(labels: labels, lightInk: lightInk) }
+                    }
+                    .background(matchingInk ? ink : contrasting)
+                let renderer = ImageRenderer(content: view)
+                renderer.scale = 2
+                let cg = renderer.cgImage!
+                let buffer = bitmap(cg.width, cg.height)
+                buffer.draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+                return Array(UnsafeBufferPointer(start: buffer.data!.assumingMemoryBound(to: UInt8.self), count: buffer.bytesPerRow * cg.height))
+            }
+            let helped = label(true, matchingInk: true), plain = label(false, matchingInk: true)
+            assert(zip(helped, plain).contains { abs(Int($0) - Int($1)) > 70 }, "the outline distinguishes otherwise invisible letters")
+            assert(helped.prefix(160 * 4 * 5) == plain.prefix(160 * 4 * 5), "clear wallpaper above the letters stays untouched")
+            assert(label(true, matchingInk: false) == label(false, matchingInk: false), "legible letters receive no visible outline")
         }
     }
 
