@@ -7,8 +7,9 @@ extension AppState.Persisted {
         guard theme.id != "classic-solid", let glassLevel else { return nil }
         let focus = slot == .light ? railFocusLight : railFocusDark
         let zoom = slot == .light ? railZoomLight : railZoomDark
+        let rotated = slot == .light ? railRotatedLight : railRotatedDark
         return GlassSetting(level: glassLevel, wallpaper: slot == .light ? wallpaperLight : wallpaperDark,
-                            railCrop: WallpaperCrop(focus: focus ?? WallpaperCrop.middle, zoom: zoom ?? 1), light: slot == .light)
+                            railCrop: WallpaperCrop(focus: focus ?? WallpaperCrop.middle, zoom: zoom ?? 1, rotated: rotated ?? false), light: slot == .light)
     }
 
     mutating func setRailCrop(_ crop: WallpaperCrop, light: Bool) {
@@ -17,9 +18,11 @@ extension AppState.Persisted {
         if light {
             railFocusLight = focus
             railZoomLight = zoom
+            railRotatedLight = crop.rotated ? true : nil
         } else {
             railFocusDark = focus
             railZoomDark = zoom
+            railRotatedDark = crop.rotated ? true : nil
         }
     }
 }
@@ -102,7 +105,7 @@ struct AppearanceSettings: View {
                                 ForEach(GlassLevel.allCases, id: \.self) { Text($0.name).tag(Optional($0)) }
                             }
                             .pickerStyle(.segmented).labelsHidden().accessibilityLabel("Finish for both looks")
-                            .frame(width: SettingsPane.paneWidth - 68)
+                            .frame(maxWidth: .infinity)
                             Text(saved.glassLevel == nil ? "Both looks use their theme’s finish." : "Applies to light and dark looks.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
@@ -126,7 +129,7 @@ struct AppearanceSettings: View {
                         .font(.callout)
                 }
             }
-            .frame(width: SettingsPane.paneWidth - 40, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(20)
         }
         .overlay { if isDropTarget { RoundedRectangle(cornerRadius: 12).strokeBorder(Color.accentColor, lineWidth: 2).allowsHitTesting(false) } }

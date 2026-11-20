@@ -354,36 +354,52 @@ struct AgentSettingsSection: View {
     var shortcutNote: String? = nil   // why the chosen shortcut isn't working
     @State private var sounds: [String] = []
 
+    private var onRail: Binding<Bool> {
+        Binding(get: { settings.onRail(rexFound: rexFound) }, set: { settings.showOnRail = $0 })
+    }
+
     var body: some View {
         Section("On the rail") {
             // the caption is outside the switch: a link in a disabled control couldn't be clicked
             LabeledContent {
-                Toggle("Show agents on the rail", isOn: Binding(get: { settings.onRail(rexFound: rexFound) }, set: { settings.showOnRail = $0 }))
+                Toggle("Show agents on the rail", isOn: onRail)
                     .labelsHidden().toggleStyle(.switch)
-                    .accessibilityLabel("Show agents on the rail")
+                    .accessibilityRepresentation {
+                        Toggle("Show agents on the rail", isOn: onRail).toggleStyle(.checkbox)
+                    }
                     .disabled(!rexFound)
             } label: {
                 Text("Show agents on the rail")
                 if rexFound {
-                    Text("Needs Rex. Shows the agents open in Rex on this Mac and the Macs it connects to: the ring turns orange when one is waiting for you and red when one has failed, with a tick when one has just finished")
+                    Text("Shows agents from Rex on this Mac and its connected Macs.")
                 } else {
                     Text("Needs Rex, which Pulse didn't find on this Mac. [Get Rex…](https://www.superlogical.com/rex)")
                 }
             }
-            Text("While this is on, Pulse reads each pane's label and status line through the rex command all day. It never starts a Rex server and saves nothing to disk. While the card is open, it also reads how full each idle agent's context is, for agents on this Mac: it asks macOS when the agent's process started and which files it has open, then reads token counts only from the agent's own session files. It reads no messages from them, keeps the numbers in memory only and needs no permission. A click on an agent shows its pane in Rex; nothing is answered from Pulse. Rex has its own tab marks, Dock badge, sounds and notifications: Pulse sends no notifications, and holds its own sound and alert while Rex is in front.")
-                .font(.caption).foregroundStyle(.pulseSecondary)
             LabeledContent {
-                HotKeyRecorder(combo: shortcut, fallback: .agentsDefault, clearable: true)
-                    .accessibilityLabel("Shortcut for the agents card")
+                HotKeyRecorder(combo: shortcut, name: "agents card shortcut", fallback: .agentsDefault, clearable: true)
             } label: {
                 Text("Shortcut for the agents card")
                 if let shortcutNote {
                     Text(shortcutNote).foregroundStyle(Color.orange)
                 } else {
-                    Text("Opens the card from any app, and closes it. Then ↑ and ↓ choose an agent, Return shows its pane in Rex and Esc closes the card")
+                    Text("Opens or closes the card from any app.")
                 }
             }
             .disabled(!settings.onRail(rexFound: rexFound))
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Pulse reads agent status. Messages stay private and status is kept in memory.")
+                    .font(.callout).foregroundStyle(.pulseSecondary)
+                SettingsDisclosure(title: "What Pulse reads") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("While the ring is on, Pulse reads pane labels and status lines through Rex. It never starts a Rex server. Orange means an agent is waiting, red means it failed, and a tick marks a recent finish.")
+                        Text("While the card is open, Pulse also checks context usage for idle local agents. It uses the process start time and open files to find the agent’s session, then reads its token counts. This needs no extra permission.")
+                        Text("Use ↑ and ↓ to choose an agent, Return to show its pane in Rex, or Esc to close the card. Replies happen in Rex. Pulse sends no notifications and holds its sound and alert while Rex is in front.")
+                    }
+                    .font(.callout).foregroundStyle(.pulseSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
         Group {
             Section("Sounds and alerts") {

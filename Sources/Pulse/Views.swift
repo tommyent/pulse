@@ -1273,27 +1273,6 @@ private let settingsLog = Logger(subsystem: "io.github.tommyent.pulse", category
 /// rather than a window looked up by title or identifier.
 @MainActor enum SettingsWindow {
     static weak var current: NSWindow?
-    private static var content: CGFloat?   // the chosen pane's own height, last measured
-
-    /// Settings as tall as the chosen pane (`content`, below the title bar), as classic Mac Settings are: its top stays
-    /// where it is, it stops at the screen's room (the pane scrolls past that) and stays on the screen. Done on the next
-    /// turn of the main queue: resizing the window from a height measured during SwiftUI's layout, inside that layout
-    /// (a window sized to its content), went round in a loop until AppKit stopped Pulse. Within a point it's left alone.
-    static func fit(content: CGFloat? = nil) {
-        if let content { self.content = content }
-        DispatchQueue.main.async {
-            guard let window = current, let content = Self.content, let visible = (window.screen ?? NSScreen.main)?.visibleFrame else { return }
-            let chrome = window.frame.height - window.contentLayoutRect.height   // the title bar
-            let height = SettingsPane.windowHeight(content: content, room: visible.height - chrome) + chrome
-            guard abs(window.frame.height - height) > 1 else { return }
-            var frame = window.frame
-            frame.origin.y += frame.height - height
-            frame.size.height = height
-            frame.origin.y = max(visible.minY, min(frame.origin.y, visible.maxY - height))
-            window.setFrame(frame, display: true, animate: window.isVisible)
-            settingsLog.notice("fit: pane \(Int(content)), window \(Int(height)) tall")
-        }
-    }
 }
 
 /// Opens Settings in front. Pulse is an accessory app, and macOS may not let it become active (another app in front, a
@@ -1320,24 +1299,12 @@ private let settingsLog = Logger(subsystem: "io.github.tommyent.pulse", category
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { raiseSettings(tries: tries - 1) }
 }
 
-/// Tells `SettingsWindow` which window Settings' view is in, each time it moves into one, and fits it to the chosen pane
-/// then, and again when it moves to another screen (whose room may differ).
+/// Keeps a weak reference to the window that the Settings scene actually opened.
 private struct SettingsWindowReader: NSViewRepresentable {
     final class Reader: NSView {
-        private var watch: NSObjectProtocol?
-
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            watch.map(NotificationCenter.default.removeObserver)
-            watch = nil
-            guard let window else { return }
-            MainActor.assumeIsolated {
-                SettingsWindow.current = window
-                SettingsWindow.fit()
-            }
-            watch = NotificationCenter.default.addObserver(forName: NSWindow.didChangeScreenNotification, object: window, queue: .main) { _ in
-                MainActor.assumeIsolated { SettingsWindow.fit() }
-            }
+            if let window { SettingsWindow.current = window }
         }
     }
     func makeNSView(context: Context) -> Reader { Reader() }
@@ -1404,7 +1371,7 @@ struct SettingsView: View {
     /// A sidebar of panes with Launch at login under it, the chosen pane beside it. Only the layout is grouped: every
     /// value is saved where it always was.
     var body: some View {
-        SettingsLayout(selection: $state.settingsTab, footer: AnyView(launchAtLogin), onPaneHeight: { SettingsWindow.fit(content: $0) }) {
+        SettingsLayout(selection: $state.settingsTab, footer: AnyView(launchAtLogin)) {
             pane(state.settingsTab)
         }
         .background(SettingsWindowReader())
@@ -1443,64 +1410,69 @@ struct SettingsView: View {
             form {
                 Section {
                     ForEach(AccountID.allCases) { id in
-                        LabeledContent {
-                            if id == .claude {
-                                // a stale row is still signed in the same way: only a refresh failed, and the caption says so
-                                let signedIn = state.snapshots[id]?.health == .ok || state.snapshots[id]?.health == .stale
-                                if state.snapshots[id]?.source == .officialProtocol, signedIn {
-                                    Text("via Claude Code").font(.caption).foregroundStyle(.pulseSecondary)
-                                        .help("Reads Claude Code's own sign-in from the Keychain; no separate login needed")
-                                } else if state.snapshots[id]?.source == .officialUsagePage, signedIn {
-                                    Button("Disconnect") {
-                                        Task {
-                                            await ClaudeWeb.shared.clearSession()
-                                            state.snapshots[id] = nil   // signed out on request: a slow page mustn't keep the old numbers as stale
-                                            await state.refreshAll()
+                        VStack(alignment: .leading, spacing: 9) {
+                            LabeledContent {
+                                if id == .claude {
+                                    // a stale row is still signed in the same way: only a refresh failed, and the caption says so
+                                    let signedIn = state.snapshots[id]?.health == .ok || state.snapshots[id]?.health == .stale
+                                    if state.snapshots[id]?.source == .officialProtocol, signedIn {
+                                        Text("via Claude Code").font(.caption).foregroundStyle(.pulseSecondary)
+                                            .help("Reads Claude Code's own sign-in from the Keychain; no separate login needed")
+                                    } else if state.snapshots[id]?.source == .officialUsagePage, signedIn {
+                                        Button("Disconnect") {
+                                            Task {
+                                                await ClaudeWeb.shared.clearSession()
+                                                state.snapshots[id] = nil   // signed out on request: a slow page mustn't keep the old numbers as stale
+                                                await state.refreshAll()
+                                            }
                                         }
+                                    } else {
+                                        Button("Connect…") {
+                                            WebLogin.presentClaude { Task { await state.refreshAll() } }
+                                        }
+                                        .help("Sign in to claude.ai in a Pulse window; Pulse uses it when Claude Code isn't signed in")
                                     }
-                                } else {
-                                    Button("Connect…") {
-                                        WebLogin.presentClaude { Task { await state.refreshAll() } }
+                                }
+                                if id == .grok {
+                                    if state.snapshots[id]?.health == .needsAuth || state.snapshots[id] == nil {
+                                        Button("Connect…") {
+                                            WebLogin.presentGrok { Task { await state.refreshAll() } }
+                                        }
+                                    } else if state.snapshots[id]?.health != .ok {
+                                        Button("Retry") { Task { await state.refreshAll() } }
+                                    } else if state.snapshots[id]?.source == .officialUsagePage {
+                                        Button("Disconnect") {
+                                            Task { await WebLogin.disconnectGrok(); await state.refreshAll() }
+                                        }
+                                    } else {
+                                        Text("via Grok CLI").font(.caption).foregroundStyle(.pulseSecondary)
                                     }
-                                    .help("Sign in to claude.ai in a Pulse window; Pulse uses it when Claude Code isn't signed in")
+                                }
+                                if id == .codex {
+                                    Text("via Codex CLI").font(.caption).foregroundStyle(.pulseSecondary)
+                                        .help("Codex signs in through its own CLI (codex login)")
+                                }
+                                if id == .antigravity {
+                                    Text("via Antigravity CLI").font(.caption).foregroundStyle(.pulseSecondary)
+                                        .help("Reads agy's own /usage report; sign in by running agy once")
+                                }
+                                Toggle("Enable \(id.displayName)", isOn: state.isEnabled(id)).labelsHidden().toggleStyle(.switch)
+                                    .accessibilityRepresentation {
+                                        Toggle("Enable \(id.displayName)", isOn: state.isEnabled(id)).toggleStyle(.checkbox)
+                                    }
+                            } label: {
+                                Text(id.displayName)
+                                if let snap = state.snapshots[id] {
+                                    Text(snap.healthMessage ?? "\(snap.planLabel) · updated \(snap.fetchedAt.formatted(date: .omitted, time: .shortened))")
                                 }
                             }
-                            if id == .grok {
-                                if state.snapshots[id]?.health == .needsAuth || state.snapshots[id] == nil {
-                                    Button("Connect…") {
-                                        WebLogin.presentGrok { Task { await state.refreshAll() } }
-                                    }
-                                } else if state.snapshots[id]?.health != .ok {
-                                    Button("Retry") { Task { await state.refreshAll() } }
-                                } else if state.snapshots[id]?.source == .officialUsagePage {
-                                    Button("Disconnect") {
-                                        Task { await WebLogin.disconnectGrok(); await state.refreshAll() }
-                                    }
-                                } else {
-                                    Text("via Grok CLI").font(.caption).foregroundStyle(.pulseSecondary)
+                            if state.persisted.enabled.contains(id) {
+                                ForEach((state.snapshots[id]?.windows.pools ?? []).dropFirst().compactMap { $0.first?.pool }, id: \.self) { pool in
+                                    Toggle("\(pool) ring", isOn: state.showsPool(id, pool)).toggleStyle(.checkbox)
+                                        .padding(.leading, 16)
+                                        .accessibilityLabel("Show \(id.displayName)'s \(pool) ring")
+                                        .help("A second \(id.displayName) ring for the models that share these limits. Its limits stay in the menu bar list and near-limit alerts either way.")
                                 }
-                            }
-                            if id == .codex {
-                                Text("via Codex CLI").font(.caption).foregroundStyle(.pulseSecondary)
-                                    .help("Codex signs in through its own CLI (codex login)")
-                            }
-                            if id == .antigravity {
-                                Text("via Antigravity CLI").font(.caption).foregroundStyle(.pulseSecondary)
-                                    .help("Reads agy's own /usage report; sign in by running agy once")
-                            }
-                            Toggle("Enable \(id.displayName)", isOn: state.isEnabled(id)).labelsHidden().toggleStyle(.switch)
-                                .accessibilityLabel("Enable \(id.displayName)")
-                        } label: {
-                            Text(id.displayName)
-                            if let snap = state.snapshots[id] {
-                                Text(snap.healthMessage ?? "\(snap.planLabel) · updated \(snap.fetchedAt.formatted(date: .omitted, time: .shortened))")
-                            }
-                        }
-                        if state.persisted.enabled.contains(id) {
-                            ForEach((state.snapshots[id]?.windows.pools ?? []).dropFirst().compactMap { $0.first?.pool }, id: \.self) { pool in
-                                Toggle("\(pool) ring", isOn: state.showsPool(id, pool)).toggleStyle(.switch)
-                                    .accessibilityLabel("Show \(id.displayName)'s \(pool) ring")
-                                    .help("A second \(id.displayName) ring for the models that share these limits. Its limits stay in the menu bar list and near-limit alerts either way.")
                             }
                         }
                     }
@@ -1563,14 +1535,36 @@ struct SettingsView: View {
     }
 }
 
-/// Settings' frame: the sidebar, then the chosen pane at the panes' width, filling the window. The pane's own height (its
-/// Form's content) goes to `onPaneHeight`, which sizes the window to it (`SettingsWindow.fit`), as classic Mac Settings
-/// are; past the screen's room the pane scrolls.
+/// The header is a button so the same action opens the details for pointer, keyboard and VoiceOver.
+struct SettingsDisclosure<Details: View>: View {
+    let title: String
+    @ViewBuilder var details: () -> Details
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                expanded.toggle()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.caption.bold()).frame(width: 12).accessibilityHidden(true)
+                    Text(title)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            if expanded { details().padding(.leading, 17) }
+        }
+    }
+}
+
+/// Only the detail pane scrolls. Changing panes preserves the window frame and sidebar.
 struct SettingsLayout<Pane: View>: View {
     @Binding var selection: SettingsPane
     var accent: Color = .accentColor
     var footer = AnyView(EmptyView())   // under the sidebar's list (Launch at login)
-    var onPaneHeight: (CGFloat) -> Void = { _ in }
     @ViewBuilder var pane: Pane
 
     var body: some View {
@@ -1582,10 +1576,7 @@ struct SettingsLayout<Pane: View>: View {
                     .padding(.horizontal, 20).padding(.bottom, 12)
             }
             Divider()
-            pane.frame(width: SettingsPane.paneWidth)
-                .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom } action: { _, height in
-                    onPaneHeight(height)
-                }
+            pane.frame(minWidth: SettingsPane.paneWidth, maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minHeight: SettingsPane.minHeight)
     }
@@ -1614,9 +1605,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     /// The shortest Settings gets: the sidebar's list and Launch at login under it still fit.
     static let minHeight: CGFloat = 320
 
-    /// The height below the title bar: the pane's own (`content`), never less than the sidebar needs, and no more than the
-    /// screen's `room`, past which the pane scrolls.
-    static func windowHeight(content: CGFloat, room: CGFloat) -> CGFloat { max(minHeight, min(content.rounded(.up), room)) }
+    static let initialHeight: CGFloat = 600
 }
 
 /// Settings' sidebar: every pane, ↑ and ↓ to move, the theme's window behind it. Drawn here rather than by a List,

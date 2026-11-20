@@ -773,32 +773,53 @@ struct BreakSettingsSection: View {
                 HStack(spacing: 6) {
                     Text("every").foregroundStyle(.pulseSecondary)
                     minutes($settings.microEvery, [10, 15, 20, 25, 30, 45, 60])
+                        .accessibilityLabel("Micro break interval")
                     Text("for").foregroundStyle(.pulseSecondary)
                     seconds($settings.microLength, [10, 20, 30, 45, 60])
+                        .accessibilityLabel("Micro break duration")
                 }
             }
             LabeledContent("Long break") {
                 HStack(spacing: 6) {
                     Text("every").foregroundStyle(.pulseSecondary)
                     minutes($settings.longEvery, [30, 45, 60, 90, 120])
+                        .accessibilityLabel("Long break interval")
                     Text("for").foregroundStyle(.pulseSecondary)
                     minutes($settings.longLength, [2, 3, 5, 10, 15])
+                        .accessibilityLabel("Long break duration")
                     Toggle("Long break", isOn: $settings.longEnabled).labelsHidden().toggleStyle(.switch)
-                        .accessibilityLabel("Long break")
+                        .accessibilityRepresentation {
+                            Toggle("Enable long breaks", isOn: $settings.longEnabled).toggleStyle(.checkbox)
+                        }
                 }
             }
+            if settings.enabled {
+                TimelineView(.periodic(from: .now, by: 30)) { tick in
+                    if let next = controller.nextText(tick.date) {
+                        Label(next, systemImage: "clock")
+                            .font(.callout).foregroundStyle(.pulseSecondary)
+                    }
+                }
+            }
+            Toggle(isOn: $settings.waitForCalls) {
+                Text("Wait during calls")
+                Text("Hold a reminder while another app uses the microphone. Call time still counts toward your next break.")
+            }
+            .accessibilityLabel("Wait during calls")
             Picker("Time away counts as a break", selection: $settings.awayMode) {
                 Text("When locked, asleep or idle for 5 minutes").tag(BreakAwayMode.idle)
                 Text("Only when locked or asleep (fixed schedule)").tag(BreakAwayMode.fixed)
             }
             .pickerStyle(.radioGroup)
-            Toggle(isOn: $settings.waitForCalls) {
-                Text("Wait during calls")
-                Text("A break that comes due while an app is using the microphone, as on a video call, waits until the call ends; the call doesn't count as time away")
+            SettingsDisclosure(title: "How scheduling works") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Breaks are timed from one start to the next. A long break replaces a micro break due within two minutes of it.")
+                    Text("Breaks wait while the screen is locked or a Pulse voice call is active. To pause reminders through a meeting, hover over the rail and choose Pause.")
+                    Text("Choose the fixed schedule if you often watch the screen without using the keyboard or mouse.")
+                }
+                .font(.callout).foregroundStyle(.pulseSecondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
-            .accessibilityLabel("Wait during calls")
-            Text("Breaks keep to their times: every 10 minutes means every 10 minutes, however long each break takes. A long break takes the place of a micro break due within two minutes of it. A break waits while the screen is locked, during a Pulse voice call, and during other calls when Wait during calls is on. To skip breaks through a meeting, hover over the rail and choose Pause. Choose a fixed schedule if you watch the screen without touching the keyboard or mouse.")
-                .font(.caption).foregroundStyle(.pulseSecondary)
         }
         Section("Break screen") {
             LabeledContent("Colour") {

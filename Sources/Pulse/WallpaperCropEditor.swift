@@ -45,12 +45,15 @@ struct WallpaperCropEditor: View {
                 Text("Zoom")
                 Slider(value: Binding<Double>(get: { draft.zoom * 100 }, set: { percent in
                     let center = CGPoint(x: crop.midX / source.width, y: crop.midY / source.height)
-                    draft = WallpaperCrop(focus: center, zoom: percent.rounded() / 100)
+                    draft = WallpaperCrop(focus: center, zoom: percent.rounded() / 100, rotated: draft.rotated)
                 }), in: (WallpaperCrop.zoomRange.lowerBound * 100)...(WallpaperCrop.zoomRange.upperBound * 100))
                 .accessibilityLabel("Rail wallpaper zoom, percent")
                 Text(zoomLabel).monospacedDigit()
                     .frame(width: 46, alignment: .trailing)
             }
+            Toggle("Rotate crop 90°", isOn: $draft.rotated)
+                .toggleStyle(.checkbox)
+                .help("Turn the selected part of the wallpaper a quarter turn counterclockwise in the rail.")
             Divider()
             HStack {
                 Button("Center") { draft.focus = WallpaperCrop.middle; editingPicture = true }

@@ -51,7 +51,7 @@ enum SettingsStateChecks {
         levelled.glassLevel = .frosted; levelled.wallpaperLight = "light-1a2b3c4d.jpg"; levelled.wallpaperDark = "pulse"
         levelled.railFocusLight = CGPoint(x: 0.1, y: 0.4)
         levelled.railFocusDark = CGPoint(x: 0.8, y: 0.6)
-        levelled.railZoomDark = 2
+        levelled.setRailCrop(WallpaperCrop(focus: levelled.railFocusDark!, zoom: 2, rotated: true), light: false)
         let levelledBack = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(levelled))
         assert(levelledBack.glassLevel == .frosted && levelledBack.wallpaperLight == "light-1a2b3c4d.jpg" && levelledBack.wallpaperDark == "pulse")
         let classicGlass = ThemeStore.shared.themes.first { $0.id == "classic-glass" }!
@@ -61,13 +61,19 @@ enum SettingsStateChecks {
         assert(levelledBack.glass(for: classicGlass, slot: .light)?.railCrop.focus == levelled.railFocusLight)
         assert(levelledBack.glass(for: classicGlass, slot: .dark)?.railCrop.focus == levelled.railFocusDark)
         levelled.wallpaperDark = "replacement.jpg"
-        assert(levelled.railZoomDark == nil && levelled.railFocusDark == nil && levelled.railFocusLight == levelledBack.railFocusLight)
+        assert(levelled.railRotatedDark == nil && levelled.railZoomDark == nil && levelled.railFocusDark == nil && levelled.railFocusLight == levelledBack.railFocusLight)
         let wide = CGSize(width: 400, height: 100), tall = CGSize(width: 20, height: 100)
         assert(WallpaperCrop().rect(image: wide, panel: tall) == CGRect(x: 190, y: 0, width: 20, height: 100))
         assert(WallpaperCrop(focus: .zero).rect(image: wide, panel: tall) == CGRect(x: 0, y: 0, width: 20, height: 100))
         assert(WallpaperCrop(focus: CGPoint(x: 1, y: 1)).rect(image: tall, panel: wide) == CGRect(x: 0, y: 95, width: 20, height: 5))
         assert(levelledBack.glass(for: classicGlass, slot: .light)?.railCrop.zoom == 1)
         assert(levelledBack.glass(for: classicGlass, slot: .dark)?.railCrop.zoom == 2)
+        assert(levelledBack.glass(for: classicGlass, slot: .dark)?.railCrop.rotated == true)
+        assert(levelledBack.glass(for: classicGlass, slot: .light)?.railCrop.rotated == false)
+        let quarterTurn = WallpaperCrop(focus: .zero, zoom: 2, rotated: true)
+        assert(quarterTurn.rect(image: tall, panel: wide) == CGRect(x: 0, y: 0, width: 10, height: 40))
+        assert(quarterTurn.rect(image: wide, panel: tall) == CGRect(x: 0, y: 0, width: 200, height: 40))
+        checkWallpaperRotation()
         let upperLeft = WallpaperCrop(focus: .zero, zoom: 2).rect(image: tall, panel: wide)
         let lowerRight = WallpaperCrop(focus: CGPoint(x: 1, y: 1), zoom: 2).rect(image: tall, panel: wide)
         assert(upperLeft == CGRect(x: 0, y: 0, width: 10, height: 2.5))
@@ -279,36 +285,12 @@ enum SettingsStateChecks {
     /// Settings' sidebar: every pane is there, in order, with a symbol that exists; a pane opened by name (Break
     /// settings… opens Breaks) selects its row; and a row chosen in the list opens its pane.
     @MainActor private static func checkSettingsPanes() {
-        // each pane takes its own height, as classic Mac Settings do: the layout reports the chosen pane's own height
-        // (its Form's content, measured in an offscreen window where SwiftUI lays the Form out), which sizes the window
-        // (SettingsWindow.fit) between the sidebar's minimum and the screen's room; it no longer opens every pane at 830
         _ = NSApplication.shared
-        final class Got { var height: CGFloat = 0 }
-        func measured<P: View>(@ViewBuilder _ pane: () -> P) -> CGFloat {
-            let got = Got()
-            let host = NSHostingView(rootView: SettingsLayout(selection: .constant(.rings), onPaneHeight: { got.height = $0 }) { pane() })
-            host.frame = NSRect(x: 0, y: 0, width: SettingsPane.sidebarWidth + 1 + SettingsPane.paneWidth, height: 600)
-            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-            window.contentView = host
-            for _ in 0 ..< 10 { RunLoop.main.run(until: Date().addingTimeInterval(0.03)); host.layoutSubtreeIfNeeded() }
-            window.close()
-            return got.height
-        }
-        let one = measured { Form { Text("pane") }.formStyle(.grouped) }
-        let twelve = measured { Form { Section { ForEach(0 ..< 12) { Text("row \($0)") } } }.formStyle(.grouped) }
-        let eighty = measured { Form { ForEach(0 ..< 80) { Text("row \($0)") } }.formStyle(.grouped) }
-        assert(one > 20 && one < twelve && twelve < eighty, "panes report their own heights: \(one), \(twelve), \(eighty)")
-        assert(SettingsPane.windowHeight(content: one, room: 2000) == SettingsPane.minHeight, "a one-row pane: the sidebar's minimum, not 830")
-        let mid = SettingsPane.windowHeight(content: twelve, room: 2000)
-        assert(mid > SettingsPane.minHeight + 60 && mid < 700, "a 12-row pane is its own height: \(mid)")
-        assert(SettingsPane.windowHeight(content: eighty, room: 500) == 500, "a pane taller than the room stops there and scrolls")
         // the layout itself fills whatever the window is, down to the minimum, so the pane can scroll
         let layout = NSHostingController(rootView: SettingsLayout(selection: .constant(.agents)) { Form { Text("pane") }.formStyle(.grouped) })
         for room in [600.0, 420] {
             assert(layout.sizeThatFits(in: CGSize(width: SettingsPane.sidebarWidth + 1 + SettingsPane.paneWidth, height: room)).height == room)
         }
-        assert(SettingsPane.windowHeight(content: 640, room: 1000) == 640 && SettingsPane.windowHeight(content: 100, room: 1000) == SettingsPane.minHeight
-               && SettingsPane.windowHeight(content: 1400, room: 900) == 900 && SettingsPane.windowHeight(content: 1400, room: 100) == SettingsPane.minHeight)
         // the sidebar's list with Launch at login under it fits in the shortest window
         let sidebar = NSHostingController(rootView: SettingsSidebar(selection: .constant(.appearance), footer: AnyView(Toggle("Launch at login", isOn: .constant(true)).toggleStyle(.checkbox).padding(.horizontal, 10))))
         let needs = sidebar.sizeThatFits(in: CGSize(width: SettingsPane.sidebarWidth, height: 0)).height
@@ -423,7 +405,12 @@ enum SettingsStateChecks {
         spin()
         results.themeImport = "Imported Ember as ember.json."
         results.testPush = "Sent"
-        for pane in [SettingsPane.battery, .appearance, .battery, .appearance] { panes.pane = pane; spin() }
+        let originalFrame = switchWindow.frame
+        for pane in [SettingsPane.battery, .appearance, .battery, .appearance] {
+            panes.pane = pane
+            spin()
+            assert(switchWindow.frame == originalFrame, "changing panes preserves the window frame")
+        }
         assert(results.themeImport == "Imported Ember as ember.json." && results.testPush == "Sent", "results survive pane switches")
         switchWindow.close()
     }
@@ -512,6 +499,29 @@ enum SettingsStateChecks {
         let x = Int((8 + 26 + 0.465 * 52) * 2), y = image.height / 2
         let floor = Array(UnsafeBufferPointer(start: context.data!.assumingMemoryBound(to: UInt8.self).advanced(by: (y * image.width + x) * 4), count: 4))
         assert(floor[3] == 255 && floor[0] < 30 && floor[1] < 30 && floor[2] < 30, "an empty Groove channel is dark and opaque: \(floor)")
+    }
+
+    /// A vertical strip with red at its top and blue at its bottom must run red to blue across the rail.
+    @MainActor private static func checkWallpaperRotation() {
+        func bitmap(_ w: Int, _ h: Int) -> CGContext {
+            CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)!
+        }
+        let source = bitmap(24, 96)
+        source.setFillColor(red: 1, green: 0, blue: 0, alpha: 1)
+        source.fill(CGRect(x: 0, y: 48, width: 24, height: 48))
+        source.setFillColor(red: 0, green: 0, blue: 1, alpha: 1)
+        source.fill(CGRect(x: 0, y: 0, width: 24, height: 48))
+        let layer = WallpaperLayer(level: .liquid, picture: source.makeImage(), reading: nil,
+                                   shape: Rectangle(), crop: WallpaperCrop(rotated: true))
+        let rendered = ImageRenderer(content: layer.frame(width: 96, height: 24)).cgImage!
+        let result = bitmap(96, 24)
+        result.draw(rendered, in: CGRect(x: 0, y: 0, width: 96, height: 24))
+        let left = context(result, x: 20, y: 12, width: 96)
+        let right = context(result, x: 76, y: 12, width: 96)
+        assert(left[0] > 240 && left[2] < 15 && right[0] < 15 && right[2] > 240,
+               "the top of the upright wallpaper maps to the left of the rail: \(left), \(right)")
     }
 
     private static func context(_ ctx: CGContext, x: Int, y: Int, width: Int) -> [UInt8] {

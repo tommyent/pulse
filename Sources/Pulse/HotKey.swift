@@ -117,6 +117,7 @@ import SwiftUI
 
 struct HotKeyRecorder: View {
     @Binding var combo: HotKeyCombo
+    var name = "voice shortcut"
     var fallback = HotKeyCombo.voiceDefault   // what Reset goes back to
     var clearable = false                     // whether the shortcut can be given up altogether
     @State private var recording = false
@@ -127,11 +128,15 @@ struct HotKeyRecorder: View {
         HStack(spacing: 8) {
             Button(recording ? "Press keys…" : combo == .none ? "None" : combo.label) { recording ? stop() : start() }
                 .frame(minWidth: 110)
+                .accessibilityLabel("Record \(name)")
+                .accessibilityValue(recording ? "Press keys" : combo == .none ? "None" : combo.label)
             if combo != fallback, !recording {
                 Button("Reset") { combo = fallback }.buttonStyle(.borderless).font(.caption)
+                    .accessibilityLabel("Reset \(name)")
             }
             if clearable, combo != .none, !recording {
                 Button("Clear") { combo = .none }.buttonStyle(.borderless).font(.caption)
+                    .accessibilityLabel("Clear \(name)")
             }
         }
         .onDisappear { stop() }

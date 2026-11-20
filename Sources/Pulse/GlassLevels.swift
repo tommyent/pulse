@@ -111,13 +111,20 @@ struct WallpaperCrop: Equatable {
     static let zoomRange: ClosedRange<CGFloat> = 1...4
     var focus: CGPoint
     let zoom: CGFloat
+    var rotated: Bool
 
-    init(focus: CGPoint = middle, zoom: CGFloat = 1) {
+    init(focus: CGPoint = middle, zoom: CGFloat = 1, rotated: Bool = false) {
+        self.rotated = rotated
         self.focus = focus
         self.zoom = min(max(zoom, Self.zoomRange.lowerBound), Self.zoomRange.upperBound)
     }
 
+    func sizeBeforeRotation(_ panel: CGSize) -> CGSize {
+        rotated ? CGSize(width: panel.height, height: panel.width) : panel
+    }
+
     func rect(image: CGSize, panel: CGSize) -> CGRect {
+        let panel = sizeBeforeRotation(panel)
         guard image.width > 0, image.height > 0, panel.width > 0, panel.height > 0 else { return .zero }
         let aspect = panel.width / panel.height
         let width = min(image.width, image.height * aspect) / zoom
@@ -143,7 +150,8 @@ struct WallpaperReading: Equatable {
     static func read(_ image: CGImage, size: CGSize, blur: CGFloat, crop: WallpaperCrop = WallpaperCrop()) -> WallpaperReading? {
         guard size.width >= 1, size.height >= 1 else { return nil }
         let visible = crop.rect(image: CGSize(width: image.width, height: image.height), panel: size)
-        let step = max(6, blur), cols = max(2, Int(size.width / step)), rows = max(2, Int(size.height / step))
+        let sampleSize = crop.sizeBeforeRotation(size)
+        let step = max(6, blur), cols = max(2, Int(sampleSize.width / step)), rows = max(2, Int(sampleSize.height / step))
         guard let part = image.cropping(to: visible.integral),
               let ctx = CGContext(data: nil, width: cols, height: rows, bitsPerComponent: 8, bytesPerRow: cols * 4,
                                   space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
@@ -231,11 +239,15 @@ struct WallpaperLayer<S: Shape>: View {
                             let source = CGSize(width: picture.width, height: picture.height)
                             let visible = crop.rect(image: source, panel: proxy.size)
                             if visible.width > 0 {
-                                let scale = proxy.size.width / visible.width
+                                let unturned = crop.sizeBeforeRotation(proxy.size)
+                                let scale = unturned.width / visible.width
                                 Image(decorative: picture, scale: 1).resizable()
                                     .frame(width: source.width * scale, height: source.height * scale)
                                     .blur(radius: level.blur, opaque: true)
                                     .offset(x: -visible.minX * scale, y: -visible.minY * scale)
+                                    .frame(width: unturned.width, height: unturned.height, alignment: .topLeading)
+                                    .rotationEffect(.degrees(crop.rotated ? -90 : 0))
+                                    .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
                             }
                         }
                     }

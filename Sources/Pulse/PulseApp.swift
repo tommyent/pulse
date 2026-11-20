@@ -69,9 +69,12 @@ struct PulseApp: App {
 
         Settings {
             SettingsView(state: state)
+                .windowResizeBehavior(.enabled)
                 .containerBackground(for: .window) { SettingsBackground(state: state) }
                 .pulsePresentation(state)
         }
+        .defaultSize(width: SettingsPane.sidebarWidth + 1 + SettingsPane.paneWidth, height: SettingsPane.initialHeight)
+        .windowResizability(.contentMinSize)
     }
 }
 
