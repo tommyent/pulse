@@ -183,6 +183,12 @@ kbd { font: 600 .92em Geist; padding: .05em .4em; border-radius: 6px; background
 .views figure { margin: 0; min-width: 0; width: min(100%, 581px); }
 .views img { width: 100%; height: auto; }
 .views figcaption { margin-top: .8rem; color: var(--muted); text-align: center; }
+/* a few themes, each as Pulse draws it: a usage card, the open rail and the rail at rest */
+.themes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.6rem 1rem; }
+.themes img { width: 100%; height: auto; border-radius: 14px; box-shadow: 0 0 0 1px rgba(255,255,255,.07), 0 20px 44px rgba(0,0,0,.45); }
+.themes figcaption { margin-top: .7rem; text-align: center; font-size: .95rem; color: var(--muted); }
+.themes figcaption b { display: block; color: var(--text); font-weight: 600; }
+.feature .more { display: inline-block; margin-top: 1.6rem; }
 
 /* the break: the season's film, or the break screen */
 .break { position: relative; margin-top: 18vh; padding: 14vh calc(130px + 4vw) 14vh 7vw; isolation: isolate;
@@ -229,6 +235,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
   section.band { padding-top: 12vh; }
   .feature { grid-template-columns: 1fr; gap: 2.4rem; }
   .feature.flip > :first-child { order: 0; }
+  .themes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   body { padding-bottom: 76px; }
   .rail { top: auto; bottom: 12px; right: 50%; transform: translateX(50%); flex-direction: row; padding: 8px 14px; }
   .rail.tucked { translate: 0 49px; }
@@ -252,7 +259,7 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
 <header class="menubar">
   <nav aria-label="Sections">
     <a class="brand" href="#top"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2 12h4.2l1.6-3.8 2.4 9.6 2.2-12.4L15.2 16 17 12h5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Pulse</a>
-    <a href="#rings">Rings</a><a href="#pet">Pet</a><a href="#breaks">Breaks</a>
+    <a href="#themes">Themes</a><a href="#rings">Rings</a><a href="#pet">Pet</a><a href="#breaks">Breaks</a>
   </nav>
   <div class="end"><a href="https://github.com/tommyent/pulse">Source</a><a class="get" href="#get">Download</a></div>
 </header>
@@ -282,6 +289,30 @@ footer { padding: 2.4rem calc(130px + 4vw) 3rem 7vw; border-top: 1px solid rgba(
   <div class="under">
     <p class="caption" id="reel-caption">Pulse in 30 seconds, without sound: the rings, a usage card, a chat with the Codex pet and a break.</p>
     <button class="pause" type="button" data-state="playing"><svg class="i-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg><svg class="i-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg><span>Pause</span></button>
+  </div>
+</section>
+
+<section class="band" id="themes">
+  <div class="feature flip">
+    <div>
+      <h2>Pick a look, or make your own.</h2>
+      <p>Ten new themes come with Pulse, beside Classic and Groove. Choose one for light mode and one for dark; on Auto, Pulse follows your Mac.</p>
+      <ul>
+        <li><strong>A theme is one small file:</strong> colours, sizes and shadows in JSON, nothing else. Send it to someone or move it to another Mac. Edit it and Pulse redraws without a relaunch.</li>
+        <li><strong>Settings → Appearance</strong> previews each theme on a sample rail and card. Give the light and the dark look a theme and a wallpaper, and pick a finish: Liquid, Glass or Frosted.</li>
+        <li><strong>Manage Themes…</strong> imports a theme file and exports yours. You can also drop a file on Settings.</li>
+        <li><strong>Have an agent make one.</strong> Type a name, click Copy Agent Prompt and paste the line into your coding agent. It reads the guide in Pulse's Themes folder and saves the theme there.</li>
+      </ul>
+      <a class="textlink more" href="https://github.com/tommyent/pulse/tree/main/themes">More themes on GitHub</a>
+    </div>
+    <div class="themes">
+      <figure><img src="assets/theme-glacier.webp" width="420" height="679" loading="lazy" alt="Glacier, a light theme: a usage card, the open rail and the rail at rest in ice blue"><figcaption><b>Glacier</b> Light</figcaption></figure>
+      <figure><img src="assets/theme-orchard.webp" width="420" height="679" loading="lazy" alt="Orchard, a light theme: a usage card, the open rail and the rail at rest in blossom pink"><figcaption><b>Orchard</b> Light</figcaption></figure>
+      <figure><img src="assets/theme-matcha-washi.webp" width="420" height="679" loading="lazy" alt="Matcha Washi, a light theme: a usage card, the open rail and the rail at rest in warm paper and celadon"><figcaption><b>Matcha Washi</b> Light</figcaption></figure>
+      <figure><img src="assets/theme-abyss.webp" width="420" height="679" loading="lazy" alt="Abyss, a dark theme: a usage card, the open rail and the rail at rest in deep blue"><figcaption><b>Abyss</b> Dark</figcaption></figure>
+      <figure><img src="assets/theme-forest-canopy.webp" width="420" height="679" loading="lazy" alt="Forest Canopy, a dark theme: a usage card, the open rail and the rail at rest in pine green"><figcaption><b>Forest Canopy</b> Dark</figcaption></figure>
+      <figure><img src="assets/theme-synthwave-chrome.webp" width="420" height="679" loading="lazy" alt="Synthwave Chrome, a dark theme: a usage card, the open rail and the rail at rest in midnight plum with neon rings"><figcaption><b>Synthwave Chrome</b> Dark</figcaption></figure>
+    </div>
   </div>
 </section>
 
