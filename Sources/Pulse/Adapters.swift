@@ -566,9 +566,14 @@ enum GrokAdapter {
 
         if let period = config["currentPeriod"] as? [String: Any] {
             let resets = date("end", in: period)
-            let cycle = (period["type"] as? String).map { $0.contains("WEEKLY") ? " (weekly)" : $0.contains("MONTHLY") ? " (monthly)" : "" } ?? ""
-            var out = [UsageWindow(id: "period_all", label: "Credits\(cycle)",
-                                   percentUsed: config["creditUsagePercent"] as? Double ?? 0, resetsAt: resets)]
+            let cycle: UsageWindow.CreditPeriod?
+            let periodType = period["type"] as? String ?? ""
+            if periodType.contains("WEEKLY") { cycle = .weekly }
+            else if periodType.contains("MONTHLY") { cycle = .monthly }
+            else { cycle = nil }
+            var out = [UsageWindow(id: "period_all", label: "Credits" + (cycle.map { " (\($0.rawValue))" } ?? ""),
+                                   percentUsed: config["creditUsagePercent"] as? Double ?? 0, resetsAt: resets,
+                                   creditPeriod: cycle)]
             let names = ["GrokBuild": "Grok Build", "GrokChat": "Grok Chat", "GrokImagine": "Grok Imagine"]
             for item in config["productUsage"] as? [[String: Any]] ?? [] {
                 guard let product = item["product"] as? String else { continue }

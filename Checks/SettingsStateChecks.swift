@@ -309,9 +309,9 @@ enum SettingsStateChecks {
 
         // ↓ from Appearance reaches every pane in order and stops at Breaks; ↑ goes back and stops at Appearance
         var walked = [SettingsPane.appearance]
-        for _ in 0 ..< 10 { walked.append(walked.last!.moved(by: 1)) }
+        for _ in 0 ..< 10 { walked.append(SettingsPane.allCases.moved(from: walked.last!, by: 1)) }
         assert(Array(walked.prefix(7)) == SettingsPane.allCases && walked.last == .breaks, "↓ reaches every pane: \(walked.map(\.title))")
-        assert(SettingsPane.breaks.moved(by: -6) == .appearance && SettingsPane.appearance.moved(by: -1) == .appearance)
+        assert(SettingsPane.allCases.moved(from: .breaks, by: -6) == .appearance && SettingsPane.allCases.moved(from: .appearance, by: -1) == .appearance)
 
         // Scan the rendered selection and its label on both ends of the theme brightness range.
         final class Box: ObservableObject { @Published var pane = SettingsPane.appearance }

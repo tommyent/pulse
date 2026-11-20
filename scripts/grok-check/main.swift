@@ -51,6 +51,18 @@ let usual = products(["GrokBuild", "GrokBot", "GrokChat"])
 check(usual.outerArc?.id == "period_all" && usual.innerArc == nil && usual.disc == nil, "the products are shares of Grok's one limit: one arc")
 check(products(["GrokBot"]).innerArc == nil && products(["GrokBot"]).disc == nil, "only GrokBot so far: still one arc")
 check(usual.map(\.label) == ["Credits (weekly)", "Grok Build", "GrokBot", "Grok Chat"], "the card still lists each product")
+func productShare(_ amount: Double?, total: Double?) -> String? {
+    UsageWindow(id: "period_GrokBuild", label: "Grok Build", percentUsed: amount, resetsAt: nil).shareOfUsage(total: total)
+}
+check(productShare(30, total: 39) == "77%" && productShare(0.2, total: 0.3) == "67%", "product shares use the unrounded period total")
+check(productShare(0.01, total: 39) == "<1%" && productShare(0, total: 39) == "0%", "tiny and zero product usage stay distinct")
+check(productShare(5, total: 0) == nil && productShare(5, total: nil) == nil && productShare(nil, total: 10) == nil && productShare(11, total: 10) == nil, "undefined and inconsistent shares have no percentage")
+check(cw.first?.creditPeriod == .weekly && usual.first?.showsLeft(true) == true && usual.first?.showsLeft(false) == false, "weekly total follows the display preference")
+let monthly = GrokAdapter.billingWindows(from: ["currentPeriod": ["type": "USAGE_PERIOD_TYPE_MONTHLY"]])
+let unknown = GrokAdapter.billingWindows(from: ["currentPeriod": ["type": "OTHER"]])
+check(monthly.first?.creditPeriod == .monthly && unknown.first?.creditPeriod == nil, "breakdown follows the reported credit period")
+let cached = try! JSONDecoder().decode(UsageWindow.self, from: Data(#"{"id":"period_all","label":"Credits (weekly)","percentUsed":39}"#.utf8))
+check(cached.productShareLabel == "of this week’s usage", "a saved snapshot from before the breakdown still names its week")
 let capped = ["session_5h", "weekly_all", "weekly_model_Opus"].map { UsageWindow(id: $0, label: $0, percentUsed: 10, resetsAt: nil) }
 check(capped.innerArc?.id == "weekly_all" && capped.disc?.id == "weekly_model_Opus", "other accounts keep their arc and per-model disc")
 

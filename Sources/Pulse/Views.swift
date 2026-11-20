@@ -12,11 +12,11 @@ extension EnvironmentValues {
     }
 }
 
-private let brandIcons: [AccountID: NSImage] = {
-    var d: [AccountID: NSImage] = [:]
-    for id in AccountID.allCases {
+private let brandIcons: [String: NSImage] = {
+    var d: [String: NSImage] = [:]
+    for id in AccountID.allCases.map(\.rawValue) + ["gemini", "openai"] {
         // PNG for logos whose SVG needs filters macOS can't draw (Antigravity's blurs)
-        if let url = ["svg", "png"].lazy.compactMap({ Bundle.pulseResources.url(forResource: "Resources/\(id.rawValue)", withExtension: $0) }).first,
+        if let url = ["svg", "png"].lazy.compactMap({ Bundle.pulseResources.url(forResource: "Resources/\(id)", withExtension: $0) }).first,
            let img = NSImage(contentsOf: url) {
             // template-tint only monochrome icons; full-color icons render as-is
             let src = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
@@ -35,7 +35,7 @@ struct BrandIcon: View {
 
     var body: some View {
         let style = ink.map(AnyShapeStyle.init) ?? AnyShapeStyle(.primary)
-        if let img = brandIcons[account] {
+        if let img = brandIcons[account.rawValue] {
             Image(nsImage: img)
                 .renderingMode(img.isTemplate ? .template : .original)
                 .interpolation(.high)
@@ -47,6 +47,35 @@ struct BrandIcon: View {
             Image(systemName: account.glyph)
                 .font(.system(size: size * 0.8, weight: .bold))
                 .foregroundStyle(style)
+        }
+    }
+}
+
+/// Pool names come from the provider. A new pool keeps the account mark until it has known artwork.
+private struct PoolIcon: View {
+    let account: AccountID
+    let pool: String?
+    let size: CGFloat
+    var ink: Color?
+
+    var body: some View {
+        if account == .antigravity, pool?.lowercased() == "gemini", let gemini = brandIcons["gemini"] {
+            Image(nsImage: gemini).renderingMode(.template).resizable()
+                .foregroundStyle(LinearGradient(colors: [.blue, .purple, .pink], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .frame(width: size, height: size)
+        } else if account == .antigravity, ["claude and gpt", "claude & gpt"].contains(pool?.lowercased() ?? ""),
+                  let openAI = brandIcons["openai"] {
+            HStack(spacing: -size * 0.12) {
+                BrandIcon(account: .claude, size: size * 0.68)
+                    .zIndex(1)
+                Image(nsImage: openAI).renderingMode(.template).resizable()
+                    .foregroundStyle(Color(white: 0.1))
+                    .padding(size * 0.045)
+                    .frame(width: size * 0.75, height: size * 0.75)
+                    .background(.white, in: Circle())
+            }
+        } else {
+            BrandIcon(account: account, size: size, ink: ink)
         }
     }
 }
@@ -201,6 +230,7 @@ struct RingView: View, Animatable {
     @Environment(\.pulseSkin) private var skin
     let account: AccountID
     var pool = 0   // which of the account's rings: sets the colour
+    var poolName: String?
     let percent: Double?
     var secondary: Double? = nil
     var hasDisc = false            // `[UsageWindow].disc`: the disc behind the icon
@@ -219,7 +249,7 @@ struct RingView: View, Animatable {
                     GrooveRing(groove: groove, size: size, colour: skin.accent(account, pool: pool),
                                outer: percent.map(shown), inner: secondary.map(shown), twoTracks: secondary != nil,
                                disc: hasDisc ? discLevel : nil) {
-                        BrandIcon(account: account, size: size * (secondary == nil ? 0.4 : 0.38), ink: groove.onFace.color)
+                        PoolIcon(account: account, pool: poolName, size: size * (secondary == nil ? 0.4 : 0.38), ink: groove.onFace.color)
                     }
                 } else {
                     if hasDisc {
@@ -233,7 +263,7 @@ struct RingView: View, Animatable {
                         arc(shown(secondary), lineWidth: size * 0.07)
                             .padding(size * 0.16)
                     }
-                    BrandIcon(account: account, size: size * 0.4)
+                    PoolIcon(account: account, pool: poolName, size: size * 0.4)
                         .shadow(color: hasDisc ? .black.opacity(0.7) : .clear, radius: size * 0.025)   // keeps the logo clear of a full disc
                 }
             }
@@ -350,6 +380,43 @@ struct BatteryCard: View {
                 if next != details { details = next }
                 try? await Task.sleep(for: .seconds(5))
             }
+        }
+    }
+}
+
+private struct UsageRows: View {
+    @Environment(\.pulseSkin) private var skin
+    let windows: [UsageWindow]
+    let tint: Color
+
+    var body: some View {
+        ForEach(Array(windows.filter { !$0.isShare }.enumerated()), id: \.element.id) { i, w in
+            WindowRow(window: w, tint: tint, dim: i > 0)
+        }
+        let products = windows.filter(\.isShare).sorted { ($0.percentUsed ?? -1) > ($1.percentUsed ?? -1) }
+        if !products.isEmpty {
+            let total = windows.first { $0.id == "period_all" }
+            let period = total?.productShareLabel ?? "of this period’s usage"
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Usage by product").font(.subheadline.weight(.semibold))
+                if total?.percentUsed == 0, products.allSatisfy({ $0.percentUsed == 0 }) {
+                    Text("No usage this period").font(.caption).foregroundStyle(skin.secondary)
+                } else {
+                    ForEach(products) { product in
+                        let share = product.shareOfUsage(total: total?.percentUsed)
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(product.label)
+                            Spacer(minLength: 4)
+                            Text(share.map { $0 + " " + period } ?? "Unavailable")
+                                .foregroundStyle(skin.secondary)
+                                .multilineTextAlignment(.trailing)
+                        }
+                        .font(.caption)
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+            .foregroundStyle(skin.primary)
         }
     }
 }
@@ -474,15 +541,14 @@ struct UsageCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                BrandIcon(account: snapshot.id, size: 17).raised(skin)
-                Text("\(snapshot.displayName) Usage").font(.headline).embossed(skin, size: 13)
+                let name = windows.first?.pool
+                PoolIcon(account: snapshot.id, pool: name, size: 17).raised(skin)
+                Text(name.map { "\(snapshot.displayName) · \($0.replacingOccurrences(of: " and ", with: " & "))" } ?? "\(snapshot.displayName) Usage").font(.headline).embossed(skin, size: 13)
                 Spacer()
                 Text(snapshot.planLabel).font(.caption).foregroundStyle(.pulseSecondary).embossed(skin, size: 10)
             }
             .foregroundStyle(.pulsePrimary)
-            ForEach(Array(windows.enumerated()), id: \.element.id) { i, w in
-                WindowRow(window: w, tint: skin.accent(snapshot.id, pool: pool), dim: i > 0)
-            }
+            UsageRows(windows: windows, tint: skin.accent(snapshot.id, pool: pool))
             if let msg = snapshot.healthMessage {
                 Text(msg).font(.caption).foregroundStyle(.pulseSecondary)
                     .fixedSize(horizontal: false, vertical: true)   // wraps: a failure's reason is the part you need
@@ -1014,7 +1080,7 @@ struct OverlayView: View {
                         toggleCard(id, pool: pool.index)
                     } label: {
                         RingView(account: id,
-                                 pool: pool.index,
+                                 pool: pool.index, poolName: windows.first?.pool,
                                  percent: windows.outerArc?.percentUsed,
                                  secondary: windows.innerArc?.percentUsed,
                                  hasDisc: windows.disc != nil,
@@ -1049,6 +1115,7 @@ struct OverlayView: View {
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
                     }
+                    .help([id.displayName, windows.first?.pool].compactMap { $0 }.joined(separator: " · "))
                     .accessibilityLabel([id.displayName, windows.first?.pool].compactMap { $0 }.joined(separator: ", ") + " usage")
                     .accessibilityValue([windows.spokenValue(remaining: state.showsRemaining), state.snapshots[id]?.healthMessage ?? ""]
                         .filter { !$0.isEmpty }.joined(separator: "; "))
@@ -1216,9 +1283,7 @@ struct MenuBarPopover: View {
                                 }
                                 .foregroundStyle(skin.primary)
                                 ForEach(Array(snap.shownWindows().pools.enumerated()), id: \.offset) { pool, windows in
-                                    ForEach(Array(windows.enumerated()), id: \.element.id) { i, w in
-                                        WindowRow(window: w, tint: skin.accent(id, pool: pool), dim: i > 0)
-                                    }
+                                    UsageRows(windows: windows, tint: skin.accent(id, pool: pool))
                                 }
                                 if let msg = snap.healthMessage {
                                     Text(msg).font(.caption).foregroundStyle(.pulseSecondary)
@@ -1645,13 +1710,12 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 struct SettingsSidebar: View {
     @Binding var selection: SettingsPane
     var footer = AnyView(EmptyView())
-    @FocusState private var focused: Bool
-    @State private var keyboardNavigation = false
-    @Environment(\.colorSchemeContrast) private var contrast
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            list
+            SettingsChoiceList(items: SettingsPane.allCases, selection: $selection, title: \.title) { pane in
+                Label(pane.title, systemImage: pane.symbol)
+            }
+            .accessibilityLabel("Settings panes")
             Divider().padding(.horizontal, 10)
             footer
             Spacer(minLength: 0)
@@ -1659,17 +1723,27 @@ struct SettingsSidebar: View {
         .padding(.vertical, 10)
         .frame(width: SettingsPane.sidebarWidth)
     }
+}
 
-    private var list: some View {
+struct SettingsChoiceList<Item: Identifiable, Row: View>: View {
+    let items: [Item]
+    @Binding var selection: Item.ID
+    let title: (Item) -> String
+    @ViewBuilder var row: (Item) -> Row
+    @FocusState private var focused: Bool
+    @State private var keyboardNavigation = false
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(SettingsPane.allCases) { pane in
-                let chosen = pane == selection
+            ForEach(items) { item in
+                let chosen = item.id == selection
                 Button {
                     keyboardNavigation = NSApp.currentEvent?.type == .keyDown
-                    selection = pane
+                    selection = item.id
                     focused = true
                 } label: {
-                    Label(pane.title, systemImage: pane.symbol)
+                    row(item)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
@@ -1690,7 +1764,7 @@ struct SettingsSidebar: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(pane.title)
+                .accessibilityLabel(title(item))
                 .accessibilityAddTraits(chosen ? .isSelected : [])
             }
         }
@@ -1703,20 +1777,19 @@ struct SettingsSidebar: View {
         }
         .onKeyPress(keys: [.upArrow, .downArrow]) { press in
             keyboardNavigation = true
-            selection = selection.moved(by: press.key == .upArrow ? -1 : 1)
+            selection = items.moved(from: selection, by: press.key == .upArrow ? -1 : 1)
             return .handled
         }
         .onAppear { focused = true }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Settings panes")
     }
 }
 
-extension SettingsPane {
-    /// The pane `offset` rows away, stopping at the first and the last.
-    func moved(by offset: Int) -> SettingsPane {
-        let all = Self.allCases, i = all.firstIndex(of: self)! + offset
-        return all[max(0, min(all.count - 1, i))]
+extension Array where Element: Identifiable {
+    func moved(from selection: Element.ID, by offset: Int) -> Element.ID {
+        guard let first else { return selection }
+        guard let i = firstIndex(where: { $0.id == selection }) else { return first.id }
+        return self[Swift.max(0, Swift.min(count - 1, i + offset))].id
     }
 }
 

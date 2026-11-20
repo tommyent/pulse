@@ -35,6 +35,7 @@ struct AppearanceSettings: View {
     @State private var crop: CropSelection?
     @ObservedObject private var results = SettingsResults.shared
     @State private var editing: ColorScheme?
+    @State private var browsesThemes = false
     @State private var managesThemes = false
     @State private var pictureError: String?
     @State private var isDropTarget = false
@@ -87,16 +88,18 @@ struct AppearanceSettings: View {
                     HStack {
                         Text("Theme")
                         Spacer()
-                        Picker(name + " theme", selection: Binding(get: { theme.id }, set: selectTheme)) {
-                            ForEach(themes.choices(for: slot)) { item in
-                                let warning = themes.problems[item.id] != nil || themes.warnings[item.id] != nil
-                                Label { Text(item.file.name + (warning ? " ⚠︎" : "")) } icon: {
-                                    Image(systemName: "circle.fill").foregroundStyle(item.file.look.accent(.codex))
-                                }
-                                .tag(item.id)
+                        Button {
+                            browsesThemes = true
+                        } label: {
+                            HStack(spacing: 6) {
+                                Circle().fill(theme.file.look.accent(.codex)).frame(width: 10, height: 10)
+                                Text(theme.file.name)
+                                Image(systemName: "chevron.right").font(.caption2)
                             }
                         }
-                        .labelsHidden().frame(maxWidth: 220, alignment: .trailing)
+                        .accessibilityLabel("Preview " + name.lowercased() + " themes")
+                        .accessibilityValue(theme.file.name)
+                        .help("Browse and preview themes")
                     }
                     .padding(.vertical, 10)
                     Divider()
@@ -142,13 +145,16 @@ struct AppearanceSettings: View {
             for url in urls { themes.importTheme(url) { results.themeImport = $0 } }
             return !urls.isEmpty
         } isTargeted: { isDropTarget = $0 }
+        .sheet(isPresented: $browsesThemes) {
+            ThemeBrowser(slot: slot, current: theme.id, saved: saved, themes: themes, apply: selectTheme)
+        }
         .sheet(isPresented: $managesThemes) { ThemeManagement(choice: saved.themeChoice, themes: themes) }
         .sheet(item: $crop) { selection in
             WallpaperCropEditor(selection: selection) { saved.setRailCrop($0, light: selection.setting.light) }
         }
         .onChange(of: saved.themeChoice.mode) { editing = nil }
         .onChange(of: active) { editing = nil }
-        .onChange(of: slot) { pictureError = nil }
+        .onChange(of: slot) { pictureError = nil; browsesThemes = false }
     }
 
     private func selectTheme(_ id: String) {
@@ -207,6 +213,64 @@ struct AppearanceSettings: View {
     private func setWallpaper(_ value: String?, light: Bool) {
         if light { saved.wallpaperLight = value } else { saved.wallpaperDark = value }
         pictureError = nil
+    }
+}
+
+private struct ThemeBrowser: View {
+    let slot: ColorScheme
+    let current: String
+    let saved: AppState.Persisted
+    @ObservedObject var themes: ThemeStore
+    let apply: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var selection = ""
+
+    var body: some View {
+        let choices = themes.choices(for: slot)
+        let candidate = choices.first { $0.id == selection }
+        VStack(alignment: .leading, spacing: 14) {
+            Text(slot == .light ? "Preview light themes" : "Preview dark themes").font(.title2.bold())
+            HStack(spacing: 12) {
+                ScrollViewReader { reader in
+                    ScrollView {
+                        SettingsChoiceList(items: choices, selection: $selection, title: { item in
+                            item.file.name + (item.id == current ? ", current theme" : "")
+                                + (themes.problems[item.id] != nil || themes.warnings[item.id] != nil ? ", theme warning" : "")
+                        }) { item in
+                            HStack(spacing: 6) {
+                                Circle().fill(item.file.look.accent(.codex)).frame(width: 9, height: 9)
+                                Text(item.file.name)
+                                if item.id == current {
+                                    Image(systemName: "checkmark").font(.caption)
+                                }
+                                if themes.problems[item.id] != nil || themes.warnings[item.id] != nil {
+                                    Image(systemName: "exclamationmark.triangle")
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4).accessibilityLabel("Themes")
+                    }
+                    .onChange(of: selection) { _, id in reader.scrollTo(id) }
+                }
+                .frame(width: 174)
+                if let candidate {
+                    LookPreview(theme: candidate, slot: slot, saved: saved)
+                } else {
+                    Text("Select a theme to preview").foregroundStyle(.secondary).frame(maxWidth: .infinity)
+                }
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Apply") {
+                    if let candidate { apply(candidate.id); dismiss() }
+                }
+                .keyboardShortcut(.defaultAction).disabled(candidate == nil)
+            }
+        }
+        .padding(20).frame(width: 630, height: 320)
+        .onAppear { selection = current }
     }
 }
 

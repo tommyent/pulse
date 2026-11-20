@@ -45,6 +45,30 @@ struct UsageWindow: Codable, Identifiable {
     var samples: [UsageSample]? = nil   // the history behind `forecast`, from `AccountSnapshot.keepingHistory`
     var forecast: Date? = nil   // when this pace reaches the limit, set only if that's before the reset
 
+    enum CreditPeriod: String, Codable {
+        case weekly, monthly
+
+        var shareLabel: String { self == .weekly ? "of this week’s usage" : "of this month’s usage" }
+    }
+    var creditPeriod: CreditPeriod?
+    var productShareLabel: String {
+        if let creditPeriod { return creditPeriod.shareLabel }
+        // Earlier snapshots stored the billing period only in the total's label.
+        switch label {
+        case "Credits (weekly)": return CreditPeriod.weekly.shareLabel
+        case "Credits (monthly)": return CreditPeriod.monthly.shareLabel
+        default: return "of this period’s usage"
+        }
+    }
+
+    /// Product percentages and the period total are both fractions of the allowance.
+    func shareOfUsage(total: Double?) -> String? {
+        guard isShare, let total, total.isFinite, total > 0,
+              let used = percentUsed, used.isFinite, used >= 0, used <= total else { return nil }
+        let percent = used / total * 100
+        return percent > 0 && percent < 0.5 ? "<1%" : "\(Int(percent.rounded()))%"
+    }
+
     static let nearLimitPercent: Double = 98
     var isNearLimit: Bool { (percentUsed ?? 0) >= Self.nearLimitPercent }
 
