@@ -73,7 +73,7 @@ enum SettingsStateChecks {
         let quarterTurn = WallpaperCrop(focus: .zero, zoom: 2, rotated: true)
         assert(quarterTurn.rect(image: tall, panel: wide) == CGRect(x: 0, y: 0, width: 10, height: 40))
         assert(quarterTurn.rect(image: wide, panel: tall) == CGRect(x: 0, y: 0, width: 200, height: 40))
-        checkWallpaperRotation()
+        checkWallpaperRendering()
         let upperLeft = WallpaperCrop(focus: .zero, zoom: 2).rect(image: tall, panel: wide)
         let lowerRight = WallpaperCrop(focus: CGPoint(x: 1, y: 1), zoom: 2).rect(image: tall, panel: wide)
         assert(upperLeft == CGRect(x: 0, y: 0, width: 10, height: 2.5))
@@ -501,8 +501,8 @@ enum SettingsStateChecks {
         assert(floor[3] == 255 && floor[0] < 30 && floor[1] < 30 && floor[2] < 30, "an empty Groove channel is dark and opaque: \(floor)")
     }
 
-    /// A vertical strip with red at its top and blue at its bottom must run red to blue across the rail.
-    @MainActor private static func checkWallpaperRotation() {
+    /// Orientation on the rail and wallpaper coverage under the menu window’s native rim.
+    @MainActor private static func checkWallpaperRendering() {
         func bitmap(_ w: Int, _ h: Int) -> CGContext {
             CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
                       space: CGColorSpace(name: CGColorSpace.sRGB)!,
@@ -522,6 +522,17 @@ enum SettingsStateChecks {
         let right = context(result, x: 76, y: 12, width: 96)
         assert(left[0] > 240 && left[2] < 15 && right[0] < 15 && right[2] > 240,
                "the top of the upright wallpaper maps to the left of the rail: \(left), \(right)")
+
+        source.setFillColor(gray: 1, alpha: 1)
+        source.fill(CGRect(x: 0, y: 0, width: 24, height: 96))
+        let menu = WallpaperLayer(level: .liquid, picture: source.makeImage(), reading: nil,
+                                  shape: Rectangle(), drawsGlassRim: false)
+        let bright = ImageRenderer(content: menu.frame(width: 96, height: 24).background(.black)).cgImage!
+        result.draw(bright, in: CGRect(x: 0, y: 0, width: 96, height: 24))
+        for (x, y) in [(48, 0), (48, 23), (0, 12), (95, 12)] {
+            let pixel = context(result, x: x, y: y, width: 96)
+            assert(pixel == [255, 255, 255, 255], "wallpaper reaches each edge of the menu surface")
+        }
     }
 
     private static func context(_ ctx: CGContext, x: Int, y: Int, width: Int) -> [UInt8] {

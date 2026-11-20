@@ -27,17 +27,6 @@ final class Updates: NSObject, SPUStandardUserDriverDelegate {
     }
 }
 
-/// Disabled while Sparkle can't start a check (one is already running).
-struct CheckForUpdatesButton: View {
-    @State private var canCheck = false
-
-    var body: some View {
-        Button("Check for Updates…") { Updates.shared.controller.checkForUpdates(nil) }
-            .disabled(!canCheck)
-            .onReceive(Updates.shared.controller.updater.publisher(for: \.canCheckForUpdates)) { canCheck = $0 }
-    }
-}
-
 /// What this build is: "Pulse 0.5.0 (10)" at the foot of Settings and in the standard About panel. Builds that aren't
 /// releases carry their commit in Info.plist (`PulseCommit`, written by package.sh), shown after the build number,
 /// so two test builds of one version can be told apart.

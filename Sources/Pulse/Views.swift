@@ -1189,6 +1189,7 @@ struct MenuBarPopover: View {
     @Environment(\.pulseSkin) private var skin
     @Environment(\.openSettings) private var openSettings
     @Environment(\.dismiss) private var dismiss
+    @State private var canCheckForUpdates = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1233,36 +1234,57 @@ struct MenuBarPopover: View {
                     }
                 }
             }
-            Toggle("Show usage rings on desktop", isOn: $state.persisted.showOverlay).toggleStyle(.checkbox)
-            Toggle("Minimize the rings to their edge", isOn: state.tuckedBinding).toggleStyle(.checkbox)
-                .disabled(!state.persisted.showOverlay)
-                .accessibilityLabel("Minimize the rings to their edge")
-            HStack {
+            HStack(spacing: 4) {
                 Button {
                     Task { await state.refreshAll() }
                 } label: {
-                    if state.refreshing { ProgressView().controlSize(.small) }
-                    else { Text("Refresh") }
+                    ZStack {
+                        Label("Refresh usage", systemImage: "arrow.clockwise")
+                            .opacity(state.refreshing ? 0 : 1)
+                        if state.refreshing { ProgressView().controlSize(.small).accessibilityHidden(true) }
+                    }
+                    .frame(width: 28, height: 26)
                 }
+                .accessibilityLabel(state.refreshing ? "Refreshing usage" : "Refresh usage")
+                .help("Refresh usage")
                 Spacer()
-                Button("Settings…") {
+                Button {
                     showSettings(openSettings)
-                    dismiss()   // the popover would stay open behind Settings
-                }
-                Button("Quit") { NSApp.terminate(nil) }
-            }
-            HStack {
-                CheckForUpdatesButton()
-                Spacer()
-                Button("About Pulse") {
-                    AboutPulse.show()
                     dismiss()
+                } label: {
+                    Label("Settings…", systemImage: "gearshape").frame(width: 28, height: 26)
                 }
+                .help("Open Settings")
+                Menu {
+                    Toggle("Show rings on desktop", isOn: $state.persisted.showOverlay)
+                    Toggle("Minimize rings to edge", isOn: state.tuckedBinding)
+                        .disabled(!state.persisted.showOverlay)
+                    Divider()
+                    Button("About Pulse") {
+                        AboutPulse.show()
+                        dismiss()
+                    }
+                    Button("Check for Updates…") { Updates.shared.controller.checkForUpdates(nil) }
+                        .disabled(!canCheckForUpdates)
+                    Divider()
+                    Button("Quit Pulse") { NSApp.terminate(nil) }
+                } label: {
+                    Label("More", systemImage: "ellipsis.circle").frame(width: 28, height: 26)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("More actions")
             }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .foregroundStyle(.pulsePrimary)
         }
         .padding(14)
         .frame(width: 300)
         .pulseSurface(in: Rectangle(), bordered: false)   // the native menu window already supplies its rim
+        .ignoresSafeArea()   // the window reserves vertical insets even though the popover draws its own surface
+        .onReceive(Updates.shared.controller.updater.publisher(for: \.canCheckForUpdates)) { canCheckForUpdates = $0 }
         .environment(\.showsRemaining, state.showsRemaining)
     }
 }

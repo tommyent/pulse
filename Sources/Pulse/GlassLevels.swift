@@ -216,6 +216,7 @@ struct WallpaperLayer<S: Shape>: View {
     let reading: WallpaperReading?
     let shape: S
     var crop = WallpaperCrop()
+    var drawsGlassRim = true
 
     var body: some View {
         let wash = reading.map { ($0.light ? Color.black : .white).opacity($0.wash) } ?? .clear
@@ -223,8 +224,10 @@ struct WallpaperLayer<S: Shape>: View {
             if level == .liquid, picture != nil, !reduceTransparency {
                 // Native clear glass frosts its entire backdrop when Pulse resigns active.
                 shape.fill(wash).overlay {
-                    Color.clear.glassEffect(.clear, in: shape)
-                        .mask { shape.stroke(lineWidth: 8) }
+                    if drawsGlassRim {
+                        Color.clear.glassEffect(.clear, in: shape)
+                            .mask { shape.stroke(lineWidth: 8) }
+                    }
                 }
             } else {
                 Color.clear.background(wash, in: shape)
@@ -264,6 +267,7 @@ struct LevelPanel<S: Shape>: ViewModifier {
     let setting: GlassSetting
     let shape: S
     var crop = WallpaperCrop()
+    var drawsGlassRim = true
     @State private var size = CGSize.zero
 
     func body(content: Content) -> some View {
@@ -272,7 +276,7 @@ struct LevelPanel<S: Shape>: ViewModifier {
         content
             .environment(\.pulseSkin, reading.map(skin.reading) ?? skin)
             .environment(\.colorScheme, reading?.light == false ? .light : .dark)
-            .background { WallpaperLayer(level: setting.level, picture: picture?.image, reading: reading, shape: shape, crop: crop) }
+            .background { WallpaperLayer(level: setting.level, picture: picture?.image, reading: reading, shape: shape, crop: crop, drawsGlassRim: drawsGlassRim) }
             .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
     }
 }
