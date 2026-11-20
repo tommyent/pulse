@@ -5,9 +5,8 @@ import os
 
 private let log = Logger(subsystem: "io.github.tommyent.pulse", category: "glass")
 
-// Prototype (the owner, 2026-11-19): glass by levels. "Let the background do the work." Off, every theme draws as its
-// file says. At a level, every theme but Classic Solid keeps only its colours: each panel (rail, card, popover,
-// break screen) is a wallpaper under glass, and its words turn light or dark by how bright the picture is behind it.
+// At the Default finish each theme draws as its file says. Other finishes put wallpaper under glass and choose ink
+// for the picture's brightness. Classic Solid always draws its own surface.
 
 /// Settings › Appearance › Glass, from the clearest to the most blurred.
 enum GlassLevel: String, Codable, CaseIterable {

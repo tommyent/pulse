@@ -308,12 +308,11 @@ enum BreakChecks {
     static func holidays() {
         let cal = Calendar(identifier: .gregorian)
         func day(_ y: Int, _ m: Int, _ d: Int) -> Date { cal.date(from: DateComponents(year: y, month: m, day: d, hour: 9))! }
-        assert(BreakHoliday.on(day(2026, 10, 31), calendar: cal)?.name == "halloween")
-        assert(BreakHoliday.on(day(2026, 10, 30), calendar: cal) == nil && BreakHoliday.on(day(2026, 11, 1), calendar: cal) == nil)
+        assert(BreakHoliday.on(day(2026, 10, 31), calendar: cal) == nil)
         assert(BreakHoliday.on(day(2026, 11, 26), calendar: cal)?.name == "thanksgiving")   // fourth Thursday
         assert(BreakHoliday.on(day(2025, 11, 27), calendar: cal)?.name == "thanksgiving")
         assert(BreakHoliday.on(day(2026, 11, 19), calendar: cal) == nil && BreakHoliday.on(day(2026, 11, 27), calendar: cal) == nil)
-        assert(BreakHoliday.on(day(2026, 3, 3), calendar: cal, simulated: "halloween")?.name == "halloween")
+        assert(BreakHoliday.on(day(2026, 3, 3), calendar: cal, simulated: "thanksgiving")?.name == "thanksgiving")
         assert(BreakHoliday.on(day(2026, 10, 31), calendar: cal, simulated: "nope") == nil)
         assert(BreakHoliday.start(duration: 25.8, left: 20) == 25.8 - 20 && BreakHoliday.start(duration: 25.8, left: 300) == 0)
         assert(BreakHoliday.start(duration: 25.8, left: 14.5) == 25.8 - 14.5)   // the video loaded late: still the ending

@@ -1012,7 +1012,7 @@ struct OverlayView: View {
             ? AnyLayout(VStackLayout(alignment: tail == .leading ? .leading : .trailing, spacing: 10))
             : AnyLayout(HStackLayout(alignment: tail == .top ? .top : .bottom, spacing: 10))
         beside {
-            BreakPill(controller: breaks, tail: tail, onFrame: onPillFrame).withoutBackdrop()
+            BreakPill(controller: breaks, tail: tail, onFrame: onPillFrame)
             let shift = cardShift(state.petVisible ? "pet" : sideCard ?? ringKey(state.selected, pool: state.selectedPool))
             usageOrPetCard(tail: tail)
                 .offset(x: state.dock.isVertical ? 0 : shift, y: state.dock.isVertical ? shift : 0)

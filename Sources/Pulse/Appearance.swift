@@ -61,8 +61,6 @@ struct PulseSurface<S: Shape>: View {
     var body: some View {
         if let groove = skin.groove {
             GrooveSlab(groove: groove, shape: shape, floats: floats)
-        } else if skin.liquid == true {
-            Color.clear.liquidPanel(skin, in: shape)   // prototype: Settings' background; panels put their content inside (SurfaceModifier)
         } else {
             classic
         }
@@ -160,57 +158,6 @@ struct SettingsBackground: View {
     }
 }
 
-extension View {
-    /// Prototype, a liquid theme's panel: the content with the theme's halo behind it and its wash under it, inside the
-    /// system's glass (by default .clear: the most transparent, the strongest lensing at its edges; .regular frosts it
-    /// grey), which draws its own edge and light and adapts to what's behind; or on the older blur, which doesn't bend.
-    /// The halo is live shadows, not flattened like Groove's: a bitmap would lose the AppKit controls inside (the card's bars).
-    /// A backdrop, if the theme has one, lies behind the glass inside the panel, so the glass bends that known picture
-    /// instead of whatever is on the desktop.
-    @MainActor func liquidPanel<S: Shape>(_ skin: PulseSkin, in shape: S) -> some View {
-        let lit = (skin.halo ?? []).reduce(AnyView(self)) { view, s in AnyView(view.shadow(color: s.color(), radius: s.blur / 2, x: s.x, y: s.y)) }
-            .background(skin.wash?.color ?? .clear, in: shape)
-        return Group {
-            switch skin.liquidMaterial ?? .clear {
-            case .clear: lit.glassEffect(.clear, in: shape)
-            case .regular: lit.glassEffect(.regular, in: shape)
-            case .ultraThin: lit.background(.ultraThinMaterial, in: shape)
-            }
-        }
-        .background {
-            if let picture = ThemeBackdrop.picture(skin.backdrop) {
-                Color.clear
-                    .overlay { Image(decorative: picture.image, scale: 1).resizable().scaledToFill().blur(radius: picture.blur, opaque: true) }
-                    .clipShape(shape)
-            }
-        }
-    }
-}
-
-extension View {
-    /// Prototype: the break screen and its countdown keep no backdrop until the owner has seen them plain (desk-lead, 2026-11-19).
-    func withoutBackdrop() -> some View { transformEnvironment(\.pulseSkin) { $0.backdrop = nil } }
-}
-
-/// Prototype: a liquid theme's `backdrop`, "desktop": the Mac's desktop picture, blurred. Read once per picture,
-/// downsampled, and kept; a picture that can't be read draws nothing.
-@MainActor enum ThemeBackdrop {
-    private static var cache: [String: CGImage] = [:]
-
-    static func picture(_ name: String?) -> (image: CGImage, blur: CGFloat)? {
-        guard name == "desktop", let url = NSScreen.main.flatMap({ NSWorkspace.shared.desktopImageURL(for: $0) }) else { return nil }
-        let blur: CGFloat = 28
-        if let image = cache[url.path] { return (image, blur) }
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
-                                                                          kCGImageSourceCreateThumbnailWithTransform: true,
-                                                                          kCGImageSourceThumbnailMaxPixelSize: 1600] as CFDictionary)
-        else { return nil }
-        cache[url.path] = image   // shortcut: a desktop picture replaced under the same name shows after a relaunch
-        return (image, blur)
-    }
-}
-
 private struct SurfaceModifier<S: Shape>: ViewModifier {
     @Environment(\.pulseSkin) private var skin
     @Environment(\.glassSetting) private var glass
@@ -222,8 +169,6 @@ private struct SurfaceModifier<S: Shape>: ViewModifier {
     func body(content: Content) -> some View {
         if let glass {
             content.modifier(LevelPanel(setting: glass, shape: shape, crop: followsWallpaperCrop ? glass.wallpaperCrop : nil, readingSize: readingSize, drawsGlassRim: bordered))
-        } else if skin.liquid == true {
-            content.liquidPanel(skin, in: shape)
         } else {
             painted(content)
         }

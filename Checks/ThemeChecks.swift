@@ -233,25 +233,19 @@ enum ThemeChecks {
         expectRefused(.classicSolid, "appearance", "light", mentioning: ["appearance", "dark only"])
         expectRefused(.classicSolid, "surface", "#F4F4F4", mentioning: ["appearance", "dark only"])   // "any" reads as light: a flat light theme
         expectRefused(.groove, "glass", true, mentioning: ["glass", "flat theme only"])
-        // the glass prototype's halo: liquid themes only, a bounded shadow list
-        expectRefused(.classicSolid, "halo", [[0, 0, 3, "#000000", 0.6]], mentioning: ["halo", "liquid theme only"])
-        var liquid = PulseThemeFile.classicSolid
-        liquid.look.liquid = true
-        expectRefused(liquid, "halo", [[0, 0, 40, "#000000", 0.6]], mentioning: ["halo[0] blur", "outside"])
-        expectRefused(.classicSolid, "wash", "#8FA0FF29", mentioning: ["wash", "liquid theme only"])
-        expectRefused(.classicSolid, "liquidMaterial", "regular", mentioning: ["liquidMaterial", "liquid theme only"])
-        expectRefused(liquid, "liquidMaterial", "frosted", mentioning: ["liquidMaterial"])
-        liquid.look.halo = [[0, 0, 3, "#000000", 0.6], [0, 0, 10, "#000000", 0.35]]
-        expectRefused(.classicSolid, "backdrop", "desktop", mentioning: ["backdrop", "liquid theme only"])
-        for name in ["picture.png", "../secret.png", "/tmp/a.png", "Desktop"] {
-            expectRefused(liquid, "backdrop", name, mentioning: ["backdrop", "only \"desktop\""])
-        }
-        liquid.look.wash = "srgb:0.56,0.63,1,0.16"
-        liquid.look.backdrop = "desktop"
-        for material in [nil, PulseSkin.LiquidMaterial.clear, .regular, .ultraThin] {
-            liquid.look.liquidMaterial = material
-            assert(ThemeStore.decode(ThemeStore.file(liquid)) == .success(liquid), "a liquid theme's halo, wash and \(String(describing: material)) round-trip")
-        }
+        var legacy = PulseThemeFile.classicSolid
+        legacy.appearance = .light
+        legacy.look.surface = "#F4F4F4"
+        var legacyJSON = try! JSONSerialization.jsonObject(with: edited(legacy, "liquid", true)) as! [String: Any]
+        legacyJSON["halo"] = [[0, 0, 3, "#000000", 0.6]]
+        legacyJSON["liquidMaterial"] = "ultraThin"
+        legacyJSON["wash"] = "#8FA0FF29"
+        legacyJSON["backdrop"] = "desktop"
+        assert(ThemeStore.decode(try! JSONSerialization.data(withJSONObject: legacyJSON)) == .success(legacy),
+               "a flat light theme that used the retired glass keys still loads with its own colours")
+        assert(ThemeStore.decode(edited(.classicSolid, "liquid", false)) == .success(.classicSolid))
+        legacyJSON["liqiud"] = true
+        assert(refusal(try! JSONSerialization.data(withJSONObject: legacyJSON), "a misspelled legacy key").contains("liqiud: not a key"))
         // author and description: optional, kept, bounded
         var credited = PulseThemeFile.groove
         credited.author = "Someone"

@@ -113,6 +113,8 @@ are refused, so a typo can't pass silently.
 
 ## The look
 
+Set a wallpaper and choose Liquid, Glass or Frosted under **Settings → Appearance**. Older theme files still load with `liquid`, `halo`, `liquidMaterial`, `wash` or `backdrop` present. Pulse ignores those keys.
+
 | Key | Type | What it is |
 |---|---|---|
 | `accents.claude`, `.codex`, `.grok`, `.antigravity` | colour | each account's ring, bar and tuck tick |
@@ -121,11 +123,6 @@ are refused, so a typo can't pass silently.
 | `accents.breakBar` | colour, optional | the break countdown's ring, for the default break colour |
 | `surface` | colour | a flat theme's rail, cards and popover; unused by a Groove theme, whose panels draw `groove.slab` (set it to the slab's colour) |
 | `glass` | true, optional | a flat theme's panels on untinted dark Liquid Glass instead of `surface` (Classic Glass); flat themes only |
-| `liquid` | true, optional | prototype: a flat theme's panels are the system's clear Liquid Glass with nothing over it, light or dark (`appearance`); `ink` and `accents` alone must read on whatever is behind, and `surface` only stands for it in the contrast checks |
-| `halo` | shadow list, optional | prototype, `liquid` themes only: soft shadows in points (offsets to ±8, blur to 16) behind everything on the glass, text, rings and icons, so the ink reads on either side of what shows through; e.g. `[0, 0, 3, "#000000", 0.6]` behind white text |
-| `liquidMaterial` | text, optional | prototype, `liquid` themes only: `clear` (left out: the most transparent Liquid Glass, the strongest bending at its edges), `regular` (Liquid Glass frosted grey), or `ultraThin` (the older blur, which doesn't bend what's behind) |
-| `wash` | colour, optional | prototype, `liquid` themes only: a colour laid on the glass under everything, its alpha the strength, e.g. `srgb:0.56,0.63,1,0.16` or `#8FA0FF29` for a light violet-blue tint |
-| `backdrop` | text, optional | prototype, `liquid` themes only: a picture drawn inside the panels under the glass, so the glass bends it instead of the desktop: `desktop` (the Mac's own desktop picture, blurred), the only value |
 | `track` | colour | a flat theme's empty ring track |
 | `ink.primary` | colour, optional | numbers and titles; left out: the system's label colour |
 | `ink.secondary` | colour | captions |

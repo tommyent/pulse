@@ -1,3 +1,7 @@
+## Themes and finishes
+
+Theme files define the Default finish. Liquid, Glass and Frosted are selected in Settings → Appearance and implemented in `GlassLevels.swift`. The theme loader accepts retired glass keys in old files for compatibility. `ThemeGuide.swift` generates the `AGENTS.md` that Pulse puts in the Themes folder.
+
 ## Lessons
 
 - Inspect ring icons and colors in both appearances, collapsed and expanded, with a usage card selected, key and inactive, over white, dark and busy backgrounds. A Settings switch or screenshot alone does not validate live display rendering.

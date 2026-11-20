@@ -257,10 +257,14 @@ extension PulseThemeFile {
             if n.intValue < 1 { return .failure(Problem(text: "- format: \(n.intValue) isn't a format; this Pulse reads format \(current)")) }
         default: return .failure(Problem(text: "- format: should be a whole number, \(current)"))
         }
-        var lines = unknownKeys(raw).map { "- \($0): not a key Pulse knows (a typo, or a newer Pulse's)" }
+        // Read old theme files without restoring their retired rendering options.
+        let retiredKeys: Set<String> = ["liquid", "halo", "liquidMaterial", "wash", "backdrop"]
+        let legacyLiquid = (object["liquid"] as? Bool) == true
+        var lines = unknownKeys(object.filter { !retiredKeys.contains($0.key) })
+            .map { "- \($0): not a key Pulse knows (a typo, or a newer Pulse's)" }
         do {
             let file = try JSONDecoder().decode(PulseThemeFile.self, from: data)
-            lines += file.problems().map { "- \($0)" }
+            lines += file.check(allowsFlatLight: legacyLiquid).problems.map { "- \($0)" }
             return lines.isEmpty ? .success(file) : .failure(Problem(text: Self.bounded(lines)))
         } catch let error as DecodingError {
             return .failure(Problem(text: Self.bounded(lines + ["- \(describe(error))"])))
@@ -286,11 +290,6 @@ extension PulseThemeFile {
         var sample = PulseThemeFile.grooveWhite
         sample.author = "a"
         sample.look.glass = true
-        sample.look.liquid = true
-        sample.look.halo = [[0, 0, 4, "#000000", 0.6]]
-        sample.look.liquidMaterial = .ultraThin
-        sample.look.wash = "#FFFFFF"
-        sample.look.backdrop = "desktop"
         sample.look.groove?.porthole = PulseSkin.grooveBlack.groove?.porthole
         var keys = Set<[String]>()
         collectKeys(try! JSONSerialization.jsonObject(with: JSONEncoder().encode(sample)), []) { keys.insert($0) }
@@ -395,14 +394,11 @@ extension PulseThemeFile {
 // MARK: - checks on a theme's values
 
 extension PulseThemeFile {
-    /// Everything wrong with a decoded theme, each as "key: why". Empty: Pulse may draw it.
-    func problems() -> [String] { check().problems }
-
     /// What's hard to read in a theme that can be used: each pair under the floor, with where. Empty for the built-ins.
     func warnings() -> [String] { check().warnings }
 
     /// Problems (the theme can't be used) and warnings (it can, but some text or colour is hard to read).
-    func check() -> (problems: [String], warnings: [String]) {
+    func check(allowsFlatLight: Bool = false) -> (problems: [String], warnings: [String]) {
         var out: [String] = [], warnings: [String] = []
         func text(_ key: String, _ value: String?, max: Int, lines: Bool = false) {
             guard let value else { return }
@@ -415,16 +411,10 @@ extension PulseThemeFile {
         text("name", name, max: 40)
         text("author", author, max: 80)
         text("description", description, max: 300, lines: true)
-        if look.groove == nil, look.liquid != true, scheme == .light {
+        if look.groove == nil, !allowsFlatLight, scheme == .light {
             out.append("appearance: a flat theme (no groove) uses Classic's drawing, which is dark only; give it a dark surface, or groove")
         }
         if look.glass != nil, look.groove != nil { out.append("glass: for a flat theme only; a theme with groove draws its own slab") }
-        if look.liquid != true {
-            for (key, set) in [("halo", look.halo != nil), ("liquidMaterial", look.liquidMaterial != nil), ("wash", look.wash != nil),
-                                   ("backdrop", look.backdrop != nil)] where set {
-                out.append("\(key): for a liquid theme only")
-            }
-        }
         out += look.problems("", appearance: scheme, warnings: &warnings)
         return (out, warnings)
     }
@@ -447,8 +437,6 @@ extension PulseSkin {
             for (i, s) in list.enumerated() { shadow("\(path)[\(i)]", s, reach: reach, blur: blur) }
         }
         range("stale", stale, 0 ... 1)
-        if let halo { shadows("halo", halo, reach: 8, blur: 16) }
-        if let backdrop, backdrop != "desktop" { out.append("\(at)backdrop: only \"desktop\" (the Mac's desktop picture)") }
 
         // the contrast floor
         let assumedInk: SkinColor = appearance == .dark ? "#FFFFFF" : "#000000"   // the system's label colour

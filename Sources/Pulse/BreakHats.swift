@@ -13,7 +13,6 @@ struct BreakOutfit: Hashable {
     static let asleep = BreakOutfit(hat: .nightcap)
     static let working = BreakOutfit(hat: .hardHat, prop: .wrench)
     static let finished = BreakOutfit(hat: .party)
-    static let flying = BreakOutfit(hat: .propeller)
 
     /// The mischief a working agent may wear instead of its hard hat; a holiday week has its own.
     static func dressUp(_ week: BreakHatWeek?) -> [BreakOutfit] {

@@ -399,7 +399,7 @@ final class BreakController: ObservableObject {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
         let hosting = OverlayHostingView(rootView: BreakPill(controller: self, tail: .trailing).padding(12)
-            .withoutBackdrop().pulsePresentation(state))
+            .pulsePresentation(state))
         panel.contentView = hosting
         let size = CGSize(width: 220, height: 80)
         panel.setFrame(CGRect(x: screen.maxX - size.width - 4, y: screen.midY - size.height / 2, width: size.width, height: size.height), display: false)
@@ -432,7 +432,7 @@ final class BreakController: ObservableObject {
             panel.contentView = OverlayHostingView(rootView: BreakOverlayView(
                 controller: self, size: screen.frame.size,
                 agents: agents && screen == main, holidayScreen: screen == main, showPet: state.showsPet,
-                petOnRight: petOnRight).withoutBackdrop().pulsePresentation(state))
+                petOnRight: petOnRight).pulsePresentation(state))
             panel.setFrame(screen.frame, display: false)
             panel.orderFrontRegardless()
             panels.append(panel)

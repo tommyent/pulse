@@ -132,8 +132,7 @@ struct BreakOverlayView: View {
         let s = min(1.3, max(0.7, size.width / 1440))   // the mockup's sizes, scaled to this screen
         let holiday = holidayScreen ? controller.holiday : nil
         let colors = holiday.map { (glow: $0.glow, bar: $0.bar) } ?? BreakColor.pair(controller.settings.color)
-        // prototype: at a glass level, Pulse's own dark picture under the glass instead of the apps, whatever the rail's
-        // wallpaper (the owner, 2026-11-19), in the words it asks for
+        // With a glass finish, the break screen uses Pulse's own dark picture and ink suited to it.
         let breakGlass = glass.map { GlassSetting(level: $0.level, wallpaper: "pulse", light: false) }
         let picture = breakGlass.flatMap(Wallpaper.picture)
         let reading = breakGlass.flatMap { g in picture.flatMap { WallpaperReader.read($0, size: size, level: g.level) } }

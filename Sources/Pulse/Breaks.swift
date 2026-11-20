@@ -94,9 +94,6 @@ struct BreakHoliday: Equatable {
     static func == (a: Self, b: Self) -> Bool { a.name == b.name }
 
     static let all = [
-        BreakHoliday(name: "halloween", video: "holiday-halloween", glow: 0xE8822A, bar: 0xFFB050) {
-            $0.month == 10 && $0.day == 31
-        },
         // US Thanksgiving: the fourth Thursday of November
         BreakHoliday(name: "thanksgiving", video: "holiday-thanksgiving", glow: 0xC8553D, bar: 0xE8B04A) {
             $0.month == 11 && $0.weekday == 5 && $0.weekdayOrdinal == 4

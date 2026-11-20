@@ -17,7 +17,7 @@ final class AppState: ObservableObject {
         var mode: AppearanceMode?   // nil = not chosen yet: see `themeChoice`
         var lightTheme: String?     // a theme's id: a built-in's or a theme file's name (`ThemeStore`)
         var darkTheme: String?
-        var glassLevel: GlassLevel?   // prototype, nil = off: `GlassLevels.swift`
+        var glassLevel: GlassLevel?   // nil = the theme's default finish
         var wallpaperLight: String? {
             didSet {
                 if wallpaperLight != oldValue { setRailCrop(WallpaperCrop(), light: true) }
