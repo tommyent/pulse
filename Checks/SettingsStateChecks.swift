@@ -79,7 +79,7 @@ enum SettingsStateChecks {
         assert(upperLeft == CGRect(x: 0, y: 0, width: 10, height: 2.5))
         assert(lowerRight == CGRect(x: 10, y: 97.5, width: 10, height: 2.5))
         assert(WallpaperCrop(zoom: 0).zoom == 1 && WallpaperCrop(zoom: 100).zoom == 4)
-        // Reusing the same image, size and finish must still sample the new part of the picture.
+        // Reusing the same image and size must still sample the new part of the picture.
         let split = CGContext(data: nil, width: 200, height: 40, bitsPerComponent: 8, bytesPerRow: 800,
                               space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
         split.setFillColor(CGColor(gray: 0, alpha: 1))
@@ -87,11 +87,11 @@ enum SettingsStateChecks {
         split.setFillColor(CGColor(gray: 1, alpha: 1))
         split.fill(CGRect(x: 100, y: 0, width: 100, height: 40))
         let picture = (image: split.makeImage()!, key: "split-wallpaper-check")
-        assert(WallpaperReader.read(picture, size: tall, level: .liquid, crop: WallpaperCrop(focus: .zero))?.light == true)
-        assert(WallpaperReader.read(picture, size: tall, level: .liquid, crop: WallpaperCrop(focus: CGPoint(x: 1, y: 0)))?.light == false)
+        assert(WallpaperReader.read(picture, size: tall, crop: WallpaperCrop(focus: .zero))?.light == true)
+        assert(WallpaperReader.read(picture, size: tall, crop: WallpaperCrop(focus: CGPoint(x: 1, y: 0)))?.light == false)
         let focus = CGPoint(x: 0.23, y: 0.5)
-        let mixed = WallpaperReader.read(picture, size: wide, level: .liquid, crop: WallpaperCrop(focus: focus))!
-        let black = WallpaperReader.read(picture, size: wide, level: .liquid, crop: WallpaperCrop(focus: focus, zoom: 4))!
+        let mixed = WallpaperReader.read(picture, size: wide, crop: WallpaperCrop(focus: focus))!
+        let black = WallpaperReader.read(picture, size: wide, crop: WallpaperCrop(focus: focus, zoom: 4))!
         assert(mixed.wash > 0 && black.light && black.wash == 0)
         assert(levelledBack.glass(for: classicSolid, slot: .light) == nil)
 
@@ -498,7 +498,7 @@ enum SettingsStateChecks {
         assert(floor[3] == 255 && floor[0] < 30 && floor[1] < 30 && floor[2] < 30, "an empty Groove channel is dark and opaque: \(floor)")
     }
 
-    /// Orientation on the rail and wallpaper coverage under the menu window’s native rim.
+    /// Orientation on the rail and wallpaper coverage under the menu material.
     @MainActor private static func checkWallpaperRendering() {
         func bitmap(_ w: Int, _ h: Int) -> CGContext {
             CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
@@ -522,8 +522,7 @@ enum SettingsStateChecks {
 
         source.setFillColor(gray: 1, alpha: 1)
         source.fill(CGRect(x: 0, y: 0, width: 24, height: 96))
-        let menu = WallpaperLayer(level: .liquid, picture: source.makeImage(), reading: nil,
-                                  shape: Rectangle(), drawsGlassRim: false)
+        let menu = WallpaperLayer(level: .liquid, picture: source.makeImage(), reading: nil, shape: Rectangle())
         let bright = ImageRenderer(content: menu.frame(width: 96, height: 24).background(.black)).cgImage!
         result.draw(bright, in: CGRect(x: 0, y: 0, width: 96, height: 24))
         for (x, y) in [(48, 0), (48, 23), (0, 12), (95, 12)] {
@@ -538,7 +537,7 @@ enum SettingsStateChecks {
         for (width, height) in [(40, 180), (180, 64), (80, 190)] {
             let surface = Color.clear.frame(width: CGFloat(width), height: CGFloat(height))
                 .pulseSurface(in: Rectangle(), bordered: false).environment(\.glassSetting, glass)
-            let expected = WallpaperLayer(level: .liquid, picture: picture, reading: nil, shape: Rectangle(), crop: crop, drawsGlassRim: false)
+            let expected = WallpaperLayer(level: .liquid, picture: picture, reading: nil, shape: Rectangle(), crop: crop)
             func samples(_ view: some View) -> [[UInt8]] {
                 let cg = ImageRenderer(content: view.frame(width: CGFloat(width), height: CGFloat(height))).cgImage!
                 let buffer = bitmap(width, height)
@@ -546,11 +545,11 @@ enum SettingsStateChecks {
                 return [1, 2, 3].map { n in context(buffer, x: width * n / 4, y: height * n / 4, width: width) }
             }
             assert(samples(surface) == samples(expected), "every linked surface must render the selected detail")
-            let centered = WallpaperLayer(level: .liquid, picture: picture, reading: nil, shape: Rectangle(), drawsGlassRim: false)
+            let centered = WallpaperLayer(level: .liquid, picture: picture, reading: nil, shape: Rectangle())
             assert(samples(expected) != samples(centered), "the chosen fixture must distinguish a centered crop")
         }
 
-        // Resizing a panel magnifies the same softened detail. The transition on the photograph stays proportional.
+        // ImageRenderer checks the wallpaper and veil. The native material needs a live window.
         let edge = bitmap(512, 512)
         edge.setFillColor(gray: 0, alpha: 1)
         edge.fill(CGRect(x: 0, y: 0, width: 512, height: 512))
@@ -559,15 +558,19 @@ enum SettingsStateChecks {
         let edgeImage = edge.makeImage()!
         func transition(_ level: GlassLevel, width: Int, height: Int) -> Int {
             let surface = WallpaperLayer(level: level, picture: edgeImage, reading: nil, shape: Rectangle(),
-                                         crop: WallpaperCrop(zoom: 2), usesWallpaperFinish: true, drawsGlassRim: false)
+                                         crop: WallpaperCrop(zoom: 2), usesWallpaperFinish: true)
             let cg = ImageRenderer(content: surface.frame(width: CGFloat(width), height: CGFloat(height))).cgImage!
             let buffer = bitmap(width, height)
             buffer.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
-            return (0..<width).filter { (24...231).contains(context(buffer, x: $0, y: height / 2, width: width)[0]) }.count
+            let row = (0..<width).map { Int(context(buffer, x: $0, y: height / 2, width: width)[0]) }
+            let dark = row[width / 4], bright = row[3 * width / 4]
+            assert(bright - dark > 150, "both sides of the wallpaper edge stay visible in \(level): \(dark), \(bright)")
+            let threshold = (bright - dark) / 10
+            return row.filter { $0 > dark + threshold && $0 < bright - threshold }.count
         }
         let resting = GlassLevel.allCases.map { transition($0, width: 96, height: 320) }
         let hovered = GlassLevel.allCases.map { transition($0, width: 192, height: 640) }
-        assert(resting[0] < resting[1] && resting[1] < resting[2], "each finish has a distinct edge: \(resting)")
+        assert(resting.allSatisfy { $0 <= 2 }, "the wallpaper edge stays sharp in every finish: \(resting)")
         for (small, big) in zip(resting, hovered) {
             assert(abs(2 * small - big) <= 2, "hover must retain the finish of the same source detail: \(resting), \(hovered)")
         }

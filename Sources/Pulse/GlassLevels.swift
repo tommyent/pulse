@@ -8,12 +8,12 @@ private let log = Logger(subsystem: "io.github.tommyent.pulse", category: "glass
 // At the Default finish each theme draws as its file says. Other finishes put wallpaper under glass and choose ink
 // for the picture's brightness. Classic Solid always draws its own surface.
 
-/// Settings › Appearance › Finish, from clear glass to the strongest tint.
+/// Settings › Appearance › Finish, from clear glass to regular glass with a frosted veil.
 enum GlassLevel: String, Codable, CaseIterable {
     case liquid, glass, frosted
     var name: String { rawValue.capitalized }
     var material: Glass { self == .liquid ? .clear : .regular }
-    var tintOpacity: Double { switch self { case .liquid: 0; case .glass: 0.06; case .frosted: 0.18 } }
+    var frostOpacity: Double { self == .frosted ? 0.14 : 0 }
 }
 
 /// What the panels draw at a level: nil, the person's theme as its file says.
@@ -193,56 +193,43 @@ extension PulseSkin {
 
 /// The wallpaper under a level's glass, filling `shape`, with the reading's wash over the picture.
 struct WallpaperLayer<S: Shape>: View {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     let level: GlassLevel
     let picture: CGImage?
     let reading: WallpaperReading?
     let shape: S
     var crop = WallpaperCrop()
     var usesWallpaperFinish = false
-    var drawsGlassRim = true
 
     var body: some View {
-        // The tint stays visible in inactive panels and reinforces the ink picked from the photograph.
         let wash = usesWallpaperFinish ? 0 : reading?.wash ?? 0
-        let tint = (reading?.light == false ? Color.white : .black).opacity(wash + (1 - wash) * level.tintOpacity)
-        Group {
-            if (level == .liquid || usesWallpaperFinish), picture != nil, !reduceTransparency {
-                // A full native material changes the photograph when the host window loses focus.
-                shape.fill(tint).overlay {
-                    if drawsGlassRim {
-                        Color.clear.glassEffect(level.material, in: shape)
-                            .mask { shape.stroke(lineWidth: 8) }
-                    }
-                }
-            } else {
-                Color.clear.background(tint, in: shape)
-                    .glassEffect(level.material, in: shape)
-            }
-        }
-        .background {
-            if let picture {
-                Color.clear
-                    .overlay {
-                        GeometryReader { proxy in
-                            let source = CGSize(width: picture.width, height: picture.height)
-                            let visible = crop.rect(image: source, panel: proxy.size)
-                            if visible.width > 0 {
-                                let unturned = crop.sizeBeforeRotation(proxy.size)
-                                let scale = unturned.width / visible.width
-                                Image(decorative: picture, scale: 1).resizable().interpolation(.high)
-                                    .frame(width: source.width * scale, height: source.height * scale)
-                                    .offset(x: -visible.minX * scale, y: -visible.minY * scale)
-                                    .frame(width: unturned.width, height: unturned.height, alignment: .topLeading)
-                                    .rotationEffect(.degrees(crop.rotated ? -90 : 0))
-                                    .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+        Color.clear.glassEffect(level.material, in: shape)
+            .materialActiveAppearance(.active)
+            // Keep the frost above the material so it doesn't depend on a key window's glass tint.
+            .overlay { shape.fill(.white.opacity(level.frostOpacity)) }
+            .overlay { shape.fill((reading?.light == false ? Color.white : .black).opacity(wash)) }
+            .background {
+                if let picture {
+                    Color.clear
+                        .overlay {
+                            GeometryReader { proxy in
+                                let source = CGSize(width: picture.width, height: picture.height)
+                                let visible = crop.rect(image: source, panel: proxy.size)
+                                if visible.width > 0 {
+                                    let unturned = crop.sizeBeforeRotation(proxy.size)
+                                    let scale = unturned.width / visible.width
+                                    Image(decorative: picture, scale: 1).resizable().interpolation(.high)
+                                        .frame(width: source.width * scale, height: source.height * scale)
+                                        .offset(x: -visible.minX * scale, y: -visible.minY * scale)
+                                        .frame(width: unturned.width, height: unturned.height, alignment: .topLeading)
+                                        .rotationEffect(.degrees(crop.rotated ? -90 : 0))
+                                        .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                                }
                             }
                         }
-                    }
-                    .clipShape(shape)
+                        .clipShape(shape)
+                }
             }
-        }
-        .environment(\.appearsActive, true)
+            .environment(\.appearsActive, true)
     }
 }
 
@@ -254,7 +241,6 @@ struct LevelPanel<S: Shape>: ViewModifier {
     let shape: S
     var crop: WallpaperCrop?
     var readingSize: CGSize?
-    var drawsGlassRim = true
     @State private var size = CGSize.zero
 
     func body(content: Content) -> some View {
@@ -273,7 +259,7 @@ struct LevelPanel<S: Shape>: ViewModifier {
                     WallpaperLabelContrast(labels: labels, lightInk: reading.light)
                 }
             }
-            .background { WallpaperLayer(level: setting.level, picture: picture?.image, reading: reading, shape: shape, crop: framing, usesWallpaperFinish: usesWallpaperFinish, drawsGlassRim: drawsGlassRim) }
+            .background { WallpaperLayer(level: setting.level, picture: picture?.image, reading: reading, shape: shape, crop: framing, usesWallpaperFinish: usesWallpaperFinish) }
             .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
     }
 }

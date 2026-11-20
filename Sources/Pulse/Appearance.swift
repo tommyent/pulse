@@ -168,7 +168,7 @@ private struct SurfaceModifier<S: Shape>: ViewModifier {
 
     func body(content: Content) -> some View {
         if let glass {
-            content.modifier(LevelPanel(setting: glass, shape: shape, crop: followsWallpaperCrop ? glass.wallpaperCrop : nil, readingSize: readingSize, drawsGlassRim: bordered))
+            content.modifier(LevelPanel(setting: glass, shape: shape, crop: followsWallpaperCrop ? glass.wallpaperCrop : nil, readingSize: readingSize))
         } else {
             painted(content)
         }
