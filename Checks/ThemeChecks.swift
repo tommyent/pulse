@@ -3,7 +3,18 @@ import Combine
 import SwiftUI
 
 enum ThemeChecks {
+    /// The break screen's words are white (BreakViews), so every built-in's break lies on a dark ground (pulse-7c5):
+    /// Glass's dark veil, or a surface or slab no lighter than the 0.18 luminance where white text drops below 4.5:1.
+    @MainActor static func checkBreakGround() {
+        let light = PulseThemeFile.builtIn.filter { theme in
+            let g = theme.file.look.breakGround
+            return g.glass != true && (g.groove?.slab ?? g.surface).luminance > 0.18
+        }.map(\.id)
+        assert(light.isEmpty, "these themes' break screens are light under white words: \(light)")
+    }
+
     @MainActor static func run() {
+        checkBreakGround()
         checkBuiltIns()
         checkRefusals()
         checkFormat()

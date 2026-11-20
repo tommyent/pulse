@@ -140,7 +140,7 @@ struct BreakOverlayView: View {
             if let glass {
                 WallpaperLayer(level: glass.level, picture: picture?.image, reading: reading, shape: Rectangle())
             } else {
-                PulseSurface(shape: Rectangle())
+                PulseSurface(shape: Rectangle()).environment(\.pulseSkin, skin.breakGround)
             }
             if holiday != nil {
                 if let still = controller.holidayStill {

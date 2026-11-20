@@ -113,6 +113,9 @@ struct PulseSkin: Codable, Equatable {
         }
     }
     var battery: Color { accents.battery?.color ?? .green }
+    /// The break screen's ground. Its words are white (BreakViews), so a light theme's break lies on Classic's dark
+    /// instead: Glass's veil keeps any surface dark, a light surface or slab doesn't.
+    var breakGround: PulseSkin { glass != true && (groove?.slab ?? surface).luminance > 0.18 ? .classic : self }
     var primary: Color { ink.primary?.color ?? .primary }
     var secondary: Color { ink.secondary.color }
     var alert: Color { ink.alert?.color ?? .red }
