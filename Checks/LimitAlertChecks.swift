@@ -12,6 +12,19 @@ enum LimitAlertChecks {
         for id in ["period_all", "weekly_all", "session_5h", "weekly_model_Fable", "gemini-weekly", "session_grok-4"] {
             assert(!window(id).isShare && window(id).showsLeft(true) && !window(id).showsLeft(false), id)
         }
+        let now = Date(timeIntervalSinceReferenceDate: 814_567_884)
+        let share = UsageWindow(id: "period_GrokBuild", label: "Grok Build", percentUsed: 98.5, resetsAt: nil)
+        let total = UsageWindow(id: "period_all", label: "Credits (weekly)", percentUsed: 99, resetsAt: now.addingTimeInterval(3600))
+        let grok = AccountSnapshot(id: .grok, displayName: "Grok", planLabel: "", health: .ok,
+                                   windows: [total, share], fetchedAt: now, source: .mock)
+        var alerted: [String: Date] = [:]
+        assert(grok.newlyNearLimit(alerted: &alerted, now: now).map(\.id) == [total.id], "only the credit allowance alerts")
+        assert(alerted.keys.sorted() == ["grok.period_all", "grok.period_all@99"])
+        assert(![share].contains(where: \.isNearLimit), "a product share cannot show the near-limit badge")
+        for remaining in [false, true] {
+            let spoken = grok.windows.spokenValue(remaining: remaining, now: now)
+            assert(spoken.contains("Credits (weekly)") && spoken.contains("near its limit") && !spoken.contains("Grok Build"), spoken)
+        }
         print("Share checks passed: what's left turns limits around, never a product's share of them")
     }
 

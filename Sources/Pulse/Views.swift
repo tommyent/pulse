@@ -445,7 +445,7 @@ struct WindowRow: View {
                 .embossed(skin, size: 11)
             if let reading {
                 let value = reading.value
-                let alert = !window.isShare && window.isNearLimit
+                let alert = window.isNearLimit
                 let fill = alert ? Color.red : tint.opacity(dim ? 0.5 : 1)
                 if let groove = skin.groove {
                     GrooveBar(groove: groove, value: value,

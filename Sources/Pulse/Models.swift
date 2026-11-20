@@ -70,7 +70,7 @@ struct UsageWindow: Codable, Identifiable {
     }
 
     static let nearLimitPercent: Double = 98
-    var isNearLimit: Bool { (percentUsed ?? 0) >= Self.nearLimitPercent }
+    var isNearLimit: Bool { !isShare && (percentUsed ?? 0) >= Self.nearLimitPercent }
 
     /// A product's share of Grok's credits, not a limit of its own: "66% left" of Grok Build would be wrong with 44% of the credits left.
     var isShare: Bool { id.hasPrefix("period_") && id != "period_all" }
@@ -221,7 +221,7 @@ struct AccountSnapshot: Codable, Identifiable {
     func newlyNearLimit(alerted: inout [String: Date], now: Date = .now) -> [UsageWindow] {
         guard health == .ok else { return [] }   // cached and stale numbers never alert
         var crossed: [UsageWindow] = []
-        for w in windows {
+        for w in windows where !w.isShare {
             guard let p = w.percentUsed else { continue }
             let keys = [98: alertKey(w), 99: alertKey(w) + "@99", 100: alertKey(w) + "@100"]
             if p < 95, id != .grok { for k in keys.values { alerted[k] = nil }; continue }
