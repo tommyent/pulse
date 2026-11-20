@@ -178,6 +178,7 @@ extension PulseSkin {
 
 /// The wallpaper under a level's glass, filling `shape`, with the reading's wash over the picture.
 struct WallpaperLayer<S: Shape>: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     let level: GlassLevel
     let picture: CGImage?
     let reading: WallpaperReading?
@@ -185,17 +186,26 @@ struct WallpaperLayer<S: Shape>: View {
 
     var body: some View {
         let wash = reading.map { ($0.light ? Color.black : .white).opacity($0.wash) } ?? .clear
-        Color.clear
-            .background(wash, in: shape)
-            .glassEffect(level.material, in: shape)
-            .background {
-                if let picture {
-                    Color.clear
-                        .overlay { Image(decorative: picture, scale: 1).resizable().scaledToFill().blur(radius: level.blur, opaque: true) }
-                        .clipShape(shape)
+        Group {
+            if level == .liquid, picture != nil, !reduceTransparency {
+                // Native clear glass frosts its entire backdrop when Pulse resigns active.
+                shape.fill(wash).overlay {
+                    Color.clear.glassEffect(.clear, in: shape)
+                        .mask { shape.stroke(lineWidth: 8) }
                 }
+            } else {
+                Color.clear.background(wash, in: shape)
+                    .glassEffect(level.material, in: shape)
             }
-            .environment(\.appearsActive, true)
+        }
+        .background {
+            if let picture {
+                Color.clear
+                    .overlay { Image(decorative: picture, scale: 1).resizable().scaledToFill().blur(radius: level.blur, opaque: true) }
+                    .clipShape(shape)
+            }
+        }
+        .environment(\.appearsActive, true)
     }
 }
 

@@ -17,6 +17,14 @@ extension EnvironmentValues {
     }
 }
 
+/// Resolve at the text, inside the panel's wallpaper-adjusted environment.
+struct PulsePrimary: ShapeStyle {
+    func resolve(in environment: EnvironmentValues) -> Color.Resolved { environment.pulseSkin.primary.resolve(in: environment) }
+}
+extension ShapeStyle where Self == PulsePrimary {
+    static var pulsePrimary: PulsePrimary { PulsePrimary() }
+}
+
 /// Captions in the theme's own secondary ink: Classic's grey in Classic, as before, and a dark grey on a light theme's
 /// slab, where Classic's grey would be near-white on white. The break screen keeps Classic's grey: it's always dark.
 struct PulseSecondary: ShapeStyle {

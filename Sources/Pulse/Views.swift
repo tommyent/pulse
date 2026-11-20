@@ -355,6 +355,7 @@ struct BatteryCard: View {
 }
 
 struct WindowRow: View {
+    @Environment(\.glassSetting) private var glass
     @Environment(\.showsRemaining) private var remaining
     @Environment(\.pulseSkin) private var skin
     let window: UsageWindow
@@ -370,13 +371,23 @@ struct WindowRow: View {
             if let p = window.percentUsed {
                 let left = window.showsLeft(remaining)
                 let value = max(0, min(left ? 100 - p : p, 100))
+                let fill = window.isNearLimit ? Color.red : tint.opacity(dim ? 0.5 : 1)
                 if let groove = skin.groove {
                     GrooveBar(groove: groove, value: value,
                               colour: window.isNearLimit ? skin.alert : dim ? tint.mix(with: groove.secondBarGround.color, by: 0.5) : tint)
                         .accessibilityRepresentation { ProgressView(value: value, total: 100) }   // as Classic's bar reads
+                } else if glass?.level == .liquid {
+                    // The native progress bar drops the provider's colour when the panel is inactive.
+                    GeometryReader { geometry in
+                        Capsule().fill(fill)
+                            .frame(width: geometry.size.width * value / 100)
+                    }
+                    .background(skin.track.color, in: Capsule())
+                    .frame(height: 6)
+                    .accessibilityRepresentation { ProgressView(value: value, total: 100) }
                 } else {
                     ProgressView(value: value, total: 100)
-                        .tint(window.isNearLimit ? .red : tint.opacity(dim ? 0.5 : 1))
+                        .tint(fill)
                         .frame(height: 6)
                 }
                 HStack {
@@ -466,14 +477,14 @@ struct UsageCard: View {
                 BrandIcon(account: snapshot.id, size: 17).raised(skin)
                 Text("\(snapshot.displayName) Usage").font(.headline).embossed(skin, size: 13)
                 Spacer()
-                Text(snapshot.planLabel).font(.caption).foregroundStyle(skin.secondary).embossed(skin, size: 10)
+                Text(snapshot.planLabel).font(.caption).foregroundStyle(.pulseSecondary).embossed(skin, size: 10)
             }
-            .foregroundStyle(skin.primary)
+            .foregroundStyle(.pulsePrimary)
             ForEach(Array(windows.enumerated()), id: \.element.id) { i, w in
                 WindowRow(window: w, tint: skin.accent(snapshot.id, pool: pool), dim: i > 0)
             }
             if let msg = snapshot.healthMessage {
-                Text(msg).font(.caption).foregroundStyle(skin.secondary)
+                Text(msg).font(.caption).foregroundStyle(.pulseSecondary)
                     .fixedSize(horizontal: false, vertical: true)   // wraps: a failure's reason is the part you need
                     .embossed(skin, size: 10)
             }
