@@ -14,7 +14,7 @@ extension EnvironmentValues {
 
 private let brandIcons: [String: NSImage] = {
     var d: [String: NSImage] = [:]
-    for id in AccountID.allCases.map(\.rawValue) + ["gemini", "openai"] {
+    for id in AccountID.allCases.map(\.rawValue) + ["openai"] {
         // PNG for logos whose SVG needs filters macOS can't draw (Antigravity's blurs)
         if let url = ["svg", "png"].lazy.compactMap({ Bundle.pulseResources.url(forResource: "Resources/\(id)", withExtension: $0) }).first,
            let img = NSImage(contentsOf: url) {
@@ -58,21 +58,26 @@ private struct PoolIcon: View {
     let size: CGFloat
     var ink: Color?
 
+    var header = false
+
+    var isPair: Bool {
+        account == .antigravity && ["claude and gpt", "claude & gpt"].contains(pool?.lowercased() ?? "")
+    }
+
     var body: some View {
-        if account == .antigravity, pool?.lowercased() == "gemini", let gemini = brandIcons["gemini"] {
-            Image(nsImage: gemini).renderingMode(.template).resizable()
-                .foregroundStyle(LinearGradient(colors: [.blue, .purple, .pink], startPoint: .topLeading, endPoint: .bottomTrailing))
-                .frame(width: size, height: size)
-        } else if account == .antigravity, ["claude and gpt", "claude & gpt"].contains(pool?.lowercased() ?? ""),
-                  let openAI = brandIcons["openai"] {
-            HStack(spacing: -size * 0.12) {
-                BrandIcon(account: .claude, size: size * 0.68)
-                    .zIndex(1)
-                Image(nsImage: openAI).renderingMode(.template).resizable()
-                    .foregroundStyle(Color(white: 0.1))
-                    .padding(size * 0.045)
-                    .frame(width: size * 0.75, height: size * 0.75)
-                    .background(.white, in: Circle())
+        if isPair, let openAI = brandIcons["openai"] {
+            let claude = BrandIcon(account: .claude, size: header ? size : size * 0.82)
+            let gpt = Image(nsImage: openAI).renderingMode(.template).resizable().interpolation(.high)
+                .scaledToFit()
+                .foregroundStyle(ink ?? .primary)
+                .frame(width: header ? size : size * 0.72, height: header ? size : size * 0.72)
+            if header {
+                HStack(spacing: 3) { claude; gpt }
+            } else {
+                ZStack {
+                    claude.offset(x: -size * 0.23, y: -size * 0.24)
+                    gpt.offset(x: size * 0.23, y: size * 0.23)
+                }
             }
         } else {
             BrandIcon(account: account, size: size, ink: ink)
@@ -246,10 +251,11 @@ struct RingView: View, Animatable {
         layout {
             ZStack {
                 if let groove = skin.groove {
+                    let mark = PoolIcon(account: account, pool: poolName, size: size * (secondary == nil ? 0.4 : 0.38), ink: groove.onFace.color)
                     GrooveRing(groove: groove, size: size, colour: skin.accent(account, pool: pool),
                                outer: percent.map(shown), inner: secondary.map(shown), twoTracks: secondary != nil,
-                               disc: hasDisc ? discLevel : nil) {
-                        PoolIcon(account: account, pool: poolName, size: size * (secondary == nil ? 0.4 : 0.38), ink: groove.onFace.color)
+                               disc: hasDisc ? discLevel : nil, raiseMark: !mark.isPair) {
+                        mark
                     }
                 } else {
                     if hasDisc {
@@ -396,23 +402,14 @@ private struct UsageRows: View {
         let products = windows.filter(\.isShare).sorted { ($0.percentUsed ?? -1) > ($1.percentUsed ?? -1) }
         if !products.isEmpty {
             let total = windows.first { $0.id == "period_all" }
-            let period = total?.productShareLabel ?? "of this period’s usage"
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text("Usage by product").font(.subheadline.weight(.semibold))
                 if total?.percentUsed == 0, products.allSatisfy({ $0.percentUsed == 0 }) {
                     Text("No usage this period").font(.caption).foregroundStyle(skin.secondary)
                 } else {
                     ForEach(products) { product in
-                        let share = product.shareOfUsage(total: total?.percentUsed)
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(product.label)
-                            Spacer(minLength: 4)
-                            Text(share.map { $0 + " " + period } ?? "Unavailable")
-                                .foregroundStyle(skin.secondary)
-                                .multilineTextAlignment(.trailing)
-                        }
-                        .font(.caption)
-                        .accessibilityElement(children: .combine)
+                        WindowRow(window: product, tint: tint, dim: true, creditTotal: total)
+                            .accessibilityElement(children: .combine)
                     }
                 }
             }
@@ -428,6 +425,17 @@ struct WindowRow: View {
     let window: UsageWindow
     var tint: Color = .white
     var dim = false   // a later window of the account: its colour at half strength
+    var creditTotal: UsageWindow?
+
+    private var reading: (value: Double, caption: String)? {
+        if window.isShare {
+            guard let creditTotal, let share = window.shareOfUsage(total: creditTotal.percentUsed) else { return nil }
+            return (share.percent, share.label + " " + creditTotal.productShareLabel)
+        }
+        guard let used = window.percentUsed else { return nil }
+        let left = window.showsLeft(remaining)
+        return (max(0, min(left ? 100 - used : used, 100)), left ? "\(100 - Int(used))% Left" : "\(Int(used))% Used")
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -435,13 +443,13 @@ struct WindowRow: View {
                 .font(.subheadline)
                 .foregroundStyle(skin.primary)
                 .embossed(skin, size: 11)
-            if let p = window.percentUsed {
-                let left = window.showsLeft(remaining)
-                let value = max(0, min(left ? 100 - p : p, 100))
-                let fill = window.isNearLimit ? Color.red : tint.opacity(dim ? 0.5 : 1)
+            if let reading {
+                let value = reading.value
+                let alert = !window.isShare && window.isNearLimit
+                let fill = alert ? Color.red : tint.opacity(dim ? 0.5 : 1)
                 if let groove = skin.groove {
                     GrooveBar(groove: groove, value: value,
-                              colour: window.isNearLimit ? skin.alert : dim ? tint.mix(with: groove.secondBarGround.color, by: 0.5) : tint)
+                              colour: alert ? skin.alert : dim ? tint.mix(with: groove.secondBarGround.color, by: 0.5) : tint)
                         .accessibilityRepresentation { ProgressView(value: value, total: 100) }   // as Classic's bar reads
                 } else if glass != nil {
                     // The native progress bar drops the provider's colour when the panel is inactive.
@@ -458,8 +466,8 @@ struct WindowRow: View {
                         .frame(height: 6)
                 }
                 HStack {
-                    Text(left ? "\(100 - Int(p))% Left" : "\(Int(p))% Used").font(.caption)
-                        .foregroundStyle(window.isNearLimit ? skin.alert : skin.secondary)
+                    Text(reading.caption).font(.caption)
+                        .foregroundStyle(alert ? skin.alert : skin.secondary)
                     Spacer()
                     Text(resetLabel(window.resetsAt)).font(.caption)
                 }
@@ -468,6 +476,8 @@ struct WindowRow: View {
                 if let forecast = forecastLabel(window.forecast) {
                     Text(forecast).font(.caption).foregroundStyle(skin.secondary).embossed(skin, size: 10)
                 }
+            } else if window.isShare {
+                Text("Unavailable").font(.caption).foregroundStyle(skin.secondary)
             } else if let reset = window.resetsAt, reset <= .now {
                 Text("Reset since the last update").font(.caption).foregroundStyle(skin.secondary).embossed(skin, size: 10)
             }
@@ -542,7 +552,8 @@ struct UsageCard: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 let name = windows.first?.pool
-                PoolIcon(account: snapshot.id, pool: name, size: 17).raised(skin)
+                let mark = PoolIcon(account: snapshot.id, pool: name, size: 17, ink: skin.primary, header: true)
+                if mark.isPair { mark } else { mark.raised(skin) }
                 Text(name.map { "\(snapshot.displayName) · \($0.replacingOccurrences(of: " and ", with: " & "))" } ?? "\(snapshot.displayName) Usage").font(.headline).embossed(skin, size: 13)
                 Spacer()
                 Text(snapshot.planLabel).font(.caption).foregroundStyle(.pulseSecondary).embossed(skin, size: 10)

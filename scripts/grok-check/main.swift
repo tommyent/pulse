@@ -52,8 +52,10 @@ check(usual.outerArc?.id == "period_all" && usual.innerArc == nil && usual.disc 
 check(products(["GrokBot"]).innerArc == nil && products(["GrokBot"]).disc == nil, "only GrokBot so far: still one arc")
 check(usual.map(\.label) == ["Credits (weekly)", "Grok Build", "GrokBot", "Grok Chat"], "the card still lists each product")
 func productShare(_ amount: Double?, total: Double?) -> String? {
-    UsageWindow(id: "period_GrokBuild", label: "Grok Build", percentUsed: amount, resetsAt: nil).shareOfUsage(total: total)
+    UsageWindow(id: "period_GrokBuild", label: "Grok Build", percentUsed: amount, resetsAt: nil).shareOfUsage(total: total)?.label
 }
+let buildShare = UsageWindow(id: "period_GrokBuild", label: "Grok Build", percentUsed: 30, resetsAt: nil).shareOfUsage(total: 39)
+check(abs((buildShare?.percent ?? 0) - 76.9230769) < 0.000001 && buildShare?.label == "77%", "the product bar and its caption measure the same share")
 check(productShare(30, total: 39) == "77%" && productShare(0.2, total: 0.3) == "67%", "product shares use the unrounded period total")
 check(productShare(0.01, total: 39) == "<1%" && productShare(0, total: 39) == "0%", "tiny and zero product usage stay distinct")
 check(productShare(5, total: 0) == nil && productShare(5, total: nil) == nil && productShare(nil, total: 10) == nil && productShare(11, total: 10) == nil, "undefined and inconsistent shares have no percentage")

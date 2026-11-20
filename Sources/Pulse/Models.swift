@@ -62,11 +62,11 @@ struct UsageWindow: Codable, Identifiable {
     }
 
     /// Product percentages and the period total are both fractions of the allowance.
-    func shareOfUsage(total: Double?) -> String? {
+    func shareOfUsage(total: Double?) -> (percent: Double, label: String)? {
         guard isShare, let total, total.isFinite, total > 0,
               let used = percentUsed, used.isFinite, used >= 0, used <= total else { return nil }
         let percent = used / total * 100
-        return percent > 0 && percent < 0.5 ? "<1%" : "\(Int(percent.rounded()))%"
+        return (percent, percent > 0 && percent < 0.5 ? "<1%" : "\(Int(percent.rounded()))%")
     }
 
     static let nearLimitPercent: Double = 98
