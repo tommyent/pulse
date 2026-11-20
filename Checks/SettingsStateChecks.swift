@@ -51,6 +51,12 @@ enum SettingsStateChecks {
         levelled.glassLevel = .frosted; levelled.wallpaperLight = "light-1a2b3c4d.jpg"; levelled.wallpaperDark = "pulse"
         let levelledBack = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(levelled))
         assert(levelledBack.glassLevel == .frosted && levelledBack.wallpaperLight == "light-1a2b3c4d.jpg" && levelledBack.wallpaperDark == "pulse")
+        let classicGlass = ThemeStore.shared.themes.first { $0.id == "classic-glass" }!
+        let classicSolid = ThemeStore.shared.themes.first { $0.id == "classic-solid" }!
+        assert(levelledBack.glass(for: classicGlass, slot: .light)?.wallpaper == levelled.wallpaperLight)
+        assert(levelledBack.glass(for: classicGlass, slot: .dark)?.wallpaper == levelled.wallpaperDark)
+        assert(levelledBack.glass(for: classicSolid, slot: .light) == nil)
+
         assert(try! JSONDecoder().decode(AppState.Persisted.self, from: Data(#"{"glassLevel":"shiny","showPet":false}"#.utf8)).glassLevel == nil)
         // the words on a wallpaper: dark on white, light on black, and a wash only when neither reaches 4.5:1
         let onWhite = WallpaperReading.choose(dark: 1, bright: 1), onBlack = WallpaperReading.choose(dark: 0, bright: 0)
@@ -370,7 +376,7 @@ enum SettingsStateChecks {
             var body: some View {
                 SettingsLayout(selection: $panes.pane) {
                     switch panes.pane {
-                    case .appearance: Form { AppearanceSettings(choice: .constant(ThemeChoice()), themes: store) }
+                    case .appearance: AppearanceSettings(saved: .constant(AppState.Persisted()), themes: store)
                     default: Form { BatterySettingsSection(settings: .constant(BatterySettings())) }
                     }
                 }

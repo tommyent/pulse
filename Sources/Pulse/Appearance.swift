@@ -111,19 +111,28 @@ private struct PulseRim<S: Shape>: View {
 private struct PulsePresentation: ViewModifier {
     @ObservedObject var state: AppState
     @ObservedObject private var themes = ThemeStore.shared
-    @Environment(\.colorSchemeContrast) private var contrast
     func body(content: Content) -> some View {
-        // the theme drawn now (Settings › Appearance) and the appearance its windows take: a light theme's light, a dark
-        // or Classic one's dark
-        let choice = state.persisted.themeChoice, scheme = themes.scheme(choice)
-        // prototype: a glass level takes over every theme but Classic Solid (the owner's pick: its opaque look stays), and
-        // the theme keeps only its colours: a Groove theme's slab goes too
-        let level = themes.current(choice).id == "classic-solid" ? nil : state.persisted.glassLevel
-        let look = { var l = themes.skin(choice, contrast: contrast); if level != nil { l.groove = nil }; return l }()
-        let glass = level.map { GlassSetting(level: $0, wallpaper: scheme == .light ? state.persisted.wallpaperLight : state.persisted.wallpaperDark,
-                                             light: scheme == .light) }
+        let choice = state.persisted.themeChoice
+        let scheme = themes.scheme(choice)
         content.preferredColorScheme(scheme)
             .background(PulseWindowBacking(scheme: scheme))
+            .modifier(PanelLook(theme: themes.current(choice), slot: themes.mode(choice), saved: state.persisted))
+    }
+}
+
+/// Shared by the live panels and the look being edited in Settings.
+struct PanelLook: ViewModifier {
+    let theme: PulseTheme
+    let slot: ColorScheme
+    let saved: AppState.Persisted
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        let glass = saved.glass(for: theme, slot: slot)
+        var look = theme.file.look
+        if contrast == .increased { look = look.increasedContrast() }
+        if glass != nil { look.groove = nil }
+        return content
             .environment(\.pulseAppearance, look.material)
             .environment(\.pulseSkin, look)
             .environment(\.glassSetting, glass)
