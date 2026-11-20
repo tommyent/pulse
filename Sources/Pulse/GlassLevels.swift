@@ -13,10 +13,18 @@ private let log = Logger(subsystem: "io.github.tommyent.pulse", category: "glass
 enum GlassLevel: String, Codable, CaseIterable {
     case liquid, glass, frosted
     var name: String { rawValue.capitalized }
-    // even steps (the owner, 2026-11-19): clear glass over the sharp picture, over a lightly blurred one, then .regular
-    // glass over a heavily blurred one (.regular frosts on its own, so it's kept for the last step)
+    // A softened feature occupies the same fraction of the photograph in every linked surface.
+    func wallpaperBlur(image: CGSize, scale: CGFloat) -> CGFloat {
+        let shortSide = min(image.width, image.height) * scale
+        switch self {
+        case .liquid: return 0
+        case .glass: return shortSide * 0.002
+        case .frosted: return shortSide * 0.008
+        }
+    }
+
     var material: Glass { self == .frosted ? .regular : .clear }
-    var blur: CGFloat { switch self { case .liquid: 0; case .glass: 8; case .frosted: 30 } }   // the picture's own blur, in points
+    var materialBlur: CGFloat { switch self { case .liquid: 0; case .glass: 8; case .frosted: 30 } }   // for surfaces using a full native material
 }
 
 /// What the panels draw at a level: nil, the person's theme as its file says.
@@ -189,10 +197,17 @@ struct WallpaperReading: Equatable {
 
 @MainActor enum WallpaperReader {
     private static var cache: [String: (crop: WallpaperCrop, reading: WallpaperReading)] = [:]
-    static func read(_ picture: (image: CGImage, key: String), size: CGSize, level: GlassLevel, crop: WallpaperCrop = WallpaperCrop()) -> WallpaperReading? {
-        let key = "\(picture.key)|\(Int(size.width))x\(Int(size.height))|\(level.rawValue)"
+    static func read(_ picture: (image: CGImage, key: String), size: CGSize, level: GlassLevel, crop: WallpaperCrop = WallpaperCrop(), usesWallpaperFinish: Bool = false) -> WallpaperReading? {
+        let key = "\(picture.key)|\(Int(size.width))x\(Int(size.height))|\(level.rawValue)|\(usesWallpaperFinish)"
         if let hit = cache[key], hit.crop == crop { return hit.reading }
-        let r = WallpaperReading.read(picture.image, size: size, blur: level.blur, crop: crop)
+        var blur = level.materialBlur
+        if usesWallpaperFinish {
+            let source = CGSize(width: picture.image.width, height: picture.image.height)
+            let visible = crop.rect(image: source, panel: size)
+            guard visible.width > 0 else { return nil }
+            blur = level.wallpaperBlur(image: source, scale: crop.sizeBeforeRotation(size).width / visible.width)
+        }
+        let r = WallpaperReading.read(picture.image, size: size, blur: blur, crop: crop)
         if let r {
             cache[key] = (crop, r)
             log.info("reading \((picture.key as NSString).lastPathComponent, privacy: .public) \(Int(size.width))x\(Int(size.height)) \(level.rawValue, privacy: .public): \(r.light ? "light" : "dark", privacy: .public) words, wash \(r.wash, format: .fixed(precision: 2)), \(r.contrast, format: .fixed(precision: 1)):1")
@@ -220,16 +235,17 @@ struct WallpaperLayer<S: Shape>: View {
     let reading: WallpaperReading?
     let shape: S
     var crop = WallpaperCrop()
+    var usesWallpaperFinish = false
     var drawsGlassRim = true
 
     var body: some View {
         let wash = reading.map { ($0.light ? Color.black : .white).opacity($0.wash) } ?? .clear
         Group {
-            if level == .liquid, picture != nil, !reduceTransparency {
-                // Native clear glass frosts its entire backdrop when Pulse resigns active.
+            if (level == .liquid || usesWallpaperFinish), picture != nil, !reduceTransparency {
+                // A full native material changes the photograph when the host window loses focus.
                 shape.fill(wash).overlay {
                     if drawsGlassRim {
-                        Color.clear.glassEffect(.clear, in: shape)
+                        Color.clear.glassEffect(level.material, in: shape)
                             .mask { shape.stroke(lineWidth: 8) }
                     }
                 }
@@ -250,7 +266,7 @@ struct WallpaperLayer<S: Shape>: View {
                                 let scale = unturned.width / visible.width
                                 Image(decorative: picture, scale: 1).resizable().interpolation(.high)
                                     .frame(width: source.width * scale, height: source.height * scale)
-                                    .blur(radius: level.blur, opaque: true)
+                                    .blur(radius: usesWallpaperFinish ? level.wallpaperBlur(image: source, scale: scale) : level.materialBlur, opaque: true)
                                     .offset(x: -visible.minX * scale, y: -visible.minY * scale)
                                     .frame(width: unturned.width, height: unturned.height, alignment: .topLeading)
                                     .rotationEffect(.degrees(crop.rotated ? -90 : 0))
@@ -272,29 +288,33 @@ struct LevelPanel<S: Shape>: ViewModifier {
     let setting: GlassSetting
     let shape: S
     var crop: WallpaperCrop?
+    var readingSize: CGSize?
     var drawsGlassRim = true
     @State private var size = CGSize.zero
 
     func body(content: Content) -> some View {
         let picture = Wallpaper.picture(setting)
         let framing = crop ?? WallpaperCrop()
-        let clearPicture = crop != nil && setting.level == .liquid && !reduceTransparency && picture != nil
-        let reading = picture.flatMap { WallpaperReader.read($0, size: size, level: setting.level, crop: framing) }
+        let usesWallpaperFinish = crop != nil && !reduceTransparency && picture != nil
+        let sample = usesWallpaperFinish ? readingSize ?? size : size
+        let reading = picture.flatMap {
+            WallpaperReader.read($0, size: sample, level: setting.level, crop: framing, usesWallpaperFinish: usesWallpaperFinish)
+        }
         content
             .environment(\.pulseSkin, reading.map(skin.reading) ?? skin)
             .environment(\.colorScheme, reading?.light == false ? .light : .dark)
             .backgroundPreferenceValue(Text.LayoutKey.self) { labels in
-                if clearPicture, let reading, !labels.isEmpty {
-                    LiquidLabelContrast(labels: labels, lightInk: reading.light)
+                if usesWallpaperFinish, let reading, !labels.isEmpty {
+                    WallpaperLabelContrast(labels: labels, lightInk: reading.light)
                 }
             }
-            .background { WallpaperLayer(level: setting.level, picture: picture?.image, reading: clearPicture ? nil : reading, shape: shape, crop: framing, drawsGlassRim: drawsGlassRim) }
+            .background { WallpaperLayer(level: setting.level, picture: picture?.image, reading: usesWallpaperFinish ? nil : reading, shape: shape, crop: framing, usesWallpaperFinish: usesWallpaperFinish, drawsGlassRim: drawsGlassRim) }
             .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
     }
 }
 
 /// Keep only the pixels immediately behind the letters within a readable brightness range.
-struct LiquidLabelContrast: View {
+struct WallpaperLabelContrast: View {
     let labels: [Text.LayoutKey.AnchoredLayout]
     let lightInk: Bool
 

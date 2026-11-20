@@ -376,7 +376,7 @@ struct WindowRow: View {
                     GrooveBar(groove: groove, value: value,
                               colour: window.isNearLimit ? skin.alert : dim ? tint.mix(with: groove.secondBarGround.color, by: 0.5) : tint)
                         .accessibilityRepresentation { ProgressView(value: value, total: 100) }   // as Classic's bar reads
-                } else if glass?.level == .liquid {
+                } else if glass != nil {
                     // The native progress bar drops the provider's colour when the panel is inactive.
                     GeometryReader { geometry in
                         Capsule().fill(fill)
@@ -846,6 +846,7 @@ struct OverlayView: View {
         nonmutating set { state.sideCard = newValue }
     }
     @State private var cardFrame = CGRect.zero
+    @State private var compactRailSize: CGSize?
     @State private var railFrame = CGRect.zero
 
     private func ringKey(_ id: AccountID, pool: Int) -> String { pool == 0 ? id.rawValue : "\(id.rawValue).\(pool)" }
@@ -972,6 +973,8 @@ struct OverlayView: View {
 
     private var rail: some View {
         let vertical = state.dock.isVertical
+        let compactRing: CGFloat = 28
+        let compactInset: CGFloat = 8
         let beside = expanded && !vertical   // a horizontal rail puts each percentage to its ring's right, so it grows only in length
         let layout = vertical
             ? AnyLayout(VStackLayout(spacing: expanded ? 12 : 10))
@@ -984,7 +987,7 @@ struct OverlayView: View {
             if showsAgents {
                 let board = agents.board
                 Button { state.toggleSide("agents") } label: {
-                    AgentsRing(board: board, size: expanded ? 52 : 28, showCount: expanded, beside: beside, held: agents.hold != nil)
+                    AgentsRing(board: board, size: expanded ? 52 : compactRing, showCount: expanded, beside: beside, held: agents.hold != nil)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -1016,7 +1019,7 @@ struct OverlayView: View {
                                  secondary: windows.innerArc?.percentUsed,
                                  hasDisc: windows.disc != nil,
                                  tertiary: windows.disc?.percentUsed,
-                                 size: expanded ? 52 : 28,
+                                 size: expanded ? 52 : compactRing,
                                  showPercent: expanded,
                                  beside: beside,
                                  nearLimit: windows.contains(where: \.isNearLimit),
@@ -1055,7 +1058,7 @@ struct OverlayView: View {
             if state.persisted.battery.showInRail, let reading = battery.reading {
                 Button { state.toggleSide("battery") } label: {
                     BatteryRing(reading: reading, level: state.persisted.battery.level(reading.percent),
-                                size: expanded ? 52 : 28, showPercent: expanded, beside: beside)
+                                size: expanded ? 52 : compactRing, showPercent: expanded, beside: beside)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -1086,9 +1089,18 @@ struct OverlayView: View {
         }
         .focusEffectDisabled()   // the panel can be key now (pet composer); no focus ring on the rail
         .padding(vertical ? .vertical : .horizontal, expanded ? (vertical ? 16 : 20) : 14)
-        .padding(vertical ? .horizontal : .vertical, expanded ? 12 : 8)
-        .pulseSurface(in: Capsule())
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { railFrame = $0; state.measuredRailSize = $0.size; onRailFrame?($0) }
+        .padding(vertical ? .horizontal : .vertical, expanded ? 12 : compactInset)
+        .pulseSurface(in: Capsule(), readingSize: compactRailSize.flatMap { ($0.height >= $0.width) == vertical ? $0 : nil })
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+            // Keep the ink and tracks stable throughout a hover, including its return animation.
+            let thickness = vertical ? frame.width : frame.height
+            if !expanded, abs(thickness - compactRing - 2 * compactInset) < 0.01 {
+                compactRailSize = frame.size
+            }
+            railFrame = frame
+            state.measuredRailSize = frame.size
+            onRailFrame?(frame)
+        }
         .overlay {
             // Tucked, the sliver and 12 pt beside it are one handle: a click brings the rail back; the drag below pulls it out.
             // kept while it's dragged out by the sliver: removing the view a drag began on would cancel the drag

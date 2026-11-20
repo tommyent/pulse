@@ -216,11 +216,12 @@ private struct SurfaceModifier<S: Shape>: ViewModifier {
     @Environment(\.glassSetting) private var glass
     let shape: S
     var followsWallpaperCrop: Bool
+    var readingSize: CGSize?
     let bordered: Bool   // false: the window supplies its own rim and shadow (the menu bar popover)
 
     func body(content: Content) -> some View {
         if let glass {
-            content.modifier(LevelPanel(setting: glass, shape: shape, crop: followsWallpaperCrop ? glass.wallpaperCrop : nil, drawsGlassRim: bordered))
+            content.modifier(LevelPanel(setting: glass, shape: shape, crop: followsWallpaperCrop ? glass.wallpaperCrop : nil, readingSize: readingSize, drawsGlassRim: bordered))
         } else if skin.liquid == true {
             content.liquidPanel(skin, in: shape)
         } else {
@@ -269,8 +270,8 @@ private struct PulseWindowBacking: NSViewRepresentable {
 }
 
 extension View {
-    func pulseSurface<S: Shape>(in shape: S, bordered: Bool = true, followsWallpaperCrop: Bool = true) -> some View {
-        modifier(SurfaceModifier(shape: shape, followsWallpaperCrop: followsWallpaperCrop, bordered: bordered))
+    func pulseSurface<S: Shape>(in shape: S, bordered: Bool = true, followsWallpaperCrop: Bool = true, readingSize: CGSize? = nil) -> some View {
+        modifier(SurfaceModifier(shape: shape, followsWallpaperCrop: followsWallpaperCrop, readingSize: readingSize, bordered: bordered))
     }
     func pulsePresentation(_ state: AppState) -> some View { modifier(PulsePresentation(state: state)) }
 }

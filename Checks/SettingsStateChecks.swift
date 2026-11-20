@@ -553,6 +553,28 @@ enum SettingsStateChecks {
             assert(samples(expected) != samples(centered), "the chosen fixture must distinguish a centered crop")
         }
 
+        // Resizing a panel magnifies the same softened detail. The transition on the photograph stays proportional.
+        let edge = bitmap(512, 512)
+        edge.setFillColor(gray: 0, alpha: 1)
+        edge.fill(CGRect(x: 0, y: 0, width: 512, height: 512))
+        edge.setFillColor(gray: 1, alpha: 1)
+        edge.fill(CGRect(x: 256, y: 0, width: 256, height: 512))
+        let edgeImage = edge.makeImage()!
+        func transition(_ level: GlassLevel, width: Int, height: Int) -> Int {
+            let surface = WallpaperLayer(level: level, picture: edgeImage, reading: nil, shape: Rectangle(),
+                                         crop: WallpaperCrop(zoom: 2), usesWallpaperFinish: true, drawsGlassRim: false)
+            let cg = ImageRenderer(content: surface.frame(width: CGFloat(width), height: CGFloat(height))).cgImage!
+            let buffer = bitmap(width, height)
+            buffer.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return (0..<width).filter { (24...231).contains(context(buffer, x: $0, y: height / 2, width: width)[0]) }.count
+        }
+        let resting = GlassLevel.allCases.map { transition($0, width: 96, height: 320) }
+        let hovered = GlassLevel.allCases.map { transition($0, width: 192, height: 640) }
+        assert(resting[0] < resting[1] && resting[1] < resting[2], "each finish has a distinct edge: \(resting)")
+        for (small, big) in zip(resting, hovered) {
+            assert(abs(2 * small - big) <= 2, "hover must retain the finish of the same source detail: \(resting), \(hovered)")
+        }
+
         // A label on difficult pixels gets an outline. The same label on legible pixels leaves its background alone.
         for lightInk in [true, false] {
             func label(_ outline: Bool, matchingInk: Bool) -> [UInt8] {
@@ -560,7 +582,7 @@ enum SettingsStateChecks {
                 let contrasting = lightInk ? Color.black : .white
                 let view = Text("98%").foregroundStyle(ink).frame(width: 80, height: 30)
                     .backgroundPreferenceValue(Text.LayoutKey.self) { labels in
-                        if outline { LiquidLabelContrast(labels: labels, lightInk: lightInk) }
+                        if outline { WallpaperLabelContrast(labels: labels, lightInk: lightInk) }
                     }
                     .background(matchingInk ? ink : contrasting)
                 let renderer = ImageRenderer(content: view)
