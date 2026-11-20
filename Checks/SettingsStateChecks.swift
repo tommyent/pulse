@@ -313,69 +313,66 @@ enum SettingsStateChecks {
         assert(Array(walked.prefix(7)) == SettingsPane.allCases && walked.last == .breaks, "↓ reaches every pane: \(walked.map(\.title))")
         assert(SettingsPane.breaks.moved(by: -6) == .appearance && SettingsPane.appearance.moved(by: -1) == .appearance)
 
-        // the sidebar in an offscreen window (never shown): the pane set (as Break settings… sets Breaks) is the one row
-        // drawn in the accent colour, each lower down the list in order. SwiftUI builds no accessibility tree and takes no clicks in a window
-        // that isn't on screen, so clicking every row and VoiceOver's reading of them are checked in the app (on m1).
+        // Scan the rendered selection and its label on both ends of the theme brightness range.
         final class Box: ObservableObject { @Published var pane = SettingsPane.appearance }
         struct Host: View {
             @ObservedObject var box: Box
-            // a fixed accent (pure blue) for the geometry: the real one is whatever the Mac's is, tested for contrast below
-            var body: some View { SettingsSidebar(selection: $box.pane, accent: Color(rgb: 0x0000FF)).frame(height: 600).background(Color.black) }
-        }
-        _ = NSApplication.shared
-        let box = Box()
-        let host = NSHostingView(rootView: Host(box: box))
-        host.frame = NSRect(x: 0, y: 0, width: SettingsPane.sidebarWidth, height: 600)
-        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-        window.contentView = host
-        func settle() { for _ in 0 ..< 6 { RunLoop.main.run(until: Date().addingTimeInterval(0.03)); host.layoutSubtreeIfNeeded() } }
-        /// The rows drawn in the accent colour, as ranges of points from the top, read down a column inside the rows.
-        func highlighted() -> [ClosedRange<Int>] {
-            let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
-            host.cacheDisplay(in: host.bounds, to: rep)
-            let scale = Double(rep.pixelsHigh) / Double(host.bounds.height)
-            var runs: [ClosedRange<Int>] = [], start: Int?
-            for y in 0 ..< Int(host.bounds.height) {
-                let c = rep.colorAt(x: Int(14 * scale), y: Int(Double(y) * scale))?.usingColorSpace(.sRGB)
-                let accent = (c?.blueComponent ?? 0) > 0.6 && (c?.redComponent ?? 1) < 0.4
-                if accent, start == nil { start = y }
-                if !accent, let s = start { runs.append(s ... y - 1); start = nil }
+            let scheme: ColorScheme
+            var body: some View {
+                SettingsSidebar(selection: $box.pane).frame(height: 600)
+                    .background(scheme == .dark ? Color.black : .white)
+                    .environment(\.colorScheme, scheme)
             }
-            return runs
         }
-        settle()
-        var centres: [Int] = []
-        for pane in SettingsPane.allCases {
-            box.pane = pane   // opened by name, as Break settings… does
-            settle()
-            let runs = highlighted()
-            assert(runs.count == 1, "\(pane.title): one row drawn as chosen, not \(runs)")
-            centres.append((runs[0].lowerBound + runs[0].upperBound) / 2)
-        }
-        let gaps = zip(centres.dropFirst(), centres).map { $0 - $1 }
-        assert(gaps.allSatisfy { $0 > 0 && abs($0 - gaps[0]) <= 1 }, "each pane's row is the next one down: \(centres)")
-        window.close()
-
-        // the chosen row's label on every macOS accent, in light and dark: at least 4.5:1 (white on the default blue is
-        // 3.8:1, on green and orange about 2.2:1, so the label is black there). The fill doesn't change with the
-        // window's key state: Color.accentColor is the same either way.
-        func contrast(_ a: Color.Resolved, _ b: Color.Resolved) -> Double {
-            func l(_ c: Color.Resolved) -> Double { 0.2126 * Double(c.linearRed) + 0.7152 * Double(c.linearGreen) + 0.0722 * Double(c.linearBlue) }
-            return (max(l(a), l(b)) + 0.05) / (min(l(a), l(b)) + 0.05)
-        }
-        let accents: [(String, NSColor)] = [("blue", .systemBlue), ("green", .systemGreen), ("orange", .systemOrange), ("red", .systemRed),
-                                            ("purple", .systemPurple), ("pink", .systemPink), ("yellow", .systemYellow), ("graphite", .systemGray),
-                                            ("this Mac's accent", .controlAccentColor), ("m1's measured blue", NSColor(srgbRed: 62 / 255, green: 123 / 255, blue: 1, alpha: 1))]
-        for scheme in [ColorScheme.light, .dark] {
-            var env = EnvironmentValues()
-            env.colorScheme = scheme
-            NSAppearance(named: scheme == .light ? .aqua : .darkAqua)!.performAsCurrentDrawingAppearance {
-                for (name, accent) in accents {
-                    let fill = Color(nsColor: accent.usingColorSpace(.sRGB)!).resolve(in: env)
-                    let ink = SettingsSidebar.ink(on: fill).resolve(in: env)
-                    assert(contrast(ink, fill) >= 4.5, "the chosen row on \(name) in \(scheme): \(contrast(ink, fill))")
+        for scheme in [ColorScheme.dark, .light] {
+            let box = Box()
+            let host = NSHostingView(rootView: Host(box: box, scheme: scheme))
+            host.frame = NSRect(x: 0, y: 0, width: SettingsPane.sidebarWidth, height: 600)
+            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+            window.contentView = host
+            var centres: [Int] = []
+            for pane in SettingsPane.allCases {
+                box.pane = pane
+                for _ in 0 ..< 6 {
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.03))
+                    host.layoutSubtreeIfNeeded()
                 }
+                let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
+                host.cacheDisplay(in: host.bounds, to: rep)
+                let scale = CGFloat(rep.pixelsHigh) / host.bounds.height
+                func sample(_ x: Int, _ y: Int) -> NSColor {
+                    rep.colorAt(x: Int(CGFloat(x) * scale), y: Int(CGFloat(y) * scale))!.usingColorSpace(.sRGB)!
+                }
+                // Clear space after the longest label, away from the keyboard outline.
+                let rows = (0 ..< Int(host.bounds.height)).filter { y in
+                    let c = sample(158, y)
+                    let change = scheme == .dark ? c.redComponent : 1 - c.redComponent
+                    return (0.04 ... 0.50).contains(change)
+                        && abs(c.redComponent - c.greenComponent) < 0.015 && abs(c.redComponent - c.blueComponent) < 0.015
+                }
+                let samples = Set(rows)
+                let interior = rows.filter { samples.contains($0 - 2) && samples.contains($0 + 2) }
+                guard let first = interior.first, let last = interior.last else { fatalError("Missing neutral highlight for \(pane), \(scheme)") }
+                assert(last - first < 40 && rows.count >= 14, "Expected one highlight for \(pane), \(scheme), got \(first)...\(last) (\(rows.count) samples)")
+                let centre = (first + last) / 2
+                centres.append(centre)
+                func luminance(_ c: NSColor) -> CGFloat {
+                    let rgb = Color(c).resolve(in: EnvironmentValues())
+                    return CGFloat(0.2126 * rgb.linearRed + 0.7152 * rgb.linearGreen + 0.0722 * rgb.linearBlue)
+                }
+                let fill = luminance(sample(158, centre))
+                let readable = (centre-7 ... centre+7).contains { y in
+                    (42 ..< 125).contains { x in
+                        let ink = luminance(sample(x, y))
+                        return (max(fill, ink) + 0.05) / (min(fill, ink) + 0.05) >= 4.5
+                    }
+                }
+                assert(readable, "Selected label must contrast with its fill: \(pane), \(scheme)")
             }
+            let gaps = zip(centres.dropFirst(), centres).map { $0 - $1 }
+            assert(gaps.allSatisfy { $0 > 0 && abs($0 - gaps[0]) <= 1 }, "Each pane highlights its own row")
+            window.close()
         }
 
         let width = SettingsPane.sidebarWidth + 1 + SettingsPane.paneWidth

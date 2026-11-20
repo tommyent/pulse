@@ -1597,14 +1597,13 @@ struct SettingsDisclosure<Details: View>: View {
 /// Only the detail pane scrolls. Changing panes preserves the window frame and sidebar.
 struct SettingsLayout<Pane: View>: View {
     @Binding var selection: SettingsPane
-    var accent: Color = .accentColor
     var footer = AnyView(EmptyView())   // under the sidebar's list (Launch at login)
     @ViewBuilder var pane: Pane
 
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
-                SettingsSidebar(selection: $selection, accent: accent, footer: footer)
+                SettingsSidebar(selection: $selection, footer: footer)
                 Text(AboutPulse.line()).font(.caption).foregroundStyle(.pulseSecondary)
                     .textSelection(.enabled)
                     .padding(.horizontal, 20).padding(.bottom, 12)
@@ -1642,17 +1641,13 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     static let initialHeight: CGFloat = 600
 }
 
-/// Settings' sidebar: every pane, ↑ and ↓ to move, the theme's window behind it. Drawn here rather than by a List,
-/// whose selection takes the application's appearance, not the window's: in Groove White it was a black bar over
-/// black text while Settings wasn't key. The chosen row is the accent colour, its label black or white, whichever
-/// reads better on that accent (white on the default blue is only 3.8:1); with the keyboard in the list, a ring
-/// marks it. Under the list, `footer` (Launch at login), outside the list's keys and its accessibility group.
+/// The row follows the window's theme even when Settings loses key status.
 struct SettingsSidebar: View {
     @Binding var selection: SettingsPane
-    var accent: Color = .accentColor   // the chosen row's fill; the checks pin one
     var footer = AnyView(EmptyView())
     @FocusState private var focused: Bool
-    @Environment(\.self) private var environment
+    @State private var keyboardNavigation = false
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1666,11 +1661,11 @@ struct SettingsSidebar: View {
     }
 
     private var list: some View {
-        let fill = accent.resolve(in: environment)
-        return VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 2) {
             ForEach(SettingsPane.allCases) { pane in
                 let chosen = pane == selection
                 Button {
+                    keyboardNavigation = NSApp.currentEvent?.type == .keyDown
                     selection = pane
                     focused = true
                 } label: {
@@ -1678,10 +1673,16 @@ struct SettingsSidebar: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .foregroundStyle(chosen ? AnyShapeStyle(Self.ink(on: fill)) : AnyShapeStyle(.primary))
-                        .background(chosen ? accent : .clear, in: RoundedRectangle(cornerRadius: 6))
+                        .fontWeight(chosen ? .semibold : .regular)
+                        .foregroundStyle(.primary)
+                        .background {
+                            if chosen {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(.primary.opacity(contrast == .increased ? 0.22 : 0.14))
+                            }
+                        }
                         .overlay {
-                            if chosen, focused {
+                            if chosen, focused, keyboardNavigation {
                                 RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 3)
                                     .padding(-3)
                             }
@@ -1697,17 +1698,17 @@ struct SettingsSidebar: View {
         .focusable()
         .focused($focused)
         .focusEffectDisabled()   // the ring above marks it, around the chosen row
-        .onKeyPress(.upArrow) { selection = selection.moved(by: -1); return .handled }
-        .onKeyPress(.downArrow) { selection = selection.moved(by: 1); return .handled }
+        .onChange(of: focused) { _, takesFocus in
+            keyboardNavigation = takesFocus && NSApp.currentEvent?.type == .keyDown
+        }
+        .onKeyPress(keys: [.upArrow, .downArrow]) { press in
+            keyboardNavigation = true
+            selection = selection.moved(by: press.key == .upArrow ? -1 : 1)
+            return .handled
+        }
         .onAppear { focused = true }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Settings panes")
-    }
-
-    /// Black or white, whichever has more contrast on `fill`; one of them always reaches 4.5:1.
-    static func ink(on fill: Color.Resolved) -> Color {
-        let l = 0.2126 * Double(fill.linearRed) + 0.7152 * Double(fill.linearGreen) + 0.0722 * Double(fill.linearBlue)
-        return 1.05 / (l + 0.05) >= (l + 0.05) / 0.05 ? .white : .black
     }
 }
 

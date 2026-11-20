@@ -31,6 +31,7 @@ struct AppearanceSettings: View {
     @Binding var saved: AppState.Persisted
     @ObservedObject var themes: ThemeStore
     var railSize: () -> CGSize = { .zero }
+    @Environment(\.colorScheme) private var windowScheme
     @State private var crop: CropSelection?
     @ObservedObject private var results = SettingsResults.shared
     @State private var editing: ColorScheme?
@@ -38,6 +39,10 @@ struct AppearanceSettings: View {
     @State private var pictureError: String?
     @State private var isDropTarget = false
 
+    // Native segments choose their label ink from the tint before blending it with the theme.
+    private var selectionTint: Color {
+        windowScheme == .dark ? Color(white: 0.34).opacity(0.55) : .white.opacity(0.02)
+    }
     private var active: ColorScheme { themes.mode(saved.themeChoice) }
     private var slot: ColorScheme { editing ?? active }
     private var light: Bool { slot == .light }
@@ -61,7 +66,7 @@ struct AppearanceSettings: View {
                         Text("Light").tag(AppearanceMode.light)
                         Text("Dark").tag(AppearanceMode.dark)
                     }
-                    .labelsHidden().pickerStyle(.segmented).frame(width: 184)
+                    .labelsHidden().pickerStyle(.segmented).tint(selectionTint).frame(width: 184)
                     .accessibilityLabel("Appearance mode")
                 }
                 Divider()
@@ -104,7 +109,7 @@ struct AppearanceSettings: View {
                                 Text("Default").tag(GlassLevel?.none)
                                 ForEach(GlassLevel.allCases, id: \.self) { Text($0.name).tag(Optional($0)) }
                             }
-                            .pickerStyle(.segmented).labelsHidden().accessibilityLabel("Finish for both looks")
+                            .pickerStyle(.segmented).tint(selectionTint).labelsHidden().accessibilityLabel("Finish for both looks")
                             .frame(maxWidth: .infinity)
                             Text(saved.glassLevel == nil ? "Both looks use their theme’s finish." : "Applies to light and dark looks.")
                                 .font(.caption).foregroundStyle(.secondary)
