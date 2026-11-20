@@ -13,8 +13,10 @@ private let log = Logger(subsystem: "io.github.tommyent.pulse", category: "glass
 enum GlassLevel: String, Codable, CaseIterable {
     case liquid, glass, frosted
     var name: String { rawValue.capitalized }
-    var material: Glass { self == .liquid ? .clear : .regular }
-    var blur: CGFloat { self == .frosted ? 30 : 0 }   // the picture's own blur, in points
+    // even steps (the owner, 2026-11-19): clear glass over the sharp picture, over a lightly blurred one, then .regular
+    // glass over a heavily blurred one (.regular frosts on its own, so it's kept for the last step)
+    var material: Glass { self == .frosted ? .regular : .clear }
+    var blur: CGFloat { switch self { case .liquid: 0; case .glass: 8; case .frosted: 30 } }   // the picture's own blur, in points
 }
 
 /// What the panels draw at a level: nil, the person's theme as its file says.
