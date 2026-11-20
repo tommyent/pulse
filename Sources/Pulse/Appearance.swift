@@ -168,27 +168,21 @@ extension View {
     func withoutBackdrop() -> some View { transformEnvironment(\.pulseSkin) { $0.backdrop = nil } }
 }
 
-/// Prototype: a liquid theme's `backdrop`, "desktop" (the Mac's desktop picture, blurred) or a picture's file name in
-/// the Themes folder. Read once per file, downsampled, and kept; a picture that can't be read draws nothing.
+/// Prototype: a liquid theme's `backdrop`, "desktop": the Mac's desktop picture, blurred. Read once per picture,
+/// downsampled, and kept; a picture that can't be read draws nothing.
 @MainActor enum ThemeBackdrop {
-    nonisolated static let maxBytes = 32 * 1024 * 1024
     private static var cache: [String: CGImage] = [:]
 
     static func picture(_ name: String?) -> (image: CGImage, blur: CGFloat)? {
-        guard let name else { return nil }
-        let desktop = name == "desktop"
-        guard desktop || PulseSkin.isBackdropFileName(name) else { return nil }   // checked when the theme was read; again here
-        guard let url = desktop ? NSScreen.main.flatMap({ NSWorkspace.shared.desktopImageURL(for: $0) })
-                                : ThemeStore.shared.folder.appending(path: name) else { return nil }
-        let blur: CGFloat = desktop ? 28 : 0
+        guard name == "desktop", let url = NSScreen.main.flatMap({ NSWorkspace.shared.desktopImageURL(for: $0) }) else { return nil }
+        let blur: CGFloat = 28
         if let image = cache[url.path] { return (image, blur) }
-        guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= maxBytes,
-              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
                                                                           kCGImageSourceCreateThumbnailWithTransform: true,
                                                                           kCGImageSourceThumbnailMaxPixelSize: 1600] as CFDictionary)
         else { return nil }
-        cache[url.path] = image   // shortcut: a picture replaced under the same name shows after a relaunch
+        cache[url.path] = image   // shortcut: a desktop picture replaced under the same name shows after a relaunch
         return (image, blur)
     }
 }

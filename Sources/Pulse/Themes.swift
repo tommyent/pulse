@@ -448,9 +448,7 @@ extension PulseSkin {
         }
         range("stale", stale, 0 ... 1)
         if let halo { shadows("halo", halo, reach: 8, blur: 16) }
-        if let backdrop, backdrop != "desktop", !PulseSkin.isBackdropFileName(backdrop) {
-            out.append("\(at)backdrop: \"desktop\", or the file name of a picture in the Themes folder (.png, .jpg, .heic; no path)")
-        }
+        if let backdrop, backdrop != "desktop" { out.append("\(at)backdrop: only \"desktop\" (the Mac's desktop picture)") }
 
         // the contrast floor
         let assumedInk: SkinColor = appearance == .dark ? "#FFFFFF" : "#000000"   // the system's label colour
