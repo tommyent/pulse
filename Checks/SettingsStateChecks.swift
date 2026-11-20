@@ -51,28 +51,42 @@ enum SettingsStateChecks {
         levelled.glassLevel = .frosted; levelled.wallpaperLight = "light-1a2b3c4d.jpg"; levelled.wallpaperDark = "pulse"
         levelled.railFocusLight = CGPoint(x: 0.1, y: 0.4)
         levelled.railFocusDark = CGPoint(x: 0.8, y: 0.6)
+        levelled.railZoomDark = 2
         let levelledBack = try! JSONDecoder().decode(AppState.Persisted.self, from: JSONEncoder().encode(levelled))
         assert(levelledBack.glassLevel == .frosted && levelledBack.wallpaperLight == "light-1a2b3c4d.jpg" && levelledBack.wallpaperDark == "pulse")
         let classicGlass = ThemeStore.shared.themes.first { $0.id == "classic-glass" }!
         let classicSolid = ThemeStore.shared.themes.first { $0.id == "classic-solid" }!
         assert(levelledBack.glass(for: classicGlass, slot: .light)?.wallpaper == levelled.wallpaperLight)
         assert(levelledBack.glass(for: classicGlass, slot: .dark)?.wallpaper == levelled.wallpaperDark)
-        assert(levelledBack.glass(for: classicGlass, slot: .light)?.railFocus == levelled.railFocusLight)
-        assert(levelledBack.glass(for: classicGlass, slot: .dark)?.railFocus == levelled.railFocusDark)
+        assert(levelledBack.glass(for: classicGlass, slot: .light)?.railCrop.focus == levelled.railFocusLight)
+        assert(levelledBack.glass(for: classicGlass, slot: .dark)?.railCrop.focus == levelled.railFocusDark)
         levelled.wallpaperDark = "replacement.jpg"
-        assert(levelled.railFocusDark == nil && levelled.railFocusLight == levelledBack.railFocusLight)
+        assert(levelled.railZoomDark == nil && levelled.railFocusDark == nil && levelled.railFocusLight == levelledBack.railFocusLight)
         let wide = CGSize(width: 400, height: 100), tall = CGSize(width: 20, height: 100)
-        assert(WallpaperCrop.rect(image: wide, panel: tall, focus: WallpaperCrop.middle) == CGRect(x: 190, y: 0, width: 20, height: 100))
-        assert(WallpaperCrop.rect(image: wide, panel: tall, focus: .zero) == CGRect(x: 0, y: 0, width: 20, height: 100))
-        assert(WallpaperCrop.rect(image: tall, panel: wide, focus: CGPoint(x: 1, y: 1)) == CGRect(x: 0, y: 95, width: 20, height: 5))
+        assert(WallpaperCrop().rect(image: wide, panel: tall) == CGRect(x: 190, y: 0, width: 20, height: 100))
+        assert(WallpaperCrop(focus: .zero).rect(image: wide, panel: tall) == CGRect(x: 0, y: 0, width: 20, height: 100))
+        assert(WallpaperCrop(focus: CGPoint(x: 1, y: 1)).rect(image: tall, panel: wide) == CGRect(x: 0, y: 95, width: 20, height: 5))
+        assert(levelledBack.glass(for: classicGlass, slot: .light)?.railCrop.zoom == 1)
+        assert(levelledBack.glass(for: classicGlass, slot: .dark)?.railCrop.zoom == 2)
+        let upperLeft = WallpaperCrop(focus: .zero, zoom: 2).rect(image: tall, panel: wide)
+        let lowerRight = WallpaperCrop(focus: CGPoint(x: 1, y: 1), zoom: 2).rect(image: tall, panel: wide)
+        assert(upperLeft == CGRect(x: 0, y: 0, width: 10, height: 2.5))
+        assert(lowerRight == CGRect(x: 10, y: 97.5, width: 10, height: 2.5))
+        assert(WallpaperCrop(zoom: 0).zoom == 1 && WallpaperCrop(zoom: 100).zoom == 4)
         // Reusing the same image, size and finish must still sample the new part of the picture.
         let split = CGContext(data: nil, width: 200, height: 40, bitsPerComponent: 8, bytesPerRow: 800,
                               space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        split.setFillColor(CGColor(gray: 0, alpha: 1))
+        split.fill(CGRect(x: 0, y: 0, width: 200, height: 40))
         split.setFillColor(CGColor(gray: 1, alpha: 1))
         split.fill(CGRect(x: 100, y: 0, width: 100, height: 40))
         let picture = (image: split.makeImage()!, key: "split-wallpaper-check")
-        assert(WallpaperReader.read(picture, size: tall, level: .liquid, focus: .zero)?.light == true)
-        assert(WallpaperReader.read(picture, size: tall, level: .liquid, focus: CGPoint(x: 1, y: 0))?.light == false)
+        assert(WallpaperReader.read(picture, size: tall, level: .liquid, crop: WallpaperCrop(focus: .zero))?.light == true)
+        assert(WallpaperReader.read(picture, size: tall, level: .liquid, crop: WallpaperCrop(focus: CGPoint(x: 1, y: 0)))?.light == false)
+        let focus = CGPoint(x: 0.23, y: 0.5)
+        let mixed = WallpaperReader.read(picture, size: wide, level: .liquid, crop: WallpaperCrop(focus: focus))!
+        let black = WallpaperReader.read(picture, size: wide, level: .liquid, crop: WallpaperCrop(focus: focus, zoom: 4))!
+        assert(mixed.wash > 0 && black.light && black.wash == 0)
         assert(levelledBack.glass(for: classicSolid, slot: .light) == nil)
 
         assert(try! JSONDecoder().decode(AppState.Persisted.self, from: Data(#"{"glassLevel":"shiny","showPet":false}"#.utf8)).glassLevel == nil)

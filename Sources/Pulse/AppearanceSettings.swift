@@ -5,8 +5,22 @@ import UniformTypeIdentifiers
 extension AppState.Persisted {
     func glass(for theme: PulseTheme, slot: ColorScheme) -> GlassSetting? {
         guard theme.id != "classic-solid", let glassLevel else { return nil }
+        let focus = slot == .light ? railFocusLight : railFocusDark
+        let zoom = slot == .light ? railZoomLight : railZoomDark
         return GlassSetting(level: glassLevel, wallpaper: slot == .light ? wallpaperLight : wallpaperDark,
-                            railFocus: slot == .light ? railFocusLight : railFocusDark, light: slot == .light)
+                            railCrop: WallpaperCrop(focus: focus ?? WallpaperCrop.middle, zoom: zoom ?? 1), light: slot == .light)
+    }
+
+    mutating func setRailCrop(_ crop: WallpaperCrop, light: Bool) {
+        let focus = crop.focus == WallpaperCrop.middle ? nil : crop.focus
+        let zoom = crop.zoom == 1 ? nil : crop.zoom
+        if light {
+            railFocusLight = focus
+            railZoomLight = zoom
+        } else {
+            railFocusDark = focus
+            railZoomDark = zoom
+        }
     }
 }
 
@@ -122,10 +136,7 @@ struct AppearanceSettings: View {
         } isTargeted: { isDropTarget = $0 }
         .sheet(isPresented: $managesThemes) { ThemeManagement(choice: saved.themeChoice, themes: themes) }
         .sheet(item: $crop) { selection in
-            WallpaperCropEditor(selection: selection) { point in
-                let focus = point == WallpaperCrop.middle ? nil : point
-                if selection.setting.light { saved.railFocusLight = focus } else { saved.railFocusDark = focus }
-            }
+            WallpaperCropEditor(selection: selection) { saved.setRailCrop($0, light: selection.setting.light) }
         }
         .onChange(of: saved.themeChoice.mode) { editing = nil }
         .onChange(of: active) { editing = nil }

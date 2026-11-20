@@ -18,10 +18,12 @@ final class AppState: ObservableObject {
         var lightTheme: String?     // a theme's id: a built-in's or a theme file's name (`ThemeStore`)
         var darkTheme: String?
         var glassLevel: GlassLevel?   // prototype, nil = off: `GlassLevels.swift`
-        var wallpaperLight: String? { didSet { if wallpaperLight != oldValue { railFocusLight = nil } } }
-        var wallpaperDark: String? { didSet { if wallpaperDark != oldValue { railFocusDark = nil } } }
+        var wallpaperLight: String? { didSet { if wallpaperLight != oldValue { railFocusLight = nil; railZoomLight = nil } } }
+        var wallpaperDark: String? { didSet { if wallpaperDark != oldValue { railFocusDark = nil; railZoomDark = nil } } }
         var railFocusLight: CGPoint?
+        var railZoomLight: CGFloat?
         var railFocusDark: CGPoint?
+        var railZoomDark: CGFloat?
 
         /// Settings › Appearance. Until it's first chosen, it's what Pulse drew before: Classic (Glass or Solid) in both
         /// modes, or for Groove, Groove White in light and Groove in dark (Groove Black: Groove Black in light), in Auto.
@@ -99,7 +101,9 @@ final class AppState: ObservableObject {
             wallpaperLight = c.lenient(String.self, forKey: .wallpaperLight, in: decoder)
             wallpaperDark = c.lenient(String.self, forKey: .wallpaperDark, in: decoder)
             railFocusLight = c.lenient(CGPoint.self, forKey: .railFocusLight, in: decoder)
+            railZoomLight = c.lenient(CGFloat.self, forKey: .railZoomLight, in: decoder)
             railFocusDark = c.lenient(CGPoint.self, forKey: .railFocusDark, in: decoder)
+            railZoomDark = c.lenient(CGFloat.self, forKey: .railZoomDark, in: decoder)
             dock = c.lenient(DockEdge.self, forKey: .dock, in: decoder)
             tucked = c.lenient(Bool.self, forKey: .tucked, in: decoder)
             tuckPeek = c.lenient(Bool.self, forKey: .tuckPeek, in: decoder)

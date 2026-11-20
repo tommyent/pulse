@@ -220,7 +220,7 @@ private struct SurfaceModifier<S: Shape>: ViewModifier {
 
     func body(content: Content) -> some View {
         if let glass {
-            content.modifier(LevelPanel(setting: glass, shape: shape, focus: rail ? glass.railFocus ?? WallpaperCrop.middle : WallpaperCrop.middle))
+            content.modifier(LevelPanel(setting: glass, shape: shape, crop: rail ? glass.railCrop : WallpaperCrop()))
         } else if skin.liquid == true {
             content.liquidPanel(skin, in: shape)
         } else {

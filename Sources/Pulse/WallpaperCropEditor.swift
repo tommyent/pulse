@@ -10,56 +10,53 @@ struct CropSelection: Identifiable {
 
 struct WallpaperCropEditor: View {
     let selection: CropSelection
-    let save: (CGPoint) -> Void
+    let save: (WallpaperCrop) -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var focus: CGPoint
+    @State private var draft: WallpaperCrop
     @State private var grabOffset: CGSize?
     @FocusState private var editingPicture: Bool
 
-    init(selection: CropSelection, save: @escaping (CGPoint) -> Void) {
+    init(selection: CropSelection, save: @escaping (WallpaperCrop) -> Void) {
         self.selection = selection
         self.save = save
-        _focus = State(initialValue: selection.setting.railFocus ?? WallpaperCrop.middle)
+        _draft = State(initialValue: selection.setting.railCrop)
     }
 
     private var source: CGSize { CGSize(width: selection.image.width, height: selection.image.height) }
-    private var crop: CGRect { WallpaperCrop.rect(image: source, panel: selection.rail, focus: focus) }
+    private var crop: CGRect { draft.rect(image: source, panel: selection.rail) }
+
+    private var zoomLabel: String { Double(draft.zoom).formatted(.percent.precision(.fractionLength(0))) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Adjust rail crop").font(.title2.bold())
-            Text("Click the picture or drag the outline. Use the arrow keys for small adjustments.")
+            Text("The outline shows what fits in the rail. Zoom in, then drag it to choose a detail.")
                 .foregroundStyle(.secondary)
             HStack(spacing: 18) {
-                Image(decorative: selection.image, scale: 1)
-                    .resizable().aspectRatio(contentMode: .fit)
-                    .overlay { GeometryReader { proxy in cropControl(size: proxy.size) } }
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .focusable().focused($editingPicture)
-                    .onMoveCommand { direction in
-                        switch direction {
-                        case .left: nudge(-1, 0)
-                        case .right: nudge(1, 0)
-                        case .up: nudge(0, -1)
-                        case .down: nudge(0, 1)
-                        default: break
-                        }
-                    }
-                    .accessibilityRepresentation { accessiblePosition }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                VStack(spacing: 12) {
+                pictureControl
+                VStack(spacing: 8) {
                     railPreview
                     Text("Rail preview").font(.caption).foregroundStyle(.secondary)
                 }
-                .frame(width: 110)
+                .frame(width: selection.rail.width > selection.rail.height ? 202 : 110)
             }
             .frame(height: 260)
+            HStack {
+                Text("Zoom")
+                Slider(value: Binding<Double>(get: { draft.zoom * 100 }, set: { percent in
+                    let center = CGPoint(x: crop.midX / source.width, y: crop.midY / source.height)
+                    draft = WallpaperCrop(focus: center, zoom: percent.rounded() / 100)
+                }), in: (WallpaperCrop.zoomRange.lowerBound * 100)...(WallpaperCrop.zoomRange.upperBound * 100))
+                .accessibilityLabel("Rail wallpaper zoom, percent")
+                Text(zoomLabel).monospacedDigit()
+                    .frame(width: 46, alignment: .trailing)
+            }
             Divider()
             HStack {
-                Button("Center") { focus = WallpaperCrop.middle; editingPicture = true }
+                Button("Center") { draft.focus = WallpaperCrop.middle; editingPicture = true }
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Done") { save(focus); dismiss() }.keyboardShortcut(.defaultAction)
+                Button("Done") { save(draft); dismiss() }.keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)
@@ -67,21 +64,41 @@ struct WallpaperCropEditor: View {
         .onAppear { editingPicture = true }
     }
 
-    @ViewBuilder private var accessiblePosition: some View {
-        let horizontal = crop.width < source.width
-        let fraction = horizontal ? crop.width / source.width : crop.height / source.height
-        if fraction < 1 {
-            let position = Binding<Double>(
-                get: { horizontal ? crop.midX / source.width : crop.midY / source.height },
-                set: { if horizontal { focus.x = $0 } else { focus.y = $0 } }
-            )
-            Slider(value: position, in: (fraction / 2)...(1 - fraction / 2)) {
-                Text(horizontal ? "Horizontal rail crop position" : "Vertical rail crop position")
+    private var pictureControl: some View {
+        Image(decorative: selection.image, scale: 1)
+            .resizable().aspectRatio(contentMode: .fit)
+            .overlay { GeometryReader { proxy in cropControl(size: proxy.size) } }
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .focusable().focused($editingPicture)
+            .onMoveCommand { direction in
+                switch direction {
+                case .left: nudge(-1, 0)
+                case .right: nudge(1, 0)
+                case .up: nudge(0, -1)
+                case .down: nudge(0, 1)
+                default: break
+                }
             }
-            .accessibilityValue("\(Int((position.wrappedValue * 100).rounded())) percent")
-        } else {
-            Text("The whole picture fits the rail.")
+            .accessibilityRepresentation { accessiblePosition }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder private var accessiblePosition: some View {
+        if crop.width < source.width { positionSlider(horizontal: true) }
+        if crop.height < source.height { positionSlider(horizontal: false) }
+        if crop.size == source { Text("The whole picture fits the rail.") }
+    }
+
+    private func positionSlider(horizontal: Bool) -> some View {
+        let fraction = horizontal ? crop.width / source.width : crop.height / source.height
+        let position = Binding<Double>(
+            get: { horizontal ? crop.midX / source.width : crop.midY / source.height },
+            set: { if horizontal { draft.focus.x = $0 } else { draft.focus.y = $0 } }
+        )
+        return Slider(value: position, in: (fraction / 2)...(1 - fraction / 2)) {
+            Text(horizontal ? "Horizontal rail crop position" : "Vertical rail crop position")
         }
+        .accessibilityValue("\(Int((position.wrappedValue * 100).rounded())) percent")
     }
 
     private func cropControl(size: CGSize) -> some View {
@@ -98,6 +115,7 @@ struct WallpaperCropEditor: View {
             outline.stroke(.white, lineWidth: 2)
         }
         .contentShape(Rectangle())
+        .pointerStyle(grabOffset == nil ? .grabIdle : .grabActive)
         .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
             editingPicture = true
             if grabOffset == nil {
@@ -114,27 +132,28 @@ struct WallpaperCropEditor: View {
     }
 
     private func move(to point: CGPoint, offset: CGSize, in size: CGSize) {
-        focus = CGPoint(x: min(1, max(0, (point.x + offset.width) / size.width)),
+        draft.focus = CGPoint(x: min(1, max(0, (point.x + offset.width) / size.width)),
                         y: min(1, max(0, (point.y + offset.height) / size.height)))
     }
 
     private func nudge(_ dx: CGFloat, _ dy: CGFloat) {
         if dx != 0, crop.width < source.width {
-            focus.x = min(1, max(0, crop.midX / source.width + dx * 0.01))
+            draft.focus.x = min(1, max(0, crop.midX / source.width + dx * 0.01))
         }
         if dy != 0, crop.height < source.height {
-            focus.y = min(1, max(0, crop.midY / source.height + dy * 0.01))
+            draft.focus.y = min(1, max(0, crop.midY / source.height + dy * 0.01))
         }
     }
 
     private var railPreview: some View {
         let rail = selection.rail
-        let scale = min(1, 108 / rail.width, 206 / rail.height)
+        let availableWidth: CGFloat = rail.width > rail.height ? 200 : 108
+        let scale = min(1.5, availableWidth / rail.width, 206 / rail.height)
         var skin = selection.theme.file.look
         skin.groove = nil
         return RingView(account: .codex, percent: 35, size: min(28, rail.width, rail.height), showPercent: false)
             .frame(width: rail.width, height: rail.height)
-            .modifier(LevelPanel(setting: selection.setting, shape: Capsule(), focus: focus))
+            .modifier(LevelPanel(setting: selection.setting, shape: Capsule(), crop: draft))
             .environment(\.pulseSkin, skin)
             .scaleEffect(scale)
             .frame(width: rail.width * scale, height: rail.height * scale)
