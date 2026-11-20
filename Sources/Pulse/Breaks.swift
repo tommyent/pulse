@@ -199,7 +199,7 @@ struct BreakSchedule {
     private(set) var snoozedUntil: Date?
     /// The break cup's Pause: no breaks until then, through time away and a restart. The clocks keep running, so a
     /// break that came due meanwhile comes as the pause ends.
-    var pausedUntil: Date?
+    private(set) var pausedUntil: Date?
     private var currentDue: Date?                // when the break counting down or on screen was due
     private var counts = true                     // false for a simulatedBreak, which leaves the clocks alone
     private var awayCounted: Set<BreakKind> = []  // what the current time away already counted, to report it once
@@ -297,6 +297,12 @@ struct BreakSchedule {
     mutating func startNow(_ now: Date) -> Event? {
         guard case let .countdown(kind, _) = phase else { return nil }
         return start(kind, now: now)
+    }
+
+    mutating func pauseBreaks(for seconds: TimeInterval?, now: Date) -> Event? {
+        pausedUntil = seconds.map(now.addingTimeInterval)
+        guard let pausedUntil, pausedUntil > now, phase.isCountdown else { return nil }
+        return interrupt(nil)
     }
 
     mutating func pause(_ now: Date) {

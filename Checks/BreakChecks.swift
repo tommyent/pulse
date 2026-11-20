@@ -5,6 +5,7 @@ import Foundation
 enum BreakChecks {
     static func main() async {
         schedule()
+        pauseDuringCountdown()
         restore()
         history()
         ideas()
@@ -78,14 +79,14 @@ enum BreakChecks {
         // Pause from the rail's break cup: nothing comes until it ends, time away leaves it, then the break due comes;
         // turning breaks off ends it
         s = BreakSchedule(settings: on, now: t0)
-        s.pausedUntil = at(90)
+        assert(s.pauseBreaks(for: 90 * 60, now: t0) == nil)
         assert(next(s, 1) == (at(90), at(90)))
         assert(s.tick(now: at(20), idle: 0, voiceActive: false) == nil && s.tick(now: at(89.9), idle: 0, voiceActive: false) == nil)
         assert(s.tick(now: at(89.95), idle: 600, voiceActive: false) == .away([.micro: at(20), .long: at(60)]) && s.pausedUntil == at(90))
         assert(s.tick(now: at(90), idle: 0, voiceActive: false) == nil)
         assert(s.tick(now: at(109.9), idle: 0, voiceActive: false) == nil)
         assert(s.tick(now: at(110), idle: 0, voiceActive: false) == .countdown(.micro))
-        s.pausedUntil = at(200)
+        _ = s.pauseBreaks(for: 90 * 60, now: at(110))
         s.settings.enabled = false
         _ = s.tick(now: at(111), idle: 0, voiceActive: false)
         assert(s.pausedUntil == nil)
@@ -182,6 +183,27 @@ enum BreakChecks {
         assert(nextBreakText(micro: at(107), long: at(107), now: now) == "Next: long in 7 min")
         assert(nextBreakText(micro: at(107), long: at(108.5), now: now) == "Next: long in 7 min")
         assert(nextBreakText(micro: at(120), long: at(105), now: now) == "Next: long in 5 min")
+    }
+
+    static func pauseDuringCountdown() {
+        let now = Date(timeIntervalSinceReferenceDate: 0)
+        var settings = BreakSettings(); settings.enabled = true; settings.longEnabled = false
+        var schedule = BreakSchedule(settings: settings, now: now)
+        let due = now.addingTimeInterval(settings.microEvery)
+        let pausedAt = due.addingTimeInterval(8), until = pausedAt.addingTimeInterval(2 * 3600)
+        assert(schedule.tick(now: due, idle: 0, voiceActive: false) == .countdown(.micro))
+        assert(schedule.pauseBreaks(for: 2 * 3600, now: pausedAt) == .end(.micro, nil, due: due))
+        assert(schedule.phase == .working && schedule.startNow(pausedAt) == nil)
+        assert(schedule.tick(now: due.addingTimeInterval(BreakSchedule.countdown), idle: 0, voiceActive: false) == nil,
+               "a break must not start after pausing its countdown")
+
+        let saved = try! JSONDecoder().decode(BreakClocks.self, from: JSONEncoder().encode(schedule.clocks))
+        let relaunchedAt = pausedAt.addingTimeInterval(60)
+        var relaunched = BreakSchedule(settings: settings, now: relaunchedAt)
+        assert(relaunched.restore(saved, now: relaunchedAt, quitFor: 1, downFor: 0) == nil)
+        assert(relaunched.pausedUntil == until)
+        assert(relaunched.tick(now: until.addingTimeInterval(-1), idle: 0, voiceActive: false) == nil)
+        assert(relaunched.tick(now: until, idle: 0, voiceActive: false) == .countdown(.micro))
     }
 
     static func restore() {

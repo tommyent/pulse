@@ -338,9 +338,10 @@ final class BreakController: ObservableObject {
     /// The rail's break cup menu: Pause, for a meeting without a call on this Mac; nil resumes.
     func pauseBreaks(for seconds: TimeInterval?) {
         objectWillChange.send()
-        schedule.pausedUntil = seconds.map { Date().addingTimeInterval($0) }
-        saveClocks(force: true)
+        let event = schedule.pauseBreaks(for: seconds, now: .now)
         log.notice("\(seconds.map { "breaks paused for \(Int($0)) s" } ?? "breaks resumed", privacy: .public)")
+        if let event { handle(event, why: "breaks paused") }
+        else { saveClocks(force: true) }
     }
 
     /// Whether any app is recording from a microphone, as on a call. Reading it needs no microphone permission.
