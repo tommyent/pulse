@@ -1845,13 +1845,19 @@ struct BatterySettingsSection: View {
         soundRow("Critical sound", sound: $settings.criticalSound, loops: $settings.criticalLoops)
         LabeledContent {
             Button("Import Sounds…") {
-                let panel = NSOpenPanel()
-                panel.allowedContentTypes = [.audio]
-                panel.allowsMultipleSelection = true
-                guard panel.runModal() == .OK else { return }
-                let rejected = BatterySounds.importFiles(panel.urls)
-                sounds = BatterySounds.all().map(\.name)
-                results.soundImport = rejected.isEmpty ? "" : "Couldn't import \(rejected.joined(separator: ", "))"
+                DispatchQueue.main.async {
+                    let panel = NSOpenPanel()
+                    panel.allowedContentTypes = [.audio]
+                    panel.allowsMultipleSelection = true
+                    panel.begin { response in
+                        guard response == .OK else { return }
+                        MainActor.assumeIsolated {
+                            let rejected = BatterySounds.importFiles(panel.urls)
+                            sounds = BatterySounds.all().map(\.name)
+                            results.soundImport = rejected.isEmpty ? "" : "Couldn't import \(rejected.joined(separator: ", "))"
+                        }
+                    }
+                }
             }
         } label: {
             Text("Your own sounds")

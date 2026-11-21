@@ -198,12 +198,19 @@ struct AppearanceSettings: View {
                 Button("Pulse Picture") { setWallpaper("pulse", light: setting.light) }
                 Divider()
                 Button("Choose Picture…") {
-                    let panel = NSOpenPanel()
-                    panel.allowedContentTypes = [.image]
-                    NSApp.activate()
-                    guard panel.runModal() == .OK, let url = panel.url else { return }
-                    do { setWallpaper(try Wallpaper.copyIn(url, light: setting.light), light: setting.light) }
-                    catch { pictureError = error.localizedDescription }
+                    // Let AppKit finish dismissing the menu before showing the picker.
+                    DispatchQueue.main.async {
+                        let panel = NSOpenPanel()
+                        panel.allowedContentTypes = [.image]
+                        NSApp.activate()
+                        panel.begin { response in
+                            guard response == .OK, let url = panel.url else { return }
+                            MainActor.assumeIsolated {
+                                do { setWallpaper(try Wallpaper.copyIn(url, light: setting.light), light: setting.light) }
+                                catch { pictureError = error.localizedDescription }
+                            }
+                        }
+                    }
                 }
             }
             .fixedSize().accessibilityLabel("Change " + name.lowercased() + " wallpaper").accessibilityValue(source)
