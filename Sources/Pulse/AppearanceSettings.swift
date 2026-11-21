@@ -2,6 +2,20 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+struct ThemeFileWarning: View {
+    let text: String
+    @Environment(\.pulseSkin) private var skin
+
+    static func mark(on skin: PulseSkin) -> SkinColor {
+        (skin.groove?.slab ?? skin.surface).luminance > 0.18 ? "#B35C00" : "#FF9F0A"
+    }
+
+    var body: some View {
+        let mark = Text("⚠︎").foregroundStyle(Self.mark(on: skin).color)
+        Text("\(mark) \(text)").foregroundStyle(.pulseSecondary)
+    }
+}
+
 extension AppState.Persisted {
     func glass(for theme: PulseTheme, slot: ColorScheme) -> GlassSetting? {
         guard theme.id != "classic-solid", let glassLevel else { return nil }
@@ -352,18 +366,18 @@ private struct ThemeManagement: View {
                     let ids = themes.problems.keys.sorted()
                     ForEach(ids.prefix(5), id: \.self) { id in
                         let first = themes.problems[id]?.split(separator: "\n").first.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "- ")) } ?? ""
-                        Text("⚠︎ \(id).json can't be used: \(first) (more in \(id).error)").foregroundStyle(alert)
+                        ThemeFileWarning(text: "\(id).json can't be used: \(first) (more in \(id).error)")
                             .help(themes.problems[id] ?? "")
                     }
-                    if ids.count > 5 { Text("⚠︎ and \(ids.count - 5) more theme files that can't be used").foregroundStyle(alert) }
+                    if ids.count > 5 { ThemeFileWarning(text: "and \(ids.count - 5) more theme files that can't be used") }
                     let hard = themes.warnings.keys.sorted()
                     ForEach(hard.prefix(max(0, 5 - ids.count)), id: \.self) { id in
                         let first = themes.warnings[id]?.split(separator: "\n").first.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "- ")) } ?? ""
-                        Text("⚠︎ \(id).json is hard to read in places: \(first)").foregroundStyle(alert)
+                        ThemeFileWarning(text: "\(id).json is hard to read in places: \(first)")
                             .help(themes.warnings[id] ?? "")
                     }
-                    if hard.count > max(0, 5 - ids.count) { Text("⚠︎ and \(hard.count - max(0, 5 - ids.count)) more themes that are hard to read in places").foregroundStyle(alert) }
-                    if let notice = themes.notice { Text("⚠︎ \(notice)").foregroundStyle(alert) }
+                    if hard.count > max(0, 5 - ids.count) { ThemeFileWarning(text: "and \(hard.count - max(0, 5 - ids.count)) more themes that are hard to read in places") }
+                    if let notice = themes.notice { ThemeFileWarning(text: notice) }
                     Link("Browse the theme collection", destination: URL(string: "https://github.com/tommyent/pulse/tree/main/themes")!)
                     Divider().padding(.vertical, 4)
                     Text("Create a theme").font(.headline)
@@ -406,8 +420,6 @@ private struct ThemeManagement: View {
         }
         .onExitCommand { dismiss() }
     }
-
-    private var alert: Color { themes.skin(choice).alert }
 
     private func importPanel() {
         let panel = NSOpenPanel()

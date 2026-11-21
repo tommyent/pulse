@@ -426,9 +426,28 @@ enum SettingsStateChecks {
         assert(themes.skin(unknown) == .classic && themes.theme(for: .dark, in: unknown).id == "classic-solid",
                "an unknown theme draws, and shows as, the person's Classic")
 
-        for (_, file) in PulseThemeFile.builtIn {
+        for (id, file) in PulseThemeFile.builtIn {
             let json = try! JSONEncoder().encode(file)
             assert(try! JSONDecoder().decode(PulseThemeFile.self, from: json) == file, "\(file.name) survives JSON")
+
+            let skin = file.look, ground = skin.groove?.slab ?? skin.surface
+            let mark = ThemeFileWarning.mark(on: skin)
+            assert(mark.contrast(with: ground) >= 3, "\(id): warning mark must reach 3:1")
+            let warning = ThemeFileWarning(text: "sea.json can't be used: colours.track is missing")
+                .environment(\.pulseSkin, skin).padding(6).background(ground.color)
+            let renderer = ImageRenderer(content: warning)
+            renderer.scale = 2
+            let bitmap = NSBitmapImageRep(cgImage: renderer.cgImage!)
+            var red = 0, orange = 0
+            for y in 0..<bitmap.pixelsHigh {
+                for x in 0..<bitmap.pixelsWide {
+                    let c = bitmap.colorAt(x: x, y: y)!.usingColorSpace(.sRGB)!
+                    let (r, g, b) = (c.redComponent, c.greenComponent, c.blueComponent)
+                    if r > 0.3, r > 2.5 * g, r > 2.5 * b { red += 1 }
+                    if r > 0.3, (0.4...0.75).contains(g / r), b < 0.25 * r { orange += 1 }
+                }
+            }
+            assert(red == 0 && orange > 20, "\(id): expected an orange warning mark and no alert red")
         }
         let file = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(PulseThemeFile.groove)) as! [String: Any]
         assert(file["name"] as? String == "Groove" && file["appearance"] as? String == "dark" && file["format"] as? Int == 1)
