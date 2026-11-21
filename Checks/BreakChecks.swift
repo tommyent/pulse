@@ -278,6 +278,22 @@ enum BreakChecks {
         assert(aged.prune(now: t) && aged.records == h.records)
         assert(!aged.prune(now: t))
         assert(aged.prune(now: t.addingTimeInterval(BreakHistory.keep + 10)) && aged.records.isEmpty)
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try! FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("break-history.jsonl")
+        try! BreakHistory.append(h.records[0], to: file)
+        try! BreakHistory.append(h.records[1], to: file)
+        let saved = try! Data(contentsOf: file)
+        assert(BreakHistory(jsonLines: saved).records == Array(h.records.prefix(2)))
+        try! FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: file.path)
+        do {
+            try BreakHistory.append(h.records[2], to: file)
+            assertionFailure("A read-only history should report the append failure")
+        } catch {
+            assert(try! Data(contentsOf: file) == saved, "A failed append must preserve the existing history")
+        }
     }
 
     static func ideas() {

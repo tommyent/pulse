@@ -197,13 +197,11 @@ final class BreakController: ObservableObject {
     private func record(_ kind: BreakKind, due: Date, _ outcome: BreakSchedule.Outcome) {
         let r = BreakRecord(kind: kind, due: due, at: .now, outcome: outcome)
         history.add(r)
-        try? FileManager.default.createDirectory(at: Self.dir, withIntermediateDirectories: true)
-        if let h = try? FileHandle(forWritingTo: Self.historyURL) {
-            _ = try? h.seekToEnd()
-            try? h.write(contentsOf: BreakHistory.line(r))   // the older write(_:) raises an exception on a full disk, which would crash Pulse
-            try? h.close()
-        } else {
-            try? BreakHistory.line(r).write(to: Self.historyURL, options: .atomic)
+        do {
+            try FileManager.default.createDirectory(at: Self.dir, withIntermediateDirectories: true)
+            try BreakHistory.append(r, to: Self.historyURL)
+        } catch {
+            log.error("break history write failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

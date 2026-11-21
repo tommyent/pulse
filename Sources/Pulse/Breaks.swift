@@ -454,6 +454,13 @@ struct BreakHistory {
     static func line(_ r: BreakRecord) -> Data { ((try? JSONEncoder().encode(r)) ?? Data()) + Data([0x0A]) }
     var jsonLines: Data { records.reduce(into: Data()) { $0 += Self.line($1) } }
 
+    static func append(_ record: BreakRecord, to url: URL) throws {
+        let fd = open(url.path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        let file = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        try file.write(contentsOf: line(record))
+    }
+
     mutating func add(_ r: BreakRecord) { records.append(r) }
 
     /// Drops what's older than 90 days; true when anything went.
