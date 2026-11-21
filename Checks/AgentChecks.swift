@@ -319,7 +319,9 @@ enum AgentChecks {
         case "$*" in
             *"-S studio client ls"*) cat "$here/there.json" ;;
             *"-S studio block ls -s session:s2"*) cat "$here/studio-s2.json" ;;
-            *"client ls"*) cat "$here/here.json" ;;
+            *"client ls"*)
+                [ -e "$here/overtake-on-local-client" ] && touch "$here/overtaken"
+                cat "$here/here.json" ;;
             *"block ls -s session:s1"*) cat "$here/s1.json" ;;
             *"block ls -s session:s3"*) cat "$here/s3.json" ;;
             *"api call session.list"*) cat "$here/sessions.json" ;;
@@ -377,6 +379,13 @@ enum AgentChecks {
         asked = 0
         RexAgents.show(near, rex: rex, thisMac: "Unknown") { asked += 1; return asked <= 2 }
         assert(calls() == ["block ls -s session:s1 --json", "block focus -s session:s1 block:b1"])
+        // a remote click overtaken during the local client lookup skips the remote client lookup too
+        try! Data().write(to: dir.appending(path: "overtake-on-local-client"))
+        RexAgents.show(far, rex: rex, thisMac: "Unknown") { !fm.fileExists(atPath: dir.appending(path: "overtaken").path) }
+        try? fm.removeItem(at: dir.appending(path: "overtake-on-local-client"))
+        try? fm.removeItem(at: dir.appending(path: "overtaken"))
+        assert(calls() == ["-S studio block ls -s session:s2 --json", "-S studio block focus -s session:s2 block:b2",
+                           "client ls --json"])
         var unplaced = near; unplaced.session = ""
         RexAgents.show(unplaced, rex: rex, thisMac: "Unknown")
         assert(calls().isEmpty, "a stand-in agent has no pane to show")

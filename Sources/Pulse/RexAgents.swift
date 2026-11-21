@@ -514,8 +514,13 @@ final class RexAgents: ObservableObject {
         let here = run(rex, ["client", "ls", "--json"]).flatMap(localApp(fromList:))
         // a pane on another host is shown by this Mac's app too: it's asked through that host's server, where it is
         // one of the network clients
-        let client = agent.host.isEmpty ? here?.id
-            : run(rex, ["client", "ls", "--json"], on: agent.host).flatMap { remoteApp(fromList: $0, label: here?.label ?? thisMac) }
+        let client: String?
+        if agent.host.isEmpty {
+            client = here?.id
+        } else {
+            guard current() else { return }
+            client = run(rex, ["client", "ls", "--json"], on: agent.host).flatMap { remoteApp(fromList: $0, label: here?.label ?? thisMac) }
+        }
         guard let client, current() else { return }
         _ = run(rex, ["-C", client] + selectArguments(fresh), on: agent.host)
     }
