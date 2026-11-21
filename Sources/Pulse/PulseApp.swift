@@ -56,7 +56,7 @@ struct PulseApp: App {
         MenuBarExtra {
             MenuBarPopover(state: state)
                 .containerBackground(.clear, for: .window)
-                .pulsePresentation(state)
+                .pulsePresentation(state, hidesWindowShadow: true)
         } label: {
             if let icon = Self.menuBarIcon {
                 Image(nsImage: icon)

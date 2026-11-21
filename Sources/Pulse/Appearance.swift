@@ -108,12 +108,13 @@ private struct PulseRim<S: Shape>: View {
 
 private struct PulsePresentation: ViewModifier {
     @ObservedObject var state: AppState
+    var hidesWindowShadow = false
     @ObservedObject private var themes = ThemeStore.shared
     func body(content: Content) -> some View {
         let choice = state.persisted.themeChoice
         let scheme = themes.scheme(choice)
         content.preferredColorScheme(scheme)
-            .background(PulseWindowBacking(scheme: scheme))
+            .background(PulseWindowBacking(scheme: scheme, hidesShadow: hidesWindowShadow))
             .modifier(PanelLook(theme: themes.current(choice), slot: themes.mode(choice), saved: state.persisted))
     }
 }
@@ -196,9 +197,11 @@ private struct SurfaceModifier<S: Shape>: ViewModifier {
 // while the application, and every other window, keeps Pulse's dark.
 private struct PulseWindowBacking: NSViewRepresentable {
     let scheme: ColorScheme
+    let hidesShadow: Bool
 
     final class BackingView: NSView {
         var scheme = ColorScheme.dark
+        var hidesShadow = false
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             clearBacking()
@@ -206,17 +209,29 @@ private struct PulseWindowBacking: NSViewRepresentable {
         func clearBacking() {
             window?.isOpaque = false
             window?.backgroundColor = .clear
+            if hidesShadow { window?.hasShadow = false }
             let name: NSAppearance.Name = scheme == .light ? .aqua : .darkAqua
             if window?.appearance?.name != name { window?.appearance = NSAppearance(named: name) }
         }
     }
-    func makeNSView(context: Context) -> BackingView { let view = BackingView(); view.scheme = scheme; return view }
-    func updateNSView(_ view: BackingView, context: Context) { view.scheme = scheme; view.clearBacking() }
+    func makeNSView(context: Context) -> BackingView {
+        let view = BackingView()
+        view.scheme = scheme
+        view.hidesShadow = hidesShadow
+        return view
+    }
+    func updateNSView(_ view: BackingView, context: Context) {
+        view.scheme = scheme
+        view.hidesShadow = hidesShadow
+        view.clearBacking()
+    }
 }
 
 extension View {
     func pulseSurface<S: Shape>(in shape: S, bordered: Bool = true, followsWallpaperCrop: Bool = true, readingSize: CGSize? = nil) -> some View {
         modifier(SurfaceModifier(shape: shape, followsWallpaperCrop: followsWallpaperCrop, readingSize: readingSize, bordered: bordered))
     }
-    func pulsePresentation(_ state: AppState) -> some View { modifier(PulsePresentation(state: state)) }
+    func pulsePresentation(_ state: AppState, hidesWindowShadow: Bool = false) -> some View {
+        modifier(PulsePresentation(state: state, hidesWindowShadow: hidesWindowShadow))
+    }
 }

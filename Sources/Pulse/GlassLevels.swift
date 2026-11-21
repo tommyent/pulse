@@ -273,7 +273,12 @@ struct LevelPanel<S: Shape>: ViewModifier {
                     WallpaperLabelContrast(labels: labels, lightInk: reading.light)
                 }
             }
-            .background { WallpaperLayer(level: setting.level, picture: picture?.image, reading: reading, shape: shape, crop: framing, usesWallpaperFinish: usesWallpaperFinish) }
+            .background {
+                // The native glass layer can intercept clicks meant for the controls above it.
+                WallpaperLayer(level: setting.level, picture: picture?.image, reading: reading,
+                               shape: shape, crop: framing, usesWallpaperFinish: usesWallpaperFinish)
+                    .allowsHitTesting(false)
+            }
             .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
     }
 }

@@ -118,7 +118,13 @@ struct AppearanceSettings: View {
                     .padding(.vertical, 10)
                     Divider()
                     VStack(alignment: .leading, spacing: 7) {
-                        Text("Finish")
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text("Finish")
+                            Text("Beta")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .accessibilityElement(children: .combine)
                         if theme.id == "classic-solid" {
                             Text("Classic Solid is opaque. Choose another theme to use a wallpaper.").font(.caption).foregroundStyle(.secondary)
                         } else {
