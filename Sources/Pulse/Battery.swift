@@ -79,7 +79,8 @@ final class BatteryMonitor: ObservableObject {
         if let source = IOPSNotificationCreateRunLoopSource({ _ in
             MainActor.assumeIsolated { BatteryMonitor.shared.refresh() }
         }, nil)?.takeRetainedValue() {
-            CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
+            // Keep receiving readings while an approval prompt runs in modal mode.
+            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         }
         // KVO here also sees `defaults write` from another process
         simulation = UserDefaults.standard.observe(\.simulatedBattery) { _, _ in

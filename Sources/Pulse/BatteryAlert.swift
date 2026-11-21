@@ -20,7 +20,7 @@ final class BatteryAlerts {
         self.state = state
         BatteryMonitor.shared.$reading
             .combineLatest(state.$persisted.map(\.battery).removeDuplicates())
-            .receive(on: RunLoop.main)
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] reading, settings in self?.update(reading, settings) }
             .store(in: &cancellables)
     }
