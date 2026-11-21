@@ -27,6 +27,7 @@ enum AgentChecks {
         reader()
         removedHost()
         movedPane()
+        snapshotLayoutRace()
         context()
         notifier()
         settingsAndRex()
@@ -521,6 +522,60 @@ enum AgentChecks {
             write("", "moved")
             let refreshed = wait(10) { rex.agents.first?.window == "window:w2" && rex.agents.first?.label == "moved" }
             assert(refreshed, "session_view_changed should refresh the pane's tab and label: \(rex.agents)")
+            rex.want(false, for: "check")
+            _ = wait(0.3)
+        }
+    }
+
+    /// A layout change that arrives while a snapshot is still reading pane statuses is re-read after the snapshot
+    /// publishes, so the snapshot can't undo the move back to the old tab.
+    static func snapshotLayoutRace() {
+        let fm = FileManager.default, dir = fm.temporaryDirectory.appending(path: "pulse-snap-race-\(UUID().uuidString)")
+        try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        func write(_ text: String, _ name: String) { try! Data(text.utf8).write(to: dir.appending(path: name)) }
+        func statusCount() -> Int {
+            ((try? String(contentsOf: dir.appending(path: "status.log"), encoding: .utf8)) ?? "").split(separator: "\n").count
+        }
+        write(#"""
+        #!/bin/sh
+        here="$(dirname "$0")"
+        case "$*" in
+            *"events"*)
+                trap 'kill $!; exit 0' TERM
+                while [ ! -e "$here/moved" ]; do sleep 0.05; done
+                echo '{"type":"session_event","payload":{"session_id":"session:s1","event":{"type":"session_view_changed","payload":{"revision":6}}}}'
+                sleep 600 & wait ;;
+            *"hosts list"*) echo '{"hosts":[]}' ;;
+            *"session.list"*) echo '{"sessions":[{"session_id":"session:s1"}]}' ;;
+            *"block ls -s session:s1"*)
+                cat "$here/blocks.json"
+                touch "$here/ls-done" ;;
+            *"program_status"*)
+                echo "status" >> "$here/status.log"
+                while [ ! -e "$here/release-status" ]; do sleep 0.05; done
+                echo '{"records":[{"app":"claude-code","state":"blocked","kind":"question","msg":"Ready?"}]}' ;;
+        esac
+        """#, "rex")
+        try! fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.appending(path: "rex").path)
+        write(#"{"blocks":[{"block_id":"block:b1","label":"old","flavor":"com.superlogical.terminal.shell","window_id":"window:w1"}]}"#, "blocks.json")
+        MainActor.assumeIsolated {
+            let rex = RexAgents(find: { dir.appending(path: "rex") })
+            func wait(_ seconds: Double, until done: () -> Bool = { false }) -> Bool {
+                let end = Date().addingTimeInterval(seconds)
+                while Date() < end, !done() { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+                return done()
+            }
+            rex.want(true, for: "check")
+            assert(wait(10) { fm.fileExists(atPath: dir.appending(path: "ls-done").path) }, "snapshot read block ls")
+            // pane moves while snapshot is still blocked in program_status
+            write(#"{"blocks":[{"block_id":"block:b1","label":"moved","flavor":"com.superlogical.terminal.shell","window_id":"window:w2"}]}"#, "blocks.json")
+            write("", "moved")
+            _ = wait(0.3)   // let the event arrive before the snapshot finishes
+            write("", "release-status")
+            let refreshed = wait(2.5) { rex.agents.first?.window == "window:w2" && rex.agents.first?.label == "moved" }
+            assert(refreshed, "layout change during snapshot should be re-read right after it publishes: \(rex.agents)")
+            assert(statusCount() == 1, "must not rely on the 3 s second snapshot (saw \(statusCount()) status reads)")
             rex.want(false, for: "check")
             _ = wait(0.3)
         }

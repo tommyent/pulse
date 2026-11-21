@@ -132,6 +132,7 @@ final class RexAgents: ObservableObject {
     private var streams: [String: Process] = [:]
     private var places: [String: [String: Place]] = [:]   // each server's panes by block id, as its latest snapshot had them
     private var pending: [String: [(String, BreakAgent?)]] = [:] // events that arrive while a server's snapshot runs, applied after it
+    private var pendingViews: [String: Set<String>] = [:]        // sessions whose layout changed while a snapshot ran, refreshed after it
     private var reading: [String: Int] = [:]   // each server's latest snapshot: an older one still running is dropped when it ends
     private var generation = 0
     private var users: Set<String> = []   // who wants the agents read
@@ -210,6 +211,7 @@ final class RexAgents: ObservableObject {
         streams.removeValue(forKey: server)?.terminate()
         placeRefreshes.removeValue(forKey: server)?.values.forEach { $0.cancel() }
         pending[server] = nil
+        pendingViews[server] = nil
         places[server] = nil
         found[server] = nil
     }
@@ -220,6 +222,7 @@ final class RexAgents: ObservableObject {
         reading[server, default: 0] += 1
         let read = reading[server]
         pending[server] = []   // what an older snapshot had buffered is in this newer one
+        pendingViews[server] = []
         Task.detached(priority: .utility) {
             let snapshot = Self.snapshot(rex, server)
             await MainActor.run {
@@ -233,6 +236,8 @@ final class RexAgents: ObservableObject {
                 }
                 let later = self.pending.removeValue(forKey: server) ?? []
                 for (block, agent) in later { self.apply(server, block, agent) }
+                let moved = self.pendingViews.removeValue(forKey: server) ?? []
+                for session in moved { self.refreshPlacesSoon(rex, server, session: session, mine: mine) }
                 guard again else { return }
                 Task { @MainActor in
                     try? await Task.sleep(for: .seconds(3))
@@ -250,6 +255,7 @@ final class RexAgents: ObservableObject {
         placeRefreshes = [:]
         watching.removeAll()
         pending = [:]
+        pendingViews = [:]
         found = [:]
         places = [:]
         asked = []
@@ -376,14 +382,25 @@ final class RexAgents: ObservableObject {
     /// session so rapid changes collapse into one `block ls`, updating cached tabs and labels without re-reading
     /// every pane's status.
     private func refreshPlacesSoon(_ rex: URL, _ server: String, session: String, mine: Int) {
+        if pending[server] != nil {
+            pendingViews[server, default: []].insert(session)
+            return
+        }
         placeRefreshes[server]?[session]?.cancel()
         placeRefreshes[server, default: [:]][session] = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(500))
             guard let self, !Task.isCancelled, self.generation == mine, self.watching.contains(server) else { return }
+            if self.pending[server] != nil {
+                self.placeRefreshes[server]?[session] = nil
+                self.pendingViews[server, default: []].insert(session)
+                return
+            }
+            let read = self.reading[server, default: 0]
             let fresh = await Task.detached(priority: .utility) { Self.sessionPlaces(rex, session: session, on: server) }.value
             guard !Task.isCancelled, self.generation == mine, self.watching.contains(server) else { return }
             self.placeRefreshes[server]?[session] = nil
-            guard let fresh else { return }
+            // a snapshot that started during this refresh replaces places and replays any newer layout events
+            guard let fresh, self.reading[server, default: 0] == read, self.pending[server] == nil else { return }
             var updated = (self.places[server] ?? [:]).filter { $0.value.session != session }
             updated.merge(fresh) { _, new in new }
             self.places[server] = updated
