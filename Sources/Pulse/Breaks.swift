@@ -203,6 +203,7 @@ struct BreakSchedule {
     private var currentDue: Date?                // when the break counting down or on screen was due
     private var counts = true                     // false for a simulatedBreak, which leaves the clocks alone
     private var awayCounted: Set<BreakKind> = []  // what the current time away already counted, to report it once
+    private var lastBreakEnd: Date?
 
     init(settings: BreakSettings, now: Date) {
         self.settings = settings
@@ -225,6 +226,12 @@ struct BreakSchedule {
         return (max(nextMicro, s), settings.longEnabled ? max(nextLong, s) : nil)
     }
 
+    /// Only the idle time after a finished break can count as a separate stretch away.
+    func idleSinceBreak(_ idle: TimeInterval, now: Date) -> TimeInterval {
+        guard let lastBreakEnd else { return idle }
+        return min(idle, max(0, now.timeIntervalSince(lastBreakEnd)))
+    }
+
     /// Called about once a second. `idle`: seconds with no input; `locked`: the screen is locked (no countdown or
     /// overlay then; the controller reports how long when it unlocks); `voiceActive`, a call in Pulse or another app,
     /// holds new breaks back.
@@ -243,6 +250,7 @@ struct BreakSchedule {
         nextLong = min(nextLong, now.addingTimeInterval(settings.longEvery))
         switch phase {
         case .working:
+            let idle = idleSinceBreak(idle, now: now)
             if settings.awayMode == .idle, idle >= Self.idleAway, !locked {
                 if let e = away(idle, now: now) { return e }
             } else if !locked {
@@ -405,6 +413,7 @@ struct BreakSchedule {
     private mutating func finish(_ kind: BreakKind, _ outcome: Outcome, now: Date) -> Event {
         let due = currentDue ?? now
         if counts {
+            if outcome == .taken || outcome == .endedEarly { lastBreakEnd = now }
             if kind == .long {
                 nextLong = Self.slot(after: due, every: settings.longEvery, past: now)
                 // the micro slot it took the place of, and any that passed during it

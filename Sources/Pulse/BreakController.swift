@@ -242,7 +242,8 @@ final class BreakController: ObservableObject {
     private func tick() {
         let now = Date()
         // any input event: kCGAnyInputEventType
-        var idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+        let systemIdle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+        var idle = schedule.idleSinceBreak(systemIdle, now: now)
         let voice = CodexPetSession.shared.voiceState != .off, locked = lockedAt != nil || sleptAt != nil
         let previous = schedule.phase, enabled = schedule.settings.enabled, due = schedule.due(at: now) != nil
         // ~2 ms a read, so only when a call would change something: a break due or counting down, or time away

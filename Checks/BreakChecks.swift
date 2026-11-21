@@ -6,6 +6,7 @@ enum BreakChecks {
     static func main() async {
         schedule()
         pauseDuringCountdown()
+        idleAfterBreak()
         restore()
         history()
         ideas()
@@ -204,6 +205,33 @@ enum BreakChecks {
         assert(relaunched.pausedUntil == until)
         assert(relaunched.tick(now: until.addingTimeInterval(-1), idle: 0, voiceActive: false) == nil)
         assert(relaunched.tick(now: until, idle: 0, voiceActive: false) == .countdown(.micro))
+    }
+
+    static func idleAfterBreak() {
+        let now = Date(timeIntervalSinceReferenceDate: 0)
+        var settings = BreakSettings()
+        settings.enabled = true
+        let due = now.addingTimeInterval(settings.longEvery)
+        var schedule = BreakSchedule(settings: settings, now: now)
+        let starts = due.addingTimeInterval(BreakSchedule.countdown)
+        let ends = starts.addingTimeInterval(settings.longLength)
+        for interval in 1...2 {
+            let microDue = now.addingTimeInterval(Double(interval) * settings.microEvery)
+            let microStart = microDue.addingTimeInterval(BreakSchedule.countdown)
+            _ = schedule.tick(now: microDue, idle: 0, voiceActive: false)
+            _ = schedule.tick(now: microStart, idle: 0, voiceActive: false)
+            _ = schedule.tick(now: microStart.addingTimeInterval(settings.microLength), idle: 0, voiceActive: false)
+        }
+        assert(schedule.tick(now: due, idle: 0, voiceActive: false) == .countdown(.long))
+        assert(schedule.tick(now: starts, idle: starts.timeIntervalSince(due), voiceActive: false) == .start(.long))
+        assert(schedule.tick(now: ends, idle: ends.timeIntervalSince(due), voiceActive: false) == .end(.long, .taken, due: due))
+        let nextTick = ends.addingTimeInterval(1)
+        assert(schedule.tick(now: nextTick, idle: nextTick.timeIntervalSince(due), voiceActive: false) == nil,
+               "Idle time spent taking a break gives no extra away credit")
+        assert(schedule.clocks.nextLong == due.addingTimeInterval(settings.longEvery))
+        let away = ends.addingTimeInterval(BreakSchedule.idleAway)
+        assert(schedule.tick(now: away, idle: away.timeIntervalSince(due), voiceActive: false) ==
+               .away([.micro: due.addingTimeInterval(settings.microEvery), .long: due.addingTimeInterval(settings.longEvery)]))
     }
 
     static func restore() {
