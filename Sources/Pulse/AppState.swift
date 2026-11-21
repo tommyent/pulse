@@ -254,7 +254,7 @@ final class AppState: ObservableObject {
         // shortcut: one flat 2-min poll for everything; per-adapter budgets if a provider ever throttles
         Task {
             while true {
-                await refreshAll(manual: false)
+                await refreshAll()
                 try? await Task.sleep(for: .seconds(120))
             }
         }
@@ -296,7 +296,7 @@ final class AppState: ObservableObject {
         if peeking { peeking = false }   // a peeking rail tucks back in
     }
 
-    func refreshAll(manual: Bool = true) async {
+    func refreshAll(manual: Bool = false) async {
         if manual { agy.manualRefresh(whileRefreshing: refreshing) }
         guard !refreshing else { refreshRequested = true; return }
         refreshing = true

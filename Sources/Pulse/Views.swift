@@ -1325,7 +1325,7 @@ struct MenuBarPopover: View {
             }
             HStack(spacing: 4) {
                 Button {
-                    Task { await state.refreshAll() }
+                    Task { await state.refreshAll(manual: true) }
                 } label: {
                     ZStack {
                         Label("Refresh usage", systemImage: "arrow.clockwise")
