@@ -26,6 +26,7 @@ enum AgentChecks {
         keyboard()
         reader()
         removedHost()
+        movedPane()
         context()
         notifier()
         settingsAndRex()
@@ -97,6 +98,11 @@ enum AgentChecks {
         // Rex kept that failure after the program exited, and said nothing more until the pane closed
         let realClose = RexAgents.update(fromEvent: json(#"{"type":"session_event","payload":{"session_id":"session:01a1d08f-f035-71cc-865a-c065e08b8e11","event":{"type":"block_closed","payload":{"block_id":"block:01a1d08f-f035-76ae-814a-7f77abff4755"}}}}"#))
         assert(realClose?.0 == block && realClose?.1 == nil)
+        // Rex emits session_view_changed when a pane moves, swaps or is renamed
+        let viewChanged = RexAgents.viewChangedSession(fromEvent: json(#"{"type":"session_event","payload":{"session_id":"session:s1","event":{"type":"session_view_changed","payload":{"revision":6}}}}"#))
+        assert(viewChanged == "session:s1")
+        assert(RexAgents.viewChangedSession(fromEvent: sessionEvent("block_closed", #"{"block_id":"b9"}"#)) == nil)
+        assert(RexAgents.viewChangedSession(fromEvent: json(#"{"type":"hosts_changed"}"#)) == nil)
 
         // a wait that is reported again (a new line, a snapshot read again) keeps the time it began
         let first = waiting("b", since: 0, kind: .permission)
@@ -310,32 +316,56 @@ enum AgentChecks {
         echo "$*" >> "$here/calls.log"
         case "$*" in
             *"-S studio client ls"*) cat "$here/there.json" ;;
+            *"-S studio block ls -s session:s2"*) cat "$here/studio-s2.json" ;;
             *"client ls"*) cat "$here/here.json" ;;
+            *"block ls -s session:s1"*) cat "$here/s1.json" ;;
+            *"block ls -s session:s3"*) cat "$here/s3.json" ;;
+            *"api call session.list"*) cat "$here/sessions.json" ;;
         esac
         """#.utf8).write(to: rex)
         try! fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rex.path)
         try! Data(#"{"clients":[{"client_id":"client:studio-app","info":{"kind":"app","label":"Studio Mac"},"principal":{"transport":"tailscale"}},{"client_id":"client:desk-app","info":{"kind":"app","label":"Desk Mac"},"principal":{"transport":"unix"}}]}"#.utf8).write(to: dir.appending(path: "here.json"))
         try! Data(#"{"clients":[{"client_id":"client:studio-own","info":{"kind":"app","label":"Studio Mac"},"principal":{"transport":"unix"}},{"client_id":"client:desk-visiting","info":{"kind":"app","label":"Desk Mac"},"principal":{"transport":"tailscale"}}]}"#.utf8).write(to: dir.appending(path: "there.json"))
+        try! Data(#"{"blocks":[{"block_id":"block:b1","label":"pane","flavor":"com.superlogical.terminal.shell","window_id":"window:w2"},{"block_id":"block:b4","label":"detached","flavor":"com.superlogical.terminal.shell"}]}"#.utf8).write(to: dir.appending(path: "s1.json"))
+        try! Data(#"{"blocks":[{"block_id":"block:b3","label":"moved","flavor":"com.superlogical.terminal.shell","window_id":"window:w3"}]}"#.utf8).write(to: dir.appending(path: "s3.json"))
+        try! Data(#"{"blocks":[{"block_id":"block:b2","label":"far","flavor":"com.superlogical.terminal.shell","window_id":"window:w9"}]}"#.utf8).write(to: dir.appending(path: "studio-s2.json"))
+        try! Data(#"{"sessions":[{"session_id":"session:s1"},{"session_id":"session:s3"}]}"#.utf8).write(to: dir.appending(path: "sessions.json"))
         func calls() -> [String] {
             defer { try? fm.removeItem(at: log) }
             return ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(separator: "\n")
                 .map { $0.replacingOccurrences(of: "--autostart=false --timeout 3s ", with: "") }
         }
+        // stale window_id: the pane moved from w1 to w2 since the snapshot, so show resolves w2 before selecting
         var near = waiting("block:b1", since: 0); near.session = "session:s1"; near.window = "window:w1"
-        var far = waiting("block:b2", since: 0); far.session = "session:s2"; far.host = "studio"
+        var far = waiting("block:b2", since: 0); far.session = "session:s2"; far.window = "window:old"; far.host = "studio"
         RexAgents.show(near, rex: rex, thisMac: "Unknown")
-        assert(calls() == ["block focus -s session:s1 block:b1", "client ls --json",
-                           "-C client:desk-app do session.select session_id=session:s1 window_id=window:w1"])
-        // a pane on the other Mac: focused there, and this Mac's app is the one asked, through that host's server
+        assert(calls() == ["block ls -s session:s1 --json", "block focus -s session:s1 block:b1", "client ls --json",
+                           "-C client:desk-app do session.select session_id=session:s1 window_id=window:w2"])
+        // a pane on the other Mac: resolved and focused there, and this Mac's app is asked through that host's server
         RexAgents.show(far, rex: rex, thisMac: "Unknown")
-        assert(calls() == ["-S studio block focus -s session:s2 block:b2", "client ls --json", "-S studio client ls --json",
-                           "-S studio -C client:desk-visiting do session.select session_id=session:s2"])
+        assert(calls() == ["-S studio block ls -s session:s2 --json", "-S studio block focus -s session:s2 block:b2",
+                           "client ls --json", "-S studio client ls --json",
+                           "-S studio -C client:desk-visiting do session.select session_id=session:s2 window_id=window:w9"])
+        // a pane that moved to another session is found across sessions before focusing and selecting
+        var crossSession = waiting("block:b3", since: 0); crossSession.session = "session:s1"; crossSession.window = "window:w1"
+        RexAgents.show(crossSession, rex: rex, thisMac: "Unknown")
+        assert(calls() == ["block ls -s session:s1 --json", "api call session.list", "block ls -s session:s3 --json",
+                           "block focus -s session:s3 block:b3", "client ls --json",
+                           "-C client:desk-app do session.select session_id=session:s3 window_id=window:w3"])
+        // a detached pane drops its stale window_id instead of jumping to an old tab
+        var detached = waiting("block:b4", since: 0); detached.session = "session:s1"; detached.window = "window:w1"
+        RexAgents.show(detached, rex: rex, thisMac: "Unknown")
+        assert(calls() == ["block ls -s session:s1 --json", "block focus -s session:s1 block:b4", "client ls --json",
+                           "-C client:desk-app do session.select session_id=session:s1"])
         // a click that a newer one has overtaken sends nothing more: none at all, or none after the request under way
         RexAgents.show(near, rex: rex, thisMac: "Unknown") { false }
         assert(calls().isEmpty)
         var asked = 0
         RexAgents.show(near, rex: rex, thisMac: "Unknown") { asked += 1; return asked == 1 }
-        assert(calls() == ["block focus -s session:s1 block:b1"])
+        assert(calls() == ["block ls -s session:s1 --json"])
+        asked = 0
+        RexAgents.show(near, rex: rex, thisMac: "Unknown") { asked += 1; return asked <= 2 }
+        assert(calls() == ["block ls -s session:s1 --json", "block focus -s session:s1 block:b1"])
         var unplaced = near; unplaced.session = ""
         RexAgents.show(unplaced, rex: rex, thisMac: "Unknown")
         assert(calls().isEmpty, "a stand-in agent has no pane to show")
@@ -439,6 +469,49 @@ enum AgentChecks {
             assert(ended, "a host that left the list has its stream ended")
             _ = wait(1)   // time for the last line to arrive
             assert(rex.agents.isEmpty, "a line from a removed host's stream put its agent back: \(rex.agents.map(\.id))")
+            rex.want(false, for: "check")
+            _ = wait(0.3)
+        }
+    }
+
+    /// A pane moved to another tab after the initial snapshot: `session_view_changed` refreshes its cached tab and
+    /// label without waiting for the 10-minute snapshot.
+    static func movedPane() {
+        let fm = FileManager.default, dir = fm.temporaryDirectory.appending(path: "pulse-moved-\(UUID().uuidString)")
+        try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        func write(_ text: String, _ name: String) { try! Data(text.utf8).write(to: dir.appending(path: name)) }
+        write(#"""
+        #!/bin/sh
+        here="$(dirname "$0")"
+        case "$*" in
+            *"events"*)
+                trap 'kill $!; exit 0' TERM
+                while [ ! -e "$here/moved" ]; do sleep 0.05; done
+                echo '{"type":"session_event","payload":{"session_id":"session:s1","event":{"type":"session_view_changed","payload":{"revision":6}}}}'
+                sleep 600 & wait ;;
+            *"hosts list"*) echo '{"hosts":[]}' ;;
+            *"session.list"*) echo '{"sessions":[{"session_id":"session:s1"}]}' ;;
+            *"block ls -s session:s1"*) cat "$here/blocks.json" ;;
+            *"program_status"*) echo '{"records":[{"app":"claude-code","state":"blocked","kind":"question","msg":"Ready?"}]}' ;;
+        esac
+        """#, "rex")
+        try! fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.appending(path: "rex").path)
+        write(#"{"blocks":[{"block_id":"block:b1","label":"old","flavor":"com.superlogical.terminal.shell","window_id":"window:w1"}]}"#, "blocks.json")
+        MainActor.assumeIsolated {
+            let rex = RexAgents(find: { dir.appending(path: "rex") })
+            func wait(_ seconds: Double, until done: () -> Bool = { false }) -> Bool {
+                let end = Date().addingTimeInterval(seconds)
+                while Date() < end, !done() { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+                return done()
+            }
+            rex.want(true, for: "check")
+            let initial = wait(10) { rex.agents.first?.window == "window:w1" && rex.agents.first?.label == "old" }
+            assert(initial, "initial snapshot placed block:b1 in w1: \(rex.agents)")
+            write(#"{"blocks":[{"block_id":"block:b1","label":"moved","flavor":"com.superlogical.terminal.shell","window_id":"window:w2"}]}"#, "blocks.json")
+            write("", "moved")
+            let refreshed = wait(10) { rex.agents.first?.window == "window:w2" && rex.agents.first?.label == "moved" }
+            assert(refreshed, "session_view_changed should refresh the pane's tab and label: \(rex.agents)")
             rex.want(false, for: "check")
             _ = wait(0.3)
         }

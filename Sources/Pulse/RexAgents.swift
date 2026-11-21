@@ -138,6 +138,7 @@ final class RexAgents: ObservableObject {
     private var rex: URL?
     private var asked: Set<String> = []   // panes the snapshot didn't have, each read for once
     private var readingSoon: Set<String> = []   // servers with that read already on its way
+    private var placeRefreshes: [String: [String: Task<Void, Never>]] = [:]   // server → session → debounced refresh
     private var simulation: NSKeyValueObservation?
     private let find: () -> URL?
 
@@ -207,6 +208,7 @@ final class RexAgents: ObservableObject {
     private func unwatch(_ server: String) {
         watching.unwatch(server)
         streams.removeValue(forKey: server)?.terminate()
+        placeRefreshes.removeValue(forKey: server)?.values.forEach { $0.cancel() }
         pending[server] = nil
         places[server] = nil
         found[server] = nil
@@ -244,6 +246,8 @@ final class RexAgents: ObservableObject {
         generation += 1
         streams.values.forEach { $0.terminate() }   // Foundation collects the ended process: none is left as a zombie
         streams = [:]
+        placeRefreshes.values.flatMap(\.values).forEach { $0.cancel() }
+        placeRefreshes = [:]
         watching.removeAll()
         pending = [:]
         found = [:]
@@ -278,6 +282,14 @@ final class RexAgents: ObservableObject {
                     // the stream carries every server event: only the few Pulse acts on are parsed
                     if server.isEmpty, line.contains("\"hosts_changed\"") {
                         await MainActor.run { if generation == mine { watchHosts(rex, mine) } }
+                        continue
+                    }
+                    if line.contains("\"session_view_changed\""),
+                       let session = Self.viewChangedSession(fromEvent: Data(line.utf8)) {
+                        await MainActor.run {
+                            guard generation == mine, watching.isCurrent(server, start: start) else { return }
+                            refreshPlacesSoon(rex, server, session: session, mine: mine)
+                        }
                         continue
                     }
                     guard line.contains("program_status") || line.contains("block_closed"),
@@ -360,6 +372,33 @@ final class RexAgents: ObservableObject {
         }
     }
 
+    /// Rex sends `session_view_changed` when a pane moves, swaps or is renamed (and on focus changes). Debounced per
+    /// session so rapid changes collapse into one `block ls`, updating cached tabs and labels without re-reading
+    /// every pane's status.
+    private func refreshPlacesSoon(_ rex: URL, _ server: String, session: String, mine: Int) {
+        placeRefreshes[server]?[session]?.cancel()
+        placeRefreshes[server, default: [:]][session] = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard let self, !Task.isCancelled, self.generation == mine, self.watching.contains(server) else { return }
+            let fresh = await Task.detached(priority: .utility) { Self.sessionPlaces(rex, session: session, on: server) }.value
+            guard !Task.isCancelled, self.generation == mine, self.watching.contains(server) else { return }
+            self.placeRefreshes[server]?[session] = nil
+            guard let fresh else { return }
+            var updated = (self.places[server] ?? [:]).filter { $0.value.session != session }
+            updated.merge(fresh) { _, new in new }
+            self.places[server] = updated
+            if let list = self.found[server] {
+                let refreshed = list.map { agent -> BreakAgent in
+                    guard let place = fresh[agent.id] else { return agent }
+                    var a = agent
+                    a.label = place.label; a.session = place.session; a.window = place.window
+                    return a
+                }
+                if refreshed != list { self.found[server] = refreshed }
+            }
+        }
+    }
+
     // MARK: finding and calling rex
 
     /// Where Pulse looks for `rex`: the usual CLI folders, then Rex's own app folder. Apps opened from Finder don't
@@ -374,22 +413,37 @@ final class RexAgents: ObservableObject {
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
+    /// Session IDs on `server` from `rex api call session.list`. nil when that server can't be reached.
+    nonisolated private static func sessionIDs(_ rex: URL, on server: String) -> [String]? {
+        guard let list = run(rex, ["api", "call", "session.list"], on: server),
+              let sessions = (try? JSONSerialization.jsonObject(with: list) as? [String: Any])?["sessions"] as? [[String: Any]]
+        else { return nil }
+        return sessions.compactMap { $0["session_id"] as? String }
+    }
+
+    /// One session's terminal panes from `rex block ls -s <session> --json`. nil when the call failed or didn't parse.
+    nonisolated private static func sessionPlaces(_ rex: URL, session: String, on server: String = "") -> [String: Place]? {
+        guard let ls = run(rex, ["block", "ls", "-s", session, "--json"], on: server),
+              let blocks = (try? JSONSerialization.jsonObject(with: ls) as? [String: Any])?["blocks"] as? [[String: Any]]
+        else { return nil }
+        var out: [String: Place] = [:]
+        for block in blocks {
+            guard let id = block["block_id"] as? String,
+                  (block["flavor"] as? String)?.hasPrefix("com.superlogical.terminal") == true else { continue }
+            out[id] = Place(label: block["label"] as? String ?? "", session: session, window: block["window_id"] as? String ?? "")
+        }
+        return out
+    }
+
     /// Every session's terminal panes on `server` and the agent status each reports. nil when that server isn't
     /// running or can't be reached. A host's panes carry its name in `host`, apart from their label: "fix-tests" on
     /// "studio".
     nonisolated static func snapshot(_ rex: URL, _ server: String) -> ([BreakAgent], [String: Place])? {
-        guard let list = run(rex, ["api", "call", "session.list"], on: server),
-              let sessions = (try? JSONSerialization.jsonObject(with: list) as? [String: Any])?["sessions"] as? [[String: Any]]
-        else { return nil }
+        guard let sessions = sessionIDs(rex, on: server) else { return nil }
         var found: [BreakAgent] = [], places: [String: Place] = [:]
-        for session in sessions.compactMap({ $0["session_id"] as? String }) {
-            guard let ls = run(rex, ["block", "ls", "-s", session, "--json"], on: server),
-                  let blocks = (try? JSONSerialization.jsonObject(with: ls) as? [String: Any])?["blocks"] as? [[String: Any]]
-            else { continue }
-            for block in blocks {
-                guard let id = block["block_id"] as? String,
-                      (block["flavor"] as? String)?.hasPrefix("com.superlogical.terminal") == true else { continue }
-                let place = Place(label: block["label"] as? String ?? "", session: session, window: block["window_id"] as? String ?? "")
+        for session in sessions {
+            guard let sessionPlaces = sessionPlaces(rex, session: session, on: server) else { continue }
+            for (id, place) in sessionPlaces.sorted(by: { $0.key < $1.key }) {
                 places[id] = place
                 guard let status = run(rex, ["block", "call", "-s", session, "-b", id, "program_status"], on: server),
                       var agent = agent(fromStatus: status, block: id) else { continue }
@@ -405,13 +459,35 @@ final class RexAgents: ObservableObject {
 
     // MARK: showing a pane
 
-    /// Brings an agent's pane forward as far as the `rex` command can: the pane gets the focus in its session, and the
-    /// Rex app on this Mac is asked to go to that session and tab. The app does that only with its Remote Control
-    /// setting on. The caller then brings Rex to the front.
-    /// `current` is asked before each request: once it says no (a newer click), nothing more is sent.
+    /// Resolves an agent's current session and tab right before showing it, so a pane moved since the last snapshot
+    /// doesn't land on its old tab. One bounded `rex block ls` on the pane's known session covers the common case;
+    /// if the pane isn't there, the server's other sessions are checked too. Returns nil when `current()` turns false.
+    nonisolated static func resolve(_ agent: BreakAgent, rex: URL, current: () -> Bool = { true }) -> BreakAgent? {
+        func applying(_ place: Place) -> BreakAgent {
+            var fresh = agent; fresh.session = place.session; fresh.window = place.window; return fresh
+        }
+        var fallback = agent
+        if let places = sessionPlaces(rex, session: agent.session, on: agent.host) {
+            if let place = places[agent.id] { return applying(place) }
+            fallback.window = ""   // block ls succeeded and the pane isn't in its old tab
+        }
+        guard current() else { return nil }
+        guard let sessions = sessionIDs(rex, on: agent.host) else { return fallback }
+        for session in sessions where session != agent.session {
+            guard current() else { return nil }
+            if let place = sessionPlaces(rex, session: session, on: agent.host)?[agent.id] { return applying(place) }
+        }
+        return fallback
+    }
+
+    /// Brings an agent's pane forward as far as the `rex` command can: the pane's current session and tab are looked
+    /// up first, then the pane gets the focus in its session, and the Rex app on this Mac is asked to go to that
+    /// session and tab. The app does that only with its Remote Control setting on. The caller then brings Rex to the
+    /// front. `current` is asked before each request: once it says no (a newer click), nothing more is sent.
     nonisolated static func show(_ agent: BreakAgent, rex: URL, thisMac: String, current: () -> Bool = { true }) {
         guard !agent.session.isEmpty, current() else { return }
-        _ = run(rex, ["block", "focus", "-s", agent.session, agent.id], on: agent.host)
+        guard let fresh = resolve(agent, rex: rex, current: current), current() else { return }
+        _ = run(rex, ["block", "focus", "-s", fresh.session, fresh.id], on: agent.host)
         guard current() else { return }
         let here = run(rex, ["client", "ls", "--json"]).flatMap(localApp(fromList:))
         // a pane on another host is shown by this Mac's app too: it's asked through that host's server, where it is
@@ -419,7 +495,7 @@ final class RexAgents: ObservableObject {
         let client = agent.host.isEmpty ? here?.id
             : run(rex, ["client", "ls", "--json"], on: agent.host).flatMap { remoteApp(fromList: $0, label: here?.label ?? thisMac) }
         guard let client, current() else { return }
-        _ = run(rex, ["-C", client] + selectArguments(agent), on: agent.host)
+        _ = run(rex, ["-C", client] + selectArguments(fresh), on: agent.host)
     }
 
     /// The Rex app's own action for going to a session, and to the pane's tab when the snapshot knew it.
@@ -521,6 +597,19 @@ final class RexAgents: ObservableObject {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+    }
+
+    /// A `session_view_changed` line of `rex events --all --json`: the session whose panes or tabs changed.
+    /// nil for every other event.
+    nonisolated static func viewChangedSession(fromEvent line: Data) -> String? {
+        guard let top = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+              top["type"] as? String == "session_event",
+              let session = top["payload"] as? [String: Any],
+              let id = session["session_id"] as? String, !id.isEmpty,
+              let event = session["event"] as? [String: Any],
+              event["type"] as? String == "session_view_changed"
+        else { return nil }
+        return id
     }
 
     /// A line of `rex events --all --json`: (block, its agent now, or nil when its program stopped reporting or its pane
