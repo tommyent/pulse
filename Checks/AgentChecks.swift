@@ -321,12 +321,13 @@ enum AgentChecks {
             *"block ls -s session:s1"*) cat "$here/s1.json" ;;
             *"block ls -s session:s3"*) cat "$here/s3.json" ;;
             *"api call session.list"*) cat "$here/sessions.json" ;;
+            *"block focus"*"block:b5"*) exit 1 ;;
         esac
         """#.utf8).write(to: rex)
         try! fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rex.path)
         try! Data(#"{"clients":[{"client_id":"client:studio-app","info":{"kind":"app","label":"Studio Mac"},"principal":{"transport":"tailscale"}},{"client_id":"client:desk-app","info":{"kind":"app","label":"Desk Mac"},"principal":{"transport":"unix"}}]}"#.utf8).write(to: dir.appending(path: "here.json"))
         try! Data(#"{"clients":[{"client_id":"client:studio-own","info":{"kind":"app","label":"Studio Mac"},"principal":{"transport":"unix"}},{"client_id":"client:desk-visiting","info":{"kind":"app","label":"Desk Mac"},"principal":{"transport":"tailscale"}}]}"#.utf8).write(to: dir.appending(path: "there.json"))
-        try! Data(#"{"blocks":[{"block_id":"block:b1","label":"pane","flavor":"com.superlogical.terminal.shell","window_id":"window:w2"},{"block_id":"block:b4","label":"detached","flavor":"com.superlogical.terminal.shell"}]}"#.utf8).write(to: dir.appending(path: "s1.json"))
+        try! Data(#"{"blocks":[{"block_id":"block:b1","label":"pane","flavor":"com.superlogical.terminal.shell","window_id":"window:w2"},{"block_id":"block:b4","label":"detached","flavor":"com.superlogical.terminal.shell"},{"block_id":"block:b5","label":"closing","flavor":"com.superlogical.terminal.shell","window_id":"window:w2"}]}"#.utf8).write(to: dir.appending(path: "s1.json"))
         try! Data(#"{"blocks":[{"block_id":"block:b3","label":"moved","flavor":"com.superlogical.terminal.shell","window_id":"window:w3"}]}"#.utf8).write(to: dir.appending(path: "s3.json"))
         try! Data(#"{"blocks":[{"block_id":"block:b2","label":"far","flavor":"com.superlogical.terminal.shell","window_id":"window:w9"}]}"#.utf8).write(to: dir.appending(path: "studio-s2.json"))
         try! Data(#"{"sessions":[{"session_id":"session:s1"},{"session_id":"session:s3"}]}"#.utf8).write(to: dir.appending(path: "sessions.json"))
@@ -357,6 +358,14 @@ enum AgentChecks {
         RexAgents.show(detached, rex: rex, thisMac: "Unknown")
         assert(calls() == ["block ls -s session:s1 --json", "block focus -s session:s1 block:b4", "client ls --json",
                            "-C client:desk-app do session.select session_id=session:s1"])
+        // a closed pane absent from every session sends neither focus nor session.select
+        var gone = waiting("block:gone", since: 0); gone.session = "session:s1"; gone.window = "window:w1"
+        RexAgents.show(gone, rex: rex, thisMac: "Unknown")
+        assert(calls() == ["block ls -s session:s1 --json", "api call session.list", "block ls -s session:s3 --json"])
+        // if focus fails (e.g. the pane closed between resolve and focus), no session is selected
+        var closing = waiting("block:b5", since: 0); closing.session = "session:s1"; closing.window = "window:w1"
+        RexAgents.show(closing, rex: rex, thisMac: "Unknown")
+        assert(calls() == ["block ls -s session:s1 --json", "block focus -s session:s1 block:b5"])
         // a click that a newer one has overtaken sends nothing more: none at all, or none after the request under way
         RexAgents.show(near, rex: rex, thisMac: "Unknown") { false }
         assert(calls().isEmpty)

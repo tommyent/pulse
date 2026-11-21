@@ -461,23 +461,19 @@ final class RexAgents: ObservableObject {
 
     /// Resolves an agent's current session and tab right before showing it, so a pane moved since the last snapshot
     /// doesn't land on its old tab. One bounded `rex block ls` on the pane's known session covers the common case;
-    /// if the pane isn't there, the server's other sessions are checked too. Returns nil when `current()` turns false.
+    /// if the pane isn't there, the server's other sessions are checked too. Returns nil when the pane is gone or
+    /// `current()` turns false.
     nonisolated static func resolve(_ agent: BreakAgent, rex: URL, current: () -> Bool = { true }) -> BreakAgent? {
         func applying(_ place: Place) -> BreakAgent {
             var fresh = agent; fresh.session = place.session; fresh.window = place.window; return fresh
         }
-        var fallback = agent
-        if let places = sessionPlaces(rex, session: agent.session, on: agent.host) {
-            if let place = places[agent.id] { return applying(place) }
-            fallback.window = ""   // block ls succeeded and the pane isn't in its old tab
-        }
-        guard current() else { return nil }
-        guard let sessions = sessionIDs(rex, on: agent.host) else { return fallback }
+        if let place = sessionPlaces(rex, session: agent.session, on: agent.host)?[agent.id] { return applying(place) }
+        guard current(), let sessions = sessionIDs(rex, on: agent.host) else { return nil }
         for session in sessions where session != agent.session {
             guard current() else { return nil }
             if let place = sessionPlaces(rex, session: session, on: agent.host)?[agent.id] { return applying(place) }
         }
-        return fallback
+        return nil
     }
 
     /// Brings an agent's pane forward as far as the `rex` command can: the pane's current session and tab are looked
@@ -487,8 +483,7 @@ final class RexAgents: ObservableObject {
     nonisolated static func show(_ agent: BreakAgent, rex: URL, thisMac: String, current: () -> Bool = { true }) {
         guard !agent.session.isEmpty, current() else { return }
         guard let fresh = resolve(agent, rex: rex, current: current), current() else { return }
-        _ = run(rex, ["block", "focus", "-s", fresh.session, fresh.id], on: agent.host)
-        guard current() else { return }
+        guard run(rex, ["block", "focus", "-s", fresh.session, fresh.id], on: agent.host) != nil, current() else { return }
         let here = run(rex, ["client", "ls", "--json"]).flatMap(localApp(fromList:))
         // a pane on another host is shown by this Mac's app too: it's asked through that host's server, where it is
         // one of the network clients
