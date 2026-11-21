@@ -492,6 +492,9 @@ enum AgentChecks {
         try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: dir) }
         func write(_ text: String, _ name: String) { try! Data(text.utf8).write(to: dir.appending(path: name)) }
+        func statusCount() -> Int {
+            ((try? String(contentsOf: dir.appending(path: "status.log"), encoding: .utf8)) ?? "").split(separator: "\n").count
+        }
         write(#"""
         #!/bin/sh
         here="$(dirname "$0")"
@@ -504,7 +507,9 @@ enum AgentChecks {
             *"hosts list"*) echo '{"hosts":[]}' ;;
             *"session.list"*) echo '{"sessions":[{"session_id":"session:s1"}]}' ;;
             *"block ls -s session:s1"*) cat "$here/blocks.json" ;;
-            *"program_status"*) echo '{"records":[{"app":"claude-code","state":"blocked","kind":"question","msg":"Ready?"}]}' ;;
+            *"program_status"*)
+                echo "status" >> "$here/status.log"
+                echo '{"records":[{"app":"claude-code","state":"blocked","kind":"question","msg":"Ready?"}]}' ;;
         esac
         """#, "rex")
         try! fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.appending(path: "rex").path)
@@ -517,12 +522,15 @@ enum AgentChecks {
                 return done()
             }
             rex.want(true, for: "check")
-            let initial = wait(10) { rex.agents.first?.window == "window:w1" && rex.agents.first?.label == "old" }
-            assert(initial, "initial snapshot placed block:b1 in w1: \(rex.agents)")
+            // wait for both startup snapshots (t=0 and t=3 s) so the 3 s retry can't satisfy the move assertion
+            let settled = wait(10) { statusCount() >= 2 && rex.agents.first?.window == "window:w1" && rex.agents.first?.label == "old" }
+            assert(settled, "both startup snapshots placed block:b1 in w1: \(rex.agents) (statuses: \(statusCount()))")
+            let before = statusCount()
             write(#"{"blocks":[{"block_id":"block:b1","label":"moved","flavor":"com.superlogical.terminal.shell","window_id":"window:w2"}]}"#, "blocks.json")
             write("", "moved")
-            let refreshed = wait(10) { rex.agents.first?.window == "window:w2" && rex.agents.first?.label == "moved" }
+            let refreshed = wait(5) { rex.agents.first?.window == "window:w2" && rex.agents.first?.label == "moved" }
             assert(refreshed, "session_view_changed should refresh the pane's tab and label: \(rex.agents)")
+            assert(statusCount() == before, "move refresh must not run another program_status snapshot (\(statusCount()) vs \(before))")
             rex.want(false, for: "check")
             _ = wait(0.3)
         }
