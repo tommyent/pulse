@@ -139,7 +139,8 @@ final class RexAgents: ObservableObject {
     private var rex: URL?
     private var asked: Set<String> = []   // panes the snapshot didn't have, each read for once
     private var readingSoon: Set<String> = []   // servers with that read already on its way
-    private var placeRefreshes: [String: [String: Task<Void, Never>]] = [:]   // server → session → debounced refresh
+    private var placeRefreshes: [String: [String: Task<Void, Never>]] = [:]   // server → session → single in-flight refresh
+    private var dirtyPlaces: [String: Set<String>] = [:]                      // sessions needing one trailing refresh
     private var simulation: NSKeyValueObservation?
     private let find: () -> URL?
 
@@ -210,6 +211,7 @@ final class RexAgents: ObservableObject {
         watching.unwatch(server)
         streams.removeValue(forKey: server)?.terminate()
         placeRefreshes.removeValue(forKey: server)?.values.forEach { $0.cancel() }
+        dirtyPlaces[server] = nil
         pending[server] = nil
         pendingViews[server] = nil
         places[server] = nil
@@ -253,6 +255,7 @@ final class RexAgents: ObservableObject {
         streams = [:]
         placeRefreshes.values.flatMap(\.values).forEach { $0.cancel() }
         placeRefreshes = [:]
+        dirtyPlaces = [:]
         watching.removeAll()
         pending = [:]
         pendingViews = [:]
@@ -378,40 +381,47 @@ final class RexAgents: ObservableObject {
         }
     }
 
-    /// Rex sends `session_view_changed` when a pane moves, swaps or is renamed (and on focus changes). Debounced per
-    /// session so rapid changes collapse into one `block ls`, updating cached tabs and labels without re-reading
-    /// every pane's status.
+    /// Rex sends `session_view_changed` when a pane moves, swaps or is renamed (and on focus changes). Keeps at most
+    /// one debounced `block ls` in flight per host and session; events arriving during a lookup mark the session dirty
+    /// for one trailing refresh so the final change is applied without overlapping remote reads.
     private func refreshPlacesSoon(_ rex: URL, _ server: String, session: String, mine: Int) {
         if pending[server] != nil {
             pendingViews[server, default: []].insert(session)
             return
         }
-        placeRefreshes[server]?[session]?.cancel()
+        if placeRefreshes[server]?[session] != nil {
+            dirtyPlaces[server, default: []].insert(session)
+            return
+        }
         placeRefreshes[server, default: [:]][session] = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(500))
-            guard let self, !Task.isCancelled, self.generation == mine, self.watching.contains(server) else { return }
-            if self.pending[server] != nil {
-                self.placeRefreshes[server]?[session] = nil
-                self.pendingViews[server, default: []].insert(session)
-                return
-            }
-            let read = self.reading[server, default: 0]
-            let fresh = await Task.detached(priority: .utility) { Self.sessionPlaces(rex, session: session, on: server) }.value
-            guard !Task.isCancelled, self.generation == mine, self.watching.contains(server) else { return }
-            self.placeRefreshes[server]?[session] = nil
-            // a snapshot that started during this refresh replaces places and replays any newer layout events
-            guard let fresh, self.reading[server, default: 0] == read, self.pending[server] == nil else { return }
-            var updated = (self.places[server] ?? [:]).filter { $0.value.session != session }
-            updated.merge(fresh) { _, new in new }
-            self.places[server] = updated
-            if let list = self.found[server] {
-                let refreshed = list.map { agent -> BreakAgent in
-                    guard let place = fresh[agent.id] else { return agent }
-                    var a = agent
-                    a.label = place.label; a.session = place.session; a.window = place.window
-                    return a
+            defer { if !Task.isCancelled { self?.placeRefreshes[server]?[session] = nil } }
+            while true {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self, !Task.isCancelled, self.generation == mine, self.watching.contains(server) else { return }
+                self.dirtyPlaces[server]?.remove(session)
+                if self.pending[server] != nil {
+                    self.pendingViews[server, default: []].insert(session)
+                    return
                 }
-                if refreshed != list { self.found[server] = refreshed }
+                let read = self.reading[server, default: 0]
+                let fresh = await Task.detached(priority: .utility) { Self.sessionPlaces(rex, session: session, on: server) }.value
+                guard !Task.isCancelled, self.generation == mine, self.watching.contains(server) else { return }
+                // a snapshot that started during this refresh replaces places and replays any newer layout events
+                if let fresh, self.reading[server, default: 0] == read, self.pending[server] == nil {
+                    var updated = (self.places[server] ?? [:]).filter { $0.value.session != session }
+                    updated.merge(fresh) { _, new in new }
+                    self.places[server] = updated
+                    if let list = self.found[server] {
+                        let refreshed = list.map { agent -> BreakAgent in
+                            guard let place = fresh[agent.id] else { return agent }
+                            var a = agent
+                            a.label = place.label; a.session = place.session; a.window = place.window
+                            return a
+                        }
+                        if refreshed != list { self.found[server] = refreshed }
+                    }
+                }
+                if self.dirtyPlaces[server]?.remove(session) == nil { return }
             }
         }
     }

@@ -28,6 +28,7 @@ enum AgentChecks {
         removedHost()
         movedPane()
         snapshotLayoutRace()
+        coalescedPlaceRefresh()
         context()
         notifier()
         settingsAndRex()
@@ -576,6 +577,77 @@ enum AgentChecks {
             let refreshed = wait(2.5) { rex.agents.first?.window == "window:w2" && rex.agents.first?.label == "moved" }
             assert(refreshed, "layout change during snapshot should be re-read right after it publishes: \(rex.agents)")
             assert(statusCount() == 1, "must not rely on the 3 s second snapshot (saw \(statusCount()) status reads)")
+            rex.want(false, for: "check")
+            _ = wait(0.3)
+        }
+    }
+
+    /// Repeated layout events during a slow `block ls` never overlap lookups for the same session, and a trailing
+    /// refresh still applies the final change.
+    static func coalescedPlaceRefresh() {
+        let fm = FileManager.default, dir = fm.temporaryDirectory.appending(path: "pulse-coalesce-\(UUID().uuidString)")
+        try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        func write(_ text: String, _ name: String) { try! Data(text.utf8).write(to: dir.appending(path: name)) }
+        func statusCount() -> Int {
+            ((try? String(contentsOf: dir.appending(path: "status.log"), encoding: .utf8)) ?? "").split(separator: "\n").count
+        }
+        write(#"""
+        #!/bin/sh
+        here="$(dirname "$0")"
+        case "$*" in
+            *"events"*)
+                trap 'kill $!; exit 0' TERM
+                while [ ! -e "$here/ev1" ]; do sleep 0.05; done
+                echo '{"type":"session_event","payload":{"session_id":"session:s1","event":{"type":"session_view_changed","payload":{"revision":6}}}}'
+                while [ ! -e "$here/ev2" ]; do sleep 0.05; done
+                echo '{"type":"session_event","payload":{"session_id":"session:s1","event":{"type":"session_view_changed","payload":{"revision":7}}}}'
+                sleep 0.6
+                echo '{"type":"session_event","payload":{"session_id":"session:s1","event":{"type":"session_view_changed","payload":{"revision":8}}}}'
+                sleep 600 & wait ;;
+            *"hosts list"*) echo '{"hosts":[]}' ;;
+            *"session.list"*) echo '{"sessions":[{"session_id":"session:s1"}]}' ;;
+            *"block ls -s session:s1"*)
+                if ! mkdir "$here/ls.active" 2>/dev/null; then
+                    echo "overlap" >> "$here/overlap.log"
+                fi
+                if [ -e "$here/slow-once" ] && [ ! -e "$here/slow-used" ]; then
+                    touch "$here/slow-used" "$here/ls1-started"
+                    while [ ! -e "$here/release-ls1" ]; do sleep 0.05; done
+                    cat "$here/mid.json"
+                else
+                    cat "$here/blocks.json"
+                fi
+                rmdir "$here/ls.active" 2>/dev/null || true ;;
+            *"program_status"*)
+                echo "status" >> "$here/status.log"
+                echo '{"records":[{"app":"claude-code","state":"blocked","kind":"question","msg":"Ready?"}]}' ;;
+        esac
+        """#, "rex")
+        try! fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.appending(path: "rex").path)
+        write(#"{"blocks":[{"block_id":"block:b1","label":"old","flavor":"com.superlogical.terminal.shell","window_id":"window:w1"}]}"#, "blocks.json")
+        write(#"{"blocks":[{"block_id":"block:b1","label":"mid","flavor":"com.superlogical.terminal.shell","window_id":"window:w2"}]}"#, "mid.json")
+        MainActor.assumeIsolated {
+            let rex = RexAgents(find: { dir.appending(path: "rex") })
+            func wait(_ seconds: Double, until done: () -> Bool = { false }) -> Bool {
+                let end = Date().addingTimeInterval(seconds)
+                while Date() < end, !done() { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+                return done()
+            }
+            rex.want(true, for: "check")
+            assert(wait(10) { statusCount() >= 2 && rex.agents.first?.window == "window:w1" }, "both startup snapshots ran")
+            write("", "slow-once")
+            write("", "ev1")
+            assert(wait(5) { fm.fileExists(atPath: dir.appending(path: "ls1-started").path) }, "first refresh in flight")
+            // two more events arrive 600 ms apart while the first lookup is still blocked
+            write(#"{"blocks":[{"block_id":"block:b1","label":"final","flavor":"com.superlogical.terminal.shell","window_id":"window:w3"}]}"#, "blocks.json")
+            write("", "ev2")
+            _ = wait(0.9)   // past another 500 ms debounce while lookup #1 is still in flight
+            write("", "release-ls1")
+            let settled = wait(5) { rex.agents.first?.window == "window:w3" && rex.agents.first?.label == "final" }
+            assert(settled, "trailing refresh should apply final tab and label: \(rex.agents)")
+            assert(!fm.fileExists(atPath: dir.appending(path: "overlap.log").path), "must not overlap block ls lookups for the same session")
+            assert(statusCount() == 2, "must not run another program_status read")
             rex.want(false, for: "check")
             _ = wait(0.3)
         }
