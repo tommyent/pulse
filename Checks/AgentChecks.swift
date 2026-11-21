@@ -28,6 +28,7 @@ enum AgentChecks {
         removedHost()
         movedPane()
         snapshotLayoutRace()
+        failedSnapshotLayoutRace()
         coalescedPlaceRefresh()
         context()
         notifier()
@@ -594,6 +595,76 @@ enum AgentChecks {
             let refreshed = wait(2.5) { rex.agents.first?.window == "window:w2" && rex.agents.first?.label == "moved" }
             assert(refreshed, "layout change during snapshot should be re-read right after it publishes: \(rex.agents)")
             assert(statusCount() == 1, "must not rely on the 3 s second snapshot (saw \(statusCount()) status reads)")
+            rex.want(false, for: "check")
+            _ = wait(0.3)
+        }
+    }
+
+    /// A layout lookup already in flight when a snapshot starts is discarded by the revision guard; even if that
+    /// snapshot's `session.list` fails, the queued session replays once it finishes so the move isn't lost.
+    static func failedSnapshotLayoutRace() {
+        let fm = FileManager.default, dir = fm.temporaryDirectory.appending(path: "pulse-failed-snap-\(UUID().uuidString)")
+        try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        func write(_ text: String, _ name: String) { try! Data(text.utf8).write(to: dir.appending(path: name)) }
+        func statusCount() -> Int {
+            ((try? String(contentsOf: dir.appending(path: "status.log"), encoding: .utf8)) ?? "").split(separator: "\n").count
+        }
+        write(#"""
+        #!/bin/sh
+        here="$(dirname "$0")"
+        case "$*" in
+            *"events"*)
+                trap 'kill $!; exit 0' TERM
+                while [ ! -e "$here/moved" ]; do sleep 0.05; done
+                echo '{"type":"session_event","payload":{"session_id":"session:s1","event":{"type":"session_view_changed","payload":{"revision":6}}}}'
+                sleep 600 & wait ;;
+            *"hosts list"*) echo '{"hosts":[]}' ;;
+            *"session.list"*)
+                if [ -e "$here/fail-session-list" ]; then
+                    touch "$here/snapshot2-failed"
+                    exit 1
+                fi
+                echo '{"sessions":[{"session_id":"session:s1"}]}' ;;
+            *"block ls -s session:s1"*)
+                if [ -e "$here/hold-ls" ] && [ ! -e "$here/hold-used" ]; then
+                    touch "$here/hold-used" "$here/ls-started"
+                    while [ ! -e "$here/release-ls" ]; do sleep 0.05; done
+                    cat "$here/blocks.json"
+                    touch "$here/ls-returned"
+                else
+                    cat "$here/blocks.json"
+                fi ;;
+            *"program_status"*)
+                echo "status" >> "$here/status.log"
+                echo '{"records":[{"app":"claude-code","state":"blocked","kind":"question","msg":"Ready?"}]}' ;;
+        esac
+        """#, "rex")
+        try! fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.appending(path: "rex").path)
+        write(#"{"blocks":[{"block_id":"block:b1","label":"old","flavor":"com.superlogical.terminal.shell","window_id":"window:w1"}]}"#, "blocks.json")
+        MainActor.assumeIsolated {
+            let rex = RexAgents(find: { dir.appending(path: "rex") })
+            func wait(_ seconds: Double, until done: () -> Bool = { false }) -> Bool {
+                let end = Date().addingTimeInterval(seconds)
+                while Date() < end, !done() { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+                return done()
+            }
+            rex.want(true, for: "check")
+            assert(wait(10) { statusCount() == 1 && rex.agents.first?.window == "window:w1" && rex.agents.first?.label == "old" },
+                   "first snapshot placed block:b1 in w1: \(rex.agents)")
+            // move pane and hold the resulting layout lookup while the 3 s retry snapshot fails in session.list
+            write(#"{"blocks":[{"block_id":"block:b1","label":"moved","flavor":"com.superlogical.terminal.shell","window_id":"window:w2"}]}"#, "blocks.json")
+            write("", "hold-ls")
+            write("", "fail-session-list")
+            write("", "moved")
+            assert(wait(5) { fm.fileExists(atPath: dir.appending(path: "ls-started").path) }, "layout lookup started and held")
+            assert(wait(6) { fm.fileExists(atPath: dir.appending(path: "snapshot2-failed").path) }, "retry snapshot failed in session.list")
+            _ = wait(0.2)
+            write("", "release-ls")
+            assert(wait(2) { fm.fileExists(atPath: dir.appending(path: "ls-returned").path) }, "held layout lookup returned w2")
+            let refreshed = wait(5) { rex.agents.first?.window == "window:w2" && rex.agents.first?.label == "moved" }
+            assert(refreshed, "layout refresh should replay after failed snapshot without another event: \(rex.agents)")
+            assert(statusCount() == 1, "failed snapshot must not have run a second program_status read (saw \(statusCount()))")
             rex.want(false, for: "check")
             _ = wait(0.3)
         }

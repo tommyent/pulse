@@ -224,7 +224,10 @@ final class RexAgents: ObservableObject {
         reading[server, default: 0] += 1
         let read = reading[server]
         pending[server] = []   // what an older snapshot had buffered is in this newer one
-        pendingViews[server] = []
+        // keep queued layout work across overlapping snapshots, plus any active lookup whose result this snapshot invalidates
+        if let active = placeRefreshes[server]?.keys, !active.isEmpty {
+            pendingViews[server, default: []].formUnion(active)
+        }
         Task.detached(priority: .utility) {
             let snapshot = Self.snapshot(rex, server)
             await MainActor.run {
@@ -406,7 +409,7 @@ final class RexAgents: ObservableObject {
                 let read = self.reading[server, default: 0]
                 let fresh = await Task.detached(priority: .utility) { Self.sessionPlaces(rex, session: session, on: server) }.value
                 guard !Task.isCancelled, self.generation == mine, self.watching.contains(server) else { return }
-                // a snapshot that started during this refresh replaces places and replays any newer layout events
+                // a snapshot that started during this refresh queues this session for replay once it finishes
                 if let fresh, self.reading[server, default: 0] == read, self.pending[server] == nil {
                     var updated = (self.places[server] ?? [:]).filter { $0.value.session != session }
                     updated.merge(fresh) { _, new in new }
