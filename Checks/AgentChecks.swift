@@ -556,6 +556,9 @@ enum AgentChecks {
         func statusCount() -> Int {
             ((try? String(contentsOf: dir.appending(path: "status.log"), encoding: .utf8)) ?? "").split(separator: "\n").count
         }
+        func lsLog() -> [String] {
+            ((try? String(contentsOf: dir.appending(path: "ls.log"), encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+        }
         write(#"""
         #!/bin/sh
         here="$(dirname "$0")"
@@ -568,6 +571,11 @@ enum AgentChecks {
             *"hosts list"*) echo '{"hosts":[]}' ;;
             *"session.list"*) echo '{"sessions":[{"session_id":"session:s1"}]}' ;;
             *"block ls -s session:s1"*)
+                if [ -e "$here/release-status" ]; then
+                    echo "after" >> "$here/ls.log"
+                else
+                    echo "before" >> "$here/ls.log"
+                fi
                 cat "$here/blocks.json"
                 touch "$here/ls-done" ;;
             *"program_status"*)
@@ -586,14 +594,16 @@ enum AgentChecks {
                 return done()
             }
             rex.want(true, for: "check")
-            assert(wait(10) { fm.fileExists(atPath: dir.appending(path: "ls-done").path) }, "snapshot read block ls")
-            // pane moves while snapshot is still blocked in program_status
+            assert(wait(10) { fm.fileExists(atPath: dir.appending(path: "ls-done").path) && statusCount() == 1 }, "snapshot read block ls and blocked in program_status")
+            // pane moves while snapshot is still blocked in program_status; hold past the 500 ms debounce
             write(#"{"blocks":[{"block_id":"block:b1","label":"moved","flavor":"com.superlogical.terminal.shell","window_id":"window:w2"}]}"#, "blocks.json")
             write("", "moved")
-            _ = wait(0.3)   // let the event arrive before the snapshot finishes
+            _ = wait(0.9)
+            assert(lsLog() == ["before"], "event lookup must wait for the in-flight snapshot: \(lsLog())")
             write("", "release-status")
             let refreshed = wait(2.5) { rex.agents.first?.window == "window:w2" && rex.agents.first?.label == "moved" }
             assert(refreshed, "layout change during snapshot should be re-read right after it publishes: \(rex.agents)")
+            assert(lsLog() == ["before", "after"], "event lookup should run after the snapshot is released: \(lsLog())")
             assert(statusCount() == 1, "must not rely on the 3 s second snapshot (saw \(statusCount()) status reads)")
             rex.want(false, for: "check")
             _ = wait(0.3)
