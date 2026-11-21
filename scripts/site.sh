@@ -17,7 +17,8 @@ mkdir -p "$SITE/notes"
 cp "$REL/updates/Pulse-$VERSION.md" "$SITE/notes/"
 # The page names the version only as vX.Y.Z (buttons, release-notes link) and Pulse-X.Y.Z (DMG and checksum file)
 sed -E -i '' -e "s/v[0-9]+\.[0-9]+\.[0-9]+/v$VERSION/g" -e "s/Pulse-[0-9]+\.[0-9]+\.[0-9]+/Pulse-$VERSION/g" "$SITE/index.html"
-STALE="$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' "$SITE/index.html" | grep -vxF "$VERSION" || true)"
+STALE="$(grep -oE '(v|Pulse-)[0-9]+\.[0-9]+\.[0-9]+' "$SITE/index.html" \
+    | grep -vxF -e "v$VERSION" -e "Pulse-$VERSION" || true)"
 [[ -z "$STALE" ]] || fail "the page still names another version ($STALE); fix it in $SITE"
 git -C "$SITE" add appcast.xml notes index.html
 git -C "$SITE" commit -q -m "Pulse $VERSION: appcast, release notes and download links"
