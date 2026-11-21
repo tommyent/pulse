@@ -711,10 +711,12 @@ final class OverlayController {
             .store(in: &cancellables)
 
         state.$persisted
+            .map { ($0.alwaysOnTop, $0.showOverlay) }
+            .removeDuplicates(by: ==)
             .receive(on: RunLoop.main)
-            .sink { [panel] p in
-                panel.level = p.alwaysOnTop ? .floating : .normal
-                if p.showOverlay { panel.orderFront(nil) } else { panel.orderOut(nil) }
+            .sink { [panel] alwaysOnTop, showOverlay in
+                panel.level = alwaysOnTop ? .floating : .normal
+                if showOverlay { panel.orderFront(nil) } else { panel.orderOut(nil) }
             }
             .store(in: &cancellables)
     }
