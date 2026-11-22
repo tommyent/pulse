@@ -1018,7 +1018,9 @@ struct OverlayView: View {
             usageOrPetCard(tail: tail)
                 .offset(x: state.dock.isVertical ? 0 : shift, y: state.dock.isVertical ? shift : 0)
         }
-        .animation(reduceMotion ? .easeOut(duration: 0.2) : .spring(countdownSpring), value: breaks.phase.isCountdown)
+        // With Reduce Motion the panel gets no box to animate in (as for the hover), so the countdown comes and goes at once:
+        // animated, the leaving pill would jump with the panel as it shrinks.
+        .animation(reduceMotion ? nil : .spring(countdownSpring), value: breaks.phase.isCountdown)
     }
 
     @ViewBuilder
