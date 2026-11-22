@@ -389,7 +389,6 @@ final class OverlayController {
     private func beginMorph(for seconds: Double = hoverSeconds() * 1.3 + 0.05) {
         guard !dropping, !state.dragging, flight == nil, state.persisted.tucked != true, !state.peeking,
               !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, let screen = dockScreen ?? panel.screen else { return }
-        morphEnd?.cancel()
         if morph.dock == nil {
             let bounds = screen.visibleFrame, anchor = pinned ?? CGPoint(x: bounds.midX, y: bounds.midY)
             // the whole edge's length, and room past the widest card beside the rail
@@ -402,9 +401,11 @@ final class OverlayController {
             place(box)
             panel.contentView?.layoutSubtreeIfNeeded()   // the content at its spot in the box before anything draws
         }
+        guard morph.dock != nil else { return }   // ended during that layout
         // a shorter change meanwhile (the hover ending as the × takes the countdown away) doesn't cut a longer one short
         morphUntil = max(morphUntil, .now() + seconds)
         let end = DispatchWorkItem { [weak self] in self?.endMorph() }
+        morphEnd?.cancel()   // only now: a hover that the layout set off may have scheduled its own, shorter end
         morphEnd = end
         DispatchQueue.main.asyncAfter(deadline: morphUntil, execute: end)
     }
