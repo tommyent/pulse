@@ -908,7 +908,6 @@ struct OverlayView: View {
     @ObservedObject private var breaks = BreakController.shared
     @ObservedObject private var agents = AgentsMonitor.shared
     @ObservedObject private var themes = ThemeStore.shared
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast   // for the tuck ticks' colours, read here above the presentation
     @Environment(\.openSettings) private var openSettings
     @State private var exitWatch: Task<Void, Never>?
@@ -1018,9 +1017,9 @@ struct OverlayView: View {
             usageOrPetCard(tail: tail)
                 .offset(x: state.dock.isVertical ? 0 : shift, y: state.dock.isVertical ? shift : 0)
         }
-        // With Reduce Motion the panel gets no box to animate in (as for the hover), so the countdown comes and goes at once:
-        // animated, the leaving pill would jump with the panel as it shrinks.
-        .animation(reduceMotion ? nil : .spring(countdownSpring), value: breaks.phase.isCountdown)
+        // Animated only inside a morph's box, as the hover is: without one (Reduce Motion, a tucked or peeking rail, mid-glide)
+        // the panel resizes at once, and a leaving pill would jump with it, so the countdown comes and goes at once.
+        .animation(morph.dock == nil ? nil : .spring(countdownSpring), value: breaks.phase.isCountdown)
     }
 
     @ViewBuilder
