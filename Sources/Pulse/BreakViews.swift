@@ -49,6 +49,7 @@ struct BreakPill: View {
         if case let .countdown(kind, endsAt) = controller.phase {
             let standard = controller.settings.color == BreakColor.standard.name
             let bar = standard ? skin.accents.breakBar?.color ?? Color(rgb: BreakColor.standard.bar) : Color(rgb: BreakColor.pair(controller.settings.color).bar)
+            let shrink = AnyTransition.scale(scale: 0.5, anchor: UnitPoint(edge: tail))
             HStack(spacing: 6) {
                 Button { controller.startNow() } label: {
                     HStack(spacing: 9) {
@@ -98,7 +99,7 @@ struct BreakPill: View {
             .padding(Edge.Set(tail), PillShape.tailWidth)
             .pulseSurface(in: PillShape(edge: tail), followsWallpaperCrop: false)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onFrame?($0) }
-            .transition(.scale(scale: 0.5, anchor: UnitPoint(edge: tail)))
+            .transition(.asymmetric(insertion: shrink, removal: shrink.combined(with: .opacity)))   // fades as it shrinks back into the rail
         }
     }
 }
