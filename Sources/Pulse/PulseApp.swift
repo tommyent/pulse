@@ -377,7 +377,7 @@ final class OverlayController {
     /// The part of the panel on screen, where the pointer can be on it.
     private var visiblePanel: CGRect {
         // mid-morph the panel is a box with room to spare: the content is where it rests
-        let shown = morph.dock.map { $0.edge.frame(size: contentSize, anchor: $0.anchor, in: $0.bounds) } ?? panel.frame
+        let shown = morph.shown(contentSize, panel: panel.frame)
         guard let screen = dockScreen ?? panel.screen else { return shown }
         let visible = shown.intersection(screen.visibleFrame)
         return visible.isNull ? shown : visible
@@ -450,14 +450,15 @@ final class OverlayController {
         }
     }
 
-    /// The panel fits its content again, which sits exactly where it was: nothing moves on screen.
-    private func endMorph() {
+    /// The panel fits its content again, which sits exactly where it was: nothing moves on screen. `frame` is where it
+    /// fits now; by default where it rests.
+    private func endMorph(at frame: CGRect? = nil) {
         morphEnd?.cancel()
         morphEnd = nil
         morphUntil = .now()
         guard morph.dock != nil else { return }
         morph.dock = nil
-        if let frame = restingFrame() { place(frame) }
+        if let frame = frame ?? restingFrame() { place(frame) }
         panel.contentView?.layoutSubtreeIfNeeded()
         (panel.contentView as? OverlayHostingView)?.sizingOptions = .standardBounds
     }
@@ -535,6 +536,9 @@ final class OverlayController {
             return
         }
         if flight == nil {
+            // mid-morph (a countdown's hold) the panel is the box: let it go at the rail's own spot first, or the glide
+            // would start from the box, keep it as its target and land back on it, untucked
+            if morph.dock != nil { endMorph(at: morph.shown(contentSize, panel: panel.frame)) }
             let start = panel.frame
             // the fastest flicks (9000 pt/s in recorded drags) only overshoot further: 3200 pt/s already feels immediate
             let cap = min(1, 3200 / max(1, hypot(velocity.dx, velocity.dy)))

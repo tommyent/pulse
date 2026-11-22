@@ -295,6 +295,27 @@ enum OverlayChecks {
             }
             assert(abs(depth()) < 0.5 && flick.elapsed < 1, "\(edge): settles on its spot")
         }
+        // Minimized mid-morph (a countdown holds its box about a second): the glide leaves from the rail's own spot in the
+        // box and slides into its tucked spot, on every edge. The tucked spot lies outside the box, so a glide that started
+        // from the box kept the box as its target and landed back on it at the first frame, untucked.
+        for edge in DockEdge.allCases {
+            let size = edge.isVertical ? CGSize(width: 84, height: 262) : CGSize(width: 262, height: 84)
+            let anchor = CGPoint(x: tuckScreen.midX, y: tuckScreen.midY)
+            let docked = edge.frame(size: size, anchor: anchor, in: tuckScreen)
+            let room = edge.isVertical ? CGSize(width: docked.width + 420, height: tuckScreen.height)
+                                       : CGSize(width: tuckScreen.width, height: docked.height + 420)
+            let morph = MorphPlacement()
+            assert(morph.shown(size, panel: docked) == docked, "\(edge): no morph, the panel is where the rail is")
+            morph.dock = (edge, anchor, tuckScreen, edge.frame(size: room, anchor: anchor, in: tuckScreen))
+            let start = morph.shown(size, panel: morph.dock!.box), spot = edge.tucked(start, in: tuckScreen)
+            assert(start == docked && !morph.dock!.box.contains(spot), "\(edge): the glide leaves from the rail, for a spot out of the box")
+            var tuck = RailGlide(center: AnimatablePair(start.midX, start.midY), velocity: AnimatablePair(0, 0),
+                                 target: spot, edge: edge, spring: tuckSpring, slack: 0)
+            var frames = 0
+            while !tuck.step(1.0 / 120) { frames += 1 }
+            assert(frames > 1 && abs(tuck.center.first - spot.midX) < 0.5 && abs(tuck.center.second - spot.midY) < 0.5,
+                   "\(edge): slides into its tucked spot")
+        }
         // Released hanging past the edge (the pointer at the screen's bottom, a tall rail below it), the rail eases back in:
         // the wall starts where the rail is instead of snapping it 64 pt in one frame, as it did before this.
         let bottomSpot = CGRect(x: 442, y: 4, width: 262, height: 84)

@@ -257,6 +257,11 @@ func dockedOrigin(of size: CGSize, edge: DockEdge, anchor: CGPoint, bounds: CGRe
 /// read it in the layout pass that resize triggers, so it isn't published); nil whenever the panel fits its content.
 final class MorphPlacement {
     var dock: (edge: DockEdge, anchor: CGPoint, bounds: CGRect, box: CGRect)?
+
+    /// Where content of `size` is on screen: mid-morph at its docked spot in the box, otherwise the panel itself.
+    func shown(_ size: CGSize, panel: CGRect) -> CGRect {
+        dock.map { $0.edge.frame(size: size, anchor: $0.anchor, in: $0.bounds) } ?? panel
+    }
 }
 
 /// The overlay's root: its content as is, except mid-morph, when it fills the box and puts the content at its docked spot.
