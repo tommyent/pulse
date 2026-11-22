@@ -1018,7 +1018,7 @@ struct OverlayView: View {
             usageOrPetCard(tail: tail)
                 .offset(x: state.dock.isVertical ? 0 : shift, y: state.dock.isVertical ? shift : 0)
         }
-        .animation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.45, bounce: 0.3), value: breaks.phase.isCountdown)
+        .animation(reduceMotion ? .easeOut(duration: 0.2) : .spring(countdownSpring), value: breaks.phase.isCountdown)
     }
 
     @ViewBuilder

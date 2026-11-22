@@ -140,10 +140,11 @@ final class OverlayController {
     /// the content centred in it.
     private var flight: (glide: RailGlide, box: CGSize, time: CFTimeInterval?)?
     private var flightLink: CADisplayLink?
-    /// While a hover grows or shrinks the rail, the panel is a box with room for both sizes and SwiftUI animates the
-    /// content inside it; the panel fits the content again once the spring is done.
+    /// While a hover grows or shrinks the rail, or a break's countdown comes or goes, the panel is a box with room for
+    /// both sizes and SwiftUI animates the content inside it; the panel fits the content again once the spring is done.
     private let morph = MorphPlacement()
     private var morphEnd: DispatchWorkItem?
+    private var morphUntil = DispatchTime.now()
     private var dropping = false   // a drop's own collapse rides its glide, not a morph
     private var peekWatch: Timer?
     private let ticker = FrameTicker()
@@ -382,9 +383,10 @@ final class OverlayController {
         return visible.isNull ? shown : visible
     }
 
-    /// A hover changed: make the panel a box the content can grow or shrink in, at the spot it rests at. Runs as the
-    /// change is made (the publisher fires before SwiftUI applies it), so the box is laid out before the animation starts.
-    private func beginMorph() {
+    /// A hover or a break's countdown changed: make the panel a box the content can grow or shrink in, at the spot it
+    /// rests at, for `seconds`. Runs as the change is made (the publisher fires before SwiftUI applies it), so the box is
+    /// laid out before the animation starts.
+    private func beginMorph(for seconds: Double = hoverSeconds() * 1.3 + 0.05) {
         guard !dropping, !state.dragging, flight == nil, state.persisted.tucked != true, !state.peeking,
               !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, let screen = dockScreen ?? panel.screen else { return }
         morphEnd?.cancel()
@@ -400,9 +402,11 @@ final class OverlayController {
             place(box)
             panel.contentView?.layoutSubtreeIfNeeded()   // the content at its spot in the box before anything draws
         }
+        // a shorter change meanwhile (the hover ending as the × takes the countdown away) doesn't cut a longer one short
+        morphUntil = max(morphUntil, .now() + seconds)
         let end = DispatchWorkItem { [weak self] in self?.endMorph() }
         morphEnd = end
-        DispatchQueue.main.asyncAfter(deadline: .now() + hoverSeconds() * 1.3 + 0.05, execute: end)
+        DispatchQueue.main.asyncAfter(deadline: morphUntil, execute: end)
     }
 
     /// The cup's menu: pause breaks for 30 minutes, an hour or two, or resume them. It opens beside the cup, into the
@@ -450,6 +454,7 @@ final class OverlayController {
     private func endMorph() {
         morphEnd?.cancel()
         morphEnd = nil
+        morphUntil = .now()
         guard morph.dock != nil else { return }
         morph.dock = nil
         if let frame = restingFrame() { place(frame) }
@@ -629,6 +634,11 @@ final class OverlayController {
         // no receive(on:): the box has to be in place as the hover changes, before SwiftUI lays the change out
         state.$hoveringOverlay.removeDuplicates().dropFirst()
             .sink { [weak self] _ in self?.beginMorph() }
+            .store(in: &cancellables)
+        // the same as a break's countdown comes or goes: a leaving view stays where the panel last laid it out, so a
+        // panel that shrank or moved at once would carry the pill off with it
+        BreakController.shared.$phase.map(\.isCountdown).removeDuplicates().dropFirst()
+            .sink { [weak self] _ in self?.beginMorph(for: countdownSpring.settlingDuration + 0.05) }
             .store(in: &cancellables)
 
         // while the pet card holds the keyboard Pulse is the active app; switching to another app closes it. The same

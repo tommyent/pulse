@@ -186,6 +186,8 @@ func railSpring(_ name: String? = UserDefaults.standard.string(forKey: "railSpri
 let tuckSpring = Spring.smooth(duration: 0.35)
 /// The rings move into a new layout quickly and without overshoot, so they don't run into each other mid-air.
 let morphSpring = Spring.smooth(duration: 0.28)
+/// A break's countdown grows out of the rail and back into it; the panel holds still until this has settled.
+let countdownSpring = Spring(duration: 0.45, bounce: 0.3)
 
 /// A dropped rail's flight: its centre springs to the docked frame's centre, starting at the throw's velocity.
 struct RailGlide {
