@@ -183,7 +183,95 @@ enum SettingsStateChecks {
         checkSkins()
         ThemeChecks.run()
         checkSettingsPanes()
-        print("Settings state checks passed: saved values preserved, Tint migrated, unreadable values cost only themselves and are kept in a copy, plain track grey without keylines in both looks")
+        checkAgentsCard()
+        print("Settings state checks passed: saved values preserved, Tint migrated, unreadable values cost only themselves and are kept in a copy, plain track grey without keylines in both looks, the agents card by Mac with its keyboard row in view")
+    }
+
+    /// The agents card as the app hosts it, with agents on two Macs and the other Mac's waiter far below the first 400
+    /// points: each Mac under its heading, in order; the shortcut opens the card scrolled to that waiter; ↓ keeps the
+    /// next row in view, and Return shows it. Read through the card's accessibility tree, as VoiceOver would.
+    @MainActor private static func checkAgentsCard() {
+        guard AXIsProcessTrusted() else {
+            // SwiftUI builds the tree only once an accessibility client asks, and asking needs the permission
+            return print("Agents card hosted check SKIPPED: this terminal has no Accessibility permission")
+        }
+        NSApplication.shared.setActivationPolicy(.prohibited)   // no Dock icon, never active
+        NSApplication.shared.finishLaunching()                  // without it, nothing answers the accessibility request
+        func agent(_ id: String, host: String = "", waits minutes: Double? = nil) -> BreakAgent {
+            var a = BreakAgent(id: id, app: .claude, blocked: minutes != nil, since: minutes.map { Date(timeIntervalSinceNow: -$0 * 60) })
+            a.label = id
+            a.host = host
+            return a
+        }
+        let agents = (1 ... 20).map { agent(String(format: "here-%02d", $0)) }
+            + [agent("studio-waits", host: "studio", waits: 9), agent("studio-works", host: "studio")]
+        final class Box: ObservableObject {
+            @Published var selection = AgentCardSelection()
+            @Published var agents: [BreakAgent] = []
+        }
+        struct Card: View {
+            @ObservedObject var box: Box
+            var body: some View { AgentsCard(agents: box.agents, selection: box.selection, show: { _ in }, clear: { _ in }) }
+        }
+        let box = Box()
+        box.agents = agents
+        let host = NSHostingView(rootView: Card(box: box))
+        host.frame = NSRect(x: 0, y: 0, width: 360, height: 560)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        // asked from another thread: from this one, the request would wait on this very run loop
+        let pid = getpid()
+        Thread.detachNewThread {
+            _ = AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        }
+        func spin() { for _ in 0 ..< 20 { RunLoop.main.run(until: Date().addingTimeInterval(0.05)); host.layoutSubtreeIfNeeded() } }
+        // SwiftUI's nodes answer the NSAccessibility calls without the Swift conformance
+        func children(_ e: Any) -> [AnyObject] { ((e as AnyObject).accessibilityChildren?() ?? nil)?.map { $0 as AnyObject } ?? [] }
+        func role(_ e: AnyObject) -> NSAccessibility.Role? { e.accessibilityRole?() ?? nil }
+        let heading = NSAccessibility.Role(rawValue: "AXHeading")
+        func label(_ e: AnyObject) -> String { (e.accessibilityLabel?() ?? nil) ?? "" }
+        func scrollViews(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? v.subviews.flatMap(scrollViews) }
+        /// The selected row's label, and whether all of it is inside the scrolled view. A window that's never shown
+        /// gives rows their places relative to each other; the scroll view says which part of them is in view.
+        func selected() -> (label: String, inView: Bool) {
+            guard let area = children(host).first(where: { role($0) == .scrollArea }), let scroll = scrollViews(host).first,
+                  let row = children(area).first(where: { ($0.isAccessibilitySelected?() as Bool?) == true }) else { return ("", false) }
+            let top = children(area).first?.accessibilityFrame?().maxY ?? 0   // the first heading, at the document's top
+            let frame = row.accessibilityFrame?() ?? .zero, visible = scroll.documentVisibleRect
+            // 6 points of slack: the rows' highlight padding reaches past the content's edges
+            return (label(row), top - frame.maxY >= visible.minY - 6 && top - frame.minY <= visible.maxY + 6)
+        }
+        spin()
+        guard let area = children(host).first(where: { role($0) == .scrollArea }) else { fatalError("the card's 22 rows should scroll") }
+        let items = children(area).filter { role($0) == heading || role($0) == .button }
+        let headings = items.filter { role($0) == heading }.map(label)
+        assert(headings.count == 2 && headings[0].hasPrefix(RexAgents.thisMac.isEmpty ? "This Mac" : RexAgents.thisMac)
+               && headings[0].hasSuffix("· 20 working") && headings[1].hasPrefix("studio") && headings[1].hasSuffix("· 1 needs you · 1 working"),
+               "each Mac's heading, this Mac first: \(headings)")
+        let order = items.map { role($0) == heading ? "#" : String(label($0).prefix { $0 != "," && $0 != " " }) }
+        assert(order == ["#"] + (1 ... 20).map { String(format: "here-%02d", $0) } + ["#", "studio-waits", "studio-works"], "the card's order: \(order)")
+
+        let board = AgentBoard(agents, now: .now)
+        let opened = selected()
+        assert(opened.label.hasPrefix("studio-waits") && opened.inView, "the shortcut opens the card on the other Mac's waiter, scrolled into view: \(opened)")
+        assert(box.selection.press(.down, in: board) == .select)
+        spin()
+        let down = selected()
+        assert(down.label.hasPrefix("studio-works") && down.inView, "↓ moves to the next row and keeps it in view: \(down)")
+        assert(box.selection.press(.enter, in: board) == .show(board.rows.first { $0.id == "studio-works" }!.agent), "Return shows that row's pane")
+
+        // the selected row moves down the card when its agent goes idle, and the view goes with it
+        for _ in 0 ..< 21 { _ = box.selection.press(.up, in: board) }
+        spin()
+        let top = selected()
+        assert(top.label.hasPrefix("here-01") && top.inView, "↑ to the card's first row: \(top)")
+        var resting = BreakAgent(id: "here-01", app: .claude, blocked: false, idle: true, since: .now)
+        resting.label = "here-01"
+        box.agents[0] = resting
+        spin()
+        let moved = selected()
+        assert(moved.label.hasPrefix("here-01") && moved.inView, "the same row, now under Idle at the foot of this Mac's rows, in view: \(moved)")
+        window.close()
     }
 
     @MainActor private static func checkUnreadableValues() {
