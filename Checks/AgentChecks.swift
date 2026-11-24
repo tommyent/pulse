@@ -393,7 +393,6 @@ enum AgentChecks {
         assert(calls().isEmpty, "a stand-in agent has no pane to show")
     }
 
-    /// The agents card under the keyboard, once its shortcut has opened it.
     /// The card groups its rows by Mac once agents are on more than one: this Mac first, then each host by its label,
     /// each with today's order and its own counts. The ring, its number and its bubbles stay on all of them.
     static func byMac() {
@@ -407,35 +406,42 @@ enum AgentChecks {
         // the card's: this Mac, then the hosts by label, each in that order
         assert(board.macs.map(\.host) == ["", "annex", "studio"], "\(board.macs.map(\.host))")
         assert(board.macs.map { $0.board.rows.map(\.id) } == [["here-b", "here-w", "here-idle"], ["annex-d"], ["studio-b", "studio-w"]])
-        assert(board.cardRows.map(\.id) == ["here-b", "here-w", "here-idle", "annex-d", "studio-b", "studio-w"], "\(board.cardRows.map(\.id))")
+        assert(board.card.rows.map(\.id) == ["here-b", "here-w", "here-idle", "annex-d", "studio-b", "studio-w"], "\(board.card.rows.map(\.id))")
         // each header's counts are that Mac's alone
         assert(board.macs.map(\.board.summary) == ["1 needs you · 1 working", "1 finished", "1 needs you · 1 working"], "\(board.macs.map(\.board.summary))")
         // the ring still counts every Mac
         assert(board.number == 2 && board.summary == "2 need you · 2 working" && board.tone == .waiting && board.bubbles.more == 3)
         // one Mac with agents, a remote one too: no sections, and the card is as it was
         let one = AgentBoard([on("studio", working("a")), on("studio", waiting("b", since: 10))], now: at(20))
-        assert(one.macs.isEmpty && one.cardRows.map(\.id) == ["b", "a"])
-        assert(AgentBoard([working("a"), idle], now: at(20)).macs.isEmpty && AgentBoard().macs.isEmpty && AgentBoard().cardRows.isEmpty)
+        assert(one.macs.isEmpty && one.card.rows.map(\.id) == ["b", "a"])
+        assert(AgentBoard([working("a"), idle], now: at(20)).macs.isEmpty && AgentBoard().macs.isEmpty && AgentBoard().card.rows.isEmpty)
         // a host label as long as a sentence is a section like any other
         let long = String(repeating: "a-very-long-host-label-", count: 4)
         assert(AgentBoard([working("a"), on(long, working("b"))], now: at(20)).macs.map(\.host) == ["", long])
 
-        // the keyboard goes down the card as it's listed, and opens on the first of those who need you most, even
-        // under another Mac's working agents
-        let rows = board.cardRows
+        // the keyboard opens on who needs you most, as without Macs: the longest wait, here the other Mac's older one
+        // below this Mac's newer one; then it goes up and down the card as it's listed and stops at its ends
         var keys = AgentCardSelection()
-        assert(keys.row(in: rows)?.id == "here-b")
-        let quietHere = AgentBoard([working("here-w"), on("studio", waiting("studio-b", since: 16))], now: at(20)).cardRows
-        assert(quietHere.map(\.id) == ["here-w", "studio-b"] && AgentCardSelection().row(in: quietHere)?.id == "studio-b",
-               "Return right after the shortcut shows the agent who waits, not this Mac's working one")
+        assert(keys.row(in: board)?.id == "studio-b" && keys.press(.enter, in: board) == .show(board.rows[0].agent),
+               "Return right after the shortcut shows the longest wait, whichever Mac it's on")
         var seen: [String] = []
-        for _ in 0..<6 {
-            _ = keys.press(.down, rows: rows)
-            seen.append(keys.row(in: rows)!.id)
+        for _ in 0..<2 {
+            assert(keys.press(.down, in: board) == .select)
+            seen.append(keys.row(in: board)!.id)
         }
-        assert(seen == ["here-w", "here-idle", "annex-d", "studio-b", "studio-w", "studio-w"], "\(seen)")
+        assert(seen == ["studio-w", "studio-w"], "\(seen)")
+        seen = []
+        for _ in 0..<6 {
+            assert(keys.press(.up, in: board) == .select)
+            seen.append(keys.row(in: board)!.id)
+        }
+        assert(seen == ["studio-b", "annex-d", "here-idle", "here-w", "here-b", "here-b"], "\(seen)")
+        let quietHere = AgentBoard([working("here-w"), on("studio", waiting("studio-b", since: 16))], now: at(20))
+        assert(quietHere.card.rows.map(\.id) == ["here-w", "studio-b"] && AgentCardSelection().row(in: quietHere)?.id == "studio-b",
+               "the agent who waits, not this Mac's working one above it")
     }
 
+    /// The agents card under the keyboard, once its shortcut has opened it.
     static func keyboard() {
         // the shortcut opens the agents card, and closes it only when that card is the one open
         assert(AgentCardSelection.shortcutOpens(cardVisible: false, sideCard: nil) && AgentCardSelection.shortcutOpens(cardVisible: false, sideCard: "agents"))
@@ -445,41 +451,43 @@ enum AgentChecks {
 
         let idle = BreakAgent(id: "i", app: .codex, blocked: false, idle: true, since: at(0))
         let agents = [working("w"), idle, waiting("b", since: 16), finished("d", since: 17)]
-        let rows = AgentBoard(agents, now: at(20)).rows
-        assert(rows.map(\.id) == ["b", "d", "w", "i"])
+        let board = AgentBoard(agents, now: at(20))
+        assert(board.rows.map(\.id) == ["b", "d", "w", "i"])
         var keys = AgentCardSelection()
         // it opens on the first row, who needs you most, and Return there is a click on that row
-        assert(keys.row(in: rows)?.id == "b" && keys.press(.enter, rows: rows) == .show(rows[0].agent))
+        assert(keys.row(in: board)?.id == "b" && keys.press(.enter, in: board) == .show(board.rows[0].agent))
         // ↓ goes through the rows as listed, the idle ones last, and stops at the end
         var seen: [String] = []
         for _ in 0..<5 {
-            assert(keys.press(.down, rows: rows) == .select)
-            seen.append(keys.row(in: rows)!.id)
+            assert(keys.press(.down, in: board) == .select)
+            seen.append(keys.row(in: board)!.id)
         }
         assert(seen == ["d", "w", "i", "i", "i"], "\(seen)")
-        assert(keys.press(.enter, rows: rows) == .show(idle), "Return shows the selected agent, an idle one too")
+        assert(keys.press(.enter, in: board) == .show(idle), "Return shows the selected agent, an idle one too")
         // ↑ goes back and stops at the first
         seen = []
         for _ in 0..<5 {
-            assert(keys.press(.up, rows: rows) == .select)
-            seen.append(keys.row(in: rows)!.id)
+            assert(keys.press(.up, in: board) == .select)
+            seen.append(keys.row(in: board)!.id)
         }
         assert(seen == ["w", "d", "b", "b", "b"], "\(seen)")
         // the selection is the agent, not its place: when the rows move, it moves with them
-        _ = keys.press(.down, rows: rows)
-        _ = keys.press(.down, rows: rows)
-        assert(keys.row(in: rows)?.id == "w")
-        let moved = AgentBoard([waiting("w", .codex, since: 19), idle, waiting("b", since: 16), finished("d", since: 17)], now: at(20)).rows
-        assert(moved.map(\.id) == ["b", "w", "d", "i"] && keys.row(in: moved)?.id == "w" && keys.press(.enter, rows: moved) == .show(moved[1].agent))
-        assert(keys.press(.down, rows: moved) == .select && keys.row(in: moved)?.id == "d")
+        _ = keys.press(.down, in: board)
+        _ = keys.press(.down, in: board)
+        assert(keys.row(in: board)?.id == "w")
+        let moved = AgentBoard([waiting("w", .codex, since: 19), idle, waiting("b", since: 16), finished("d", since: 17)], now: at(20))
+        assert(moved.rows.map(\.id) == ["b", "w", "d", "i"] && keys.row(in: moved)?.id == "w" && keys.press(.enter, in: moved) == .show(moved.rows[1].agent))
+        assert(keys.press(.down, in: moved) == .select && keys.row(in: moved)?.id == "d")
         // an agent that left the card: back to the first row
-        let fewer = moved.filter { $0.id != "d" }
-        assert(keys.row(in: fewer)?.id == "b" && keys.press(.down, rows: fewer) == .select && keys.row(in: fewer)?.id == "w")
+        var fewer = moved
+        fewer.rows.removeAll { $0.id == "d" }
+        assert(keys.row(in: fewer)?.id == "b" && keys.press(.down, in: fewer) == .select && keys.row(in: fewer)?.id == "w")
         // Escape closes the card, wherever the selection is; an empty card has nothing to choose or show
-        assert(keys.press(.escape, rows: rows) == .close)
+        assert(keys.press(.escape, in: board) == .close)
         var none = AgentCardSelection()
-        assert(none.row(in: []) == nil && none.press(.down, rows: []) == nil && none.press(.up, rows: []) == nil && none.press(.enter, rows: []) == nil)
-        assert(none.press(.escape, rows: []) == .close)
+        let empty = AgentBoard()
+        assert(none.row(in: empty) == nil && none.press(.down, in: empty) == nil && none.press(.up, in: empty) == nil && none.press(.enter, in: empty) == nil)
+        assert(none.press(.escape, in: empty) == .close)
     }
 
     /// The reader itself, against a stand-in for the rex command: a host is taken out of Rex's list while its stream

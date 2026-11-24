@@ -137,6 +137,7 @@ struct AgentsRing: View, Animatable {
 /// Plain values, not the monitor, so it can be rendered on its own.
 struct AgentsCard: View {
     private static let most = 10
+    private struct Spot: Equatable { let id: String?, at: Int? }   // the keyboard's row and its place in the card
     let agents: [BreakAgent]
     var dismissed: [String: Date] = [:]
     var hold: AgentHold? = nil   // the quiet rule holding the sound and the alert
@@ -163,14 +164,18 @@ struct AgentsCard: View {
                 if board.rows.isEmpty {
                     Text("No agents are open in Rex.").font(.caption).foregroundStyle(.pulseSecondary)
                 } else {
-                    let listed = board.cardRows, selected = selection?.row(in: listed)?.id
-                    let rows = AgentRows(rows: listed, now: context.date, contexts: contexts, selected: selected, show: show, clear: clear, macs: board.macs)
+                    let card = board.card, selected = selection?.row(in: board)?.id
+                    let rows = AgentRows(rows: card.rows, now: context.date, contexts: contexts, selected: selected, show: show, clear: clear, macs: card.macs)
                     Group {
-                        // more than fit a small screen: they scroll, and the keyboard's row stays in view
+                        // more than fit a small screen: they scroll, and the keyboard's row stays in view, from the
+                        // shortcut opening the card on a row far down, and when that row moves as states change
                         if board.rows.count > Self.most {
+                            let spot = Spot(id: selected, at: selected.flatMap { id in card.rows.firstIndex { $0.id == id } })
                             ScrollViewReader { scroll in
                                 ScrollView { rows }.frame(height: 400)
-                                    .onChange(of: selected) { _, id in if let id { scroll.scrollTo(id) } }
+                                    .onChange(of: spot, initial: true) { _, spot in
+                                        if let id = spot.id { scroll.scrollTo(AgentRows.Target(id: id)) }
+                                    }
                             }
                         } else {
                             rows
@@ -209,13 +214,14 @@ struct AgentRows: View {
     var selected: String? = nil   // the row the keyboard is on
     let show: (BreakAgent) -> Void
     var clear: ((BreakAgent) -> Void)? = nil   // the × on a failed row; the alert has none
-    var macs: [(host: String, board: AgentBoard)] = []   // the card's sections (`AgentBoard.macs`), whose rows `rows` lists
+    var macs: [(host: String, board: AgentBoard)] = []   // the card's sections (`AgentBoard.card`), whose rows `rows` lists
 
     var body: some View {
+        let sections = Dictionary(uniqueKeysWithValues: macs.map { ($0.host, $0.board) })
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(rows.enumerated()), id: \.element.id) { i, row in
-                let mac = macs.first { $0.board.rows.first?.id == row.id }   // the section this row starts
                 let starts = i == 0 || rows[i - 1].agent.host != row.agent.host   // with one Mac, only the first row
+                let mac = starts ? sections[row.agent.host].map { (host: row.agent.host, board: $0) } : nil   // a section's header
                 let idleStarts = row.state == .idle && (starts || rows[i - 1].state != .idle)
                 if i > 0, mac != nil || idleStarts || (rows[i - 1].agent.needsYou && !row.agent.needsYou) {
                     Rectangle().fill(Color.white.opacity(0.12)).frame(height: 1)
@@ -238,11 +244,15 @@ struct AgentRows: View {
                 }
                 AgentRow(row: row, now: now, context: contexts[row.id], selected: row.id == selected, onHost: macs.isEmpty,
                          show: show, clear: clear)
-                    .id(row.id)
+                    .id(Target(id: row.id))
             }
         }
         .padding(.vertical, -5)   // the rows' own padding is their highlight's
     }
+
+    /// A row itself, for `scrollTo`. Its bare id also names its whole ForEach entry, which begins with the rule and the
+    /// headers above it: scrolled to by that, the row stopped below the view.
+    struct Target: Hashable { let id: String }
 
     private struct RowsHeading: ViewModifier {
         func body(content: Content) -> some View {

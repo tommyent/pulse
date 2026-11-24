@@ -185,10 +185,10 @@ final class AgentsMonitor: ObservableObject {
     /// A key in the card its shortcut opened: ↑ and ↓ choose a row, which VoiceOver is told; Return shows that pane
     /// exactly as a click on the row does; Escape closes the card.
     func key(_ key: AgentCardSelection.Key) {
-        let now = Date(), rows = AgentBoard(agents, dismissed: dismissed, now: now).cardRows
-        switch selection.press(key, rows: rows) {
+        let now = Date(), board = AgentBoard(agents, dismissed: dismissed, now: now)
+        switch selection.press(key, in: board) {
         case .select:
-            if let row = selection.row(in: rows) {
+            if let row = selection.row(in: board) {
                 AccessibilityNotification.Announcement(row.spoken(now, context: row.state == .idle ? contexts[row.id]?.text ?? "" : "")).post()
             }
         case let .show(agent): show(agent)

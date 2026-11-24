@@ -144,10 +144,11 @@ struct AgentBoard: Equatable {
         }
     }
 
-    /// The rows as the card lists them: by Mac when it has sections. The keyboard goes through them in this order.
-    var cardRows: [Row] {
+    /// The card's sections and its rows as it lists them, by Mac when it has sections, worked out once. The keyboard
+    /// goes through the rows in this order.
+    var card: (macs: [(host: String, board: AgentBoard)], rows: [Row]) {
         let macs = macs
-        return macs.isEmpty ? rows : macs.flatMap(\.board.rows)
+        return (macs, macs.isEmpty ? rows : macs.flatMap(\.board.rows))
     }
 
     /// What VoiceOver reads for the ring.
@@ -181,22 +182,21 @@ struct AgentCardSelection: Equatable {
     enum Key { case up, down, enter, escape }
     enum Outcome: Equatable { case select, show(BreakAgent), close }
 
-    private(set) var id: String?   // nil, or an agent that has left the card: the first who needs you most
+    private(set) var id: String?   // nil, or an agent that has left the card: the board's first
 
-    /// The selected row: until a key has moved it, the first of those who need you most. Grouped by Mac, that can be
-    /// below another Mac's working agents.
-    func row(in rows: [AgentBoard.Row]) -> AgentBoard.Row? {
-        rows.first { $0.id == id } ?? rows.min { $0.state.rawValue < $1.state.rawValue }   // min keeps the first of equals
-    }
+    /// The selected row: the one a key chose, while it's in the card; else the board's first, who needs you most (the
+    /// longest wait), whichever Mac it's on. Grouped by Mac, that can sit below other Macs' rows.
+    func row(in board: AgentBoard) -> AgentBoard.Row? { board.rows.first { $0.id == id } ?? board.rows.first }
 
-    /// ↑ and ↓ move through the rows in the card's order and stop at its ends: holding ↑ always lands on the first.
+    /// ↑ and ↓ move through the rows in the card's order and stop at its ends: holding ↑ always lands on its first row.
     /// Return shows the selected agent's pane, as a click on its row does. Escape closes the card. nil: nothing to do.
-    mutating func press(_ key: Key, rows: [AgentBoard.Row]) -> Outcome? {
+    mutating func press(_ key: Key, in board: AgentBoard) -> Outcome? {
         switch key {
         case .escape: return .close
-        case .enter: return row(in: rows).map { .show($0.agent) }
+        case .enter: return row(in: board).map { .show($0.agent) }
         case .up, .down:
-            guard let at = rows.firstIndex(where: { $0.id == row(in: rows)?.id }) else { return nil }
+            let rows = board.card.rows
+            guard let current = row(in: board)?.id, let at = rows.firstIndex(where: { $0.id == current }) else { return nil }
             id = rows[min(max(at + (key == .down ? 1 : -1), 0), rows.count - 1)].id
             return .select
         }
