@@ -557,6 +557,9 @@ final class RexAgents: ObservableObject {
         return (network.first { !label.isEmpty && $0.label == label } ?? (network.count == 1 ? network[0] : nil))?.id
     }
 
+    /// This Mac's name, which Rex's app on it also goes by: "Sam's MacBook Air". "" when macOS has none.
+    nonisolated static var thisMac: String { Host.current().localizedName ?? "" }
+
     nonisolated private static func target(_ server: String) -> [String] { server.isEmpty ? [] : ["-S", server] }
 
     /// One short `rex` call to `server`: its output, or nil on failure or after 5 s.

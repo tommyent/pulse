@@ -132,6 +132,24 @@ struct AgentBoard: Equatable {
         return parts.joined(separator: " · ")
     }
 
+    /// The card's sections when agents are on more than one Mac: this Mac's first, then each host's by its Rex label,
+    /// each with its own rows in the card's order and its own counts. Empty with one Mac, whose card has no headers.
+    var macs: [(host: String, board: AgentBoard)] {
+        let hosts = Set(rows.map(\.agent.host)).sorted()   // "" is this Mac, and sorts first
+        guard hosts.count > 1 else { return [] }
+        return hosts.map { host in
+            var board = AgentBoard()
+            board.rows = rows.filter { $0.agent.host == host }
+            return (host, board)
+        }
+    }
+
+    /// The rows as the card lists them: by Mac when it has sections. The keyboard goes through them in this order.
+    var cardRows: [Row] {
+        let macs = macs
+        return macs.isEmpty ? rows : macs.flatMap(\.board.rows)
+    }
+
     /// What VoiceOver reads for the ring.
     var spoken: String {
         let waiting = count(.waiting), failed = count(.failed), finished = count(.finished), working = count(.working), idle = count(.idle)
@@ -163,10 +181,13 @@ struct AgentCardSelection: Equatable {
     enum Key { case up, down, enter, escape }
     enum Outcome: Equatable { case select, show(BreakAgent), close }
 
-    private(set) var id: String?   // nil, or an agent that has left the card: the first row
+    private(set) var id: String?   // nil, or an agent that has left the card: the first who needs you most
 
-    /// The selected row: the first one, who needs you most, until a key has moved it.
-    func row(in rows: [AgentBoard.Row]) -> AgentBoard.Row? { rows.first { $0.id == id } ?? rows.first }
+    /// The selected row: until a key has moved it, the first of those who need you most. Grouped by Mac, that can be
+    /// below another Mac's working agents.
+    func row(in rows: [AgentBoard.Row]) -> AgentBoard.Row? {
+        rows.first { $0.id == id } ?? rows.min { $0.state.rawValue < $1.state.rawValue }   // min keeps the first of equals
+    }
 
     /// ↑ and ↓ move through the rows in the card's order and stop at its ends: holding ↑ always lands on the first.
     /// Return shows the selected agent's pane, as a click on its row does. Escape closes the card. nil: nothing to do.

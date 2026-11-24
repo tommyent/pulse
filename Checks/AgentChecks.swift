@@ -24,6 +24,7 @@ enum AgentChecks {
         board()
         quietRules()
         keyboard()
+        byMac()
         reader()
         removedHost()
         movedPane()
@@ -34,7 +35,7 @@ enum AgentChecks {
         notifier()
         settingsAndRex()
         print("Agent checks passed: Rex's error state and kind, closed panes, waits kept across reports, the card's order and counts, "
-              + "the bubbles, idle agents and their context, the quiet rules and a break on screen, one alert for each wait, which Rex app is asked and what a row click sends, the card's keys, off by default, and the ring only with Rex")
+              + "the card by Mac, the bubbles, idle agents and their context, the quiet rules and a break on screen, one alert for each wait, which Rex app is asked and what a row click sends, the card's keys, off by default, and the ring only with Rex")
     }
 
     static func parsing() {
@@ -393,6 +394,48 @@ enum AgentChecks {
     }
 
     /// The agents card under the keyboard, once its shortcut has opened it.
+    /// The card groups its rows by Mac once agents are on more than one: this Mac first, then each host by its label,
+    /// each with today's order and its own counts. The ring, its number and its bubbles stay on all of them.
+    static func byMac() {
+        func on(_ host: String, _ agent: BreakAgent) -> BreakAgent { var a = agent; a.host = host; return a }
+        let idle = BreakAgent(id: "here-idle", app: .codex, blocked: false, idle: true, since: at(0))
+        let agents = [working("here-w"), idle, on("studio", waiting("studio-b", since: 16)), on("studio", working("studio-w", .claude)),
+                      on("annex", finished("annex-d", .antigravity, since: 17)), waiting("here-b", .grok, since: 18)]
+        let board = AgentBoard(agents, now: at(20))
+        // the ring's order is unchanged: who needs you first, on whichever Mac
+        assert(board.rows.map(\.id) == ["studio-b", "here-b", "annex-d", "here-w", "studio-w", "here-idle"], "\(board.rows.map(\.id))")
+        // the card's: this Mac, then the hosts by label, each in that order
+        assert(board.macs.map(\.host) == ["", "annex", "studio"], "\(board.macs.map(\.host))")
+        assert(board.macs.map { $0.board.rows.map(\.id) } == [["here-b", "here-w", "here-idle"], ["annex-d"], ["studio-b", "studio-w"]])
+        assert(board.cardRows.map(\.id) == ["here-b", "here-w", "here-idle", "annex-d", "studio-b", "studio-w"], "\(board.cardRows.map(\.id))")
+        // each header's counts are that Mac's alone
+        assert(board.macs.map(\.board.summary) == ["1 needs you · 1 working", "1 finished", "1 needs you · 1 working"], "\(board.macs.map(\.board.summary))")
+        // the ring still counts every Mac
+        assert(board.number == 2 && board.summary == "2 need you · 2 working" && board.tone == .waiting && board.bubbles.more == 3)
+        // one Mac with agents, a remote one too: no sections, and the card is as it was
+        let one = AgentBoard([on("studio", working("a")), on("studio", waiting("b", since: 10))], now: at(20))
+        assert(one.macs.isEmpty && one.cardRows.map(\.id) == ["b", "a"])
+        assert(AgentBoard([working("a"), idle], now: at(20)).macs.isEmpty && AgentBoard().macs.isEmpty && AgentBoard().cardRows.isEmpty)
+        // a host label as long as a sentence is a section like any other
+        let long = String(repeating: "a-very-long-host-label-", count: 4)
+        assert(AgentBoard([working("a"), on(long, working("b"))], now: at(20)).macs.map(\.host) == ["", long])
+
+        // the keyboard goes down the card as it's listed, and opens on the first of those who need you most, even
+        // under another Mac's working agents
+        let rows = board.cardRows
+        var keys = AgentCardSelection()
+        assert(keys.row(in: rows)?.id == "here-b")
+        let quietHere = AgentBoard([working("here-w"), on("studio", waiting("studio-b", since: 16))], now: at(20)).cardRows
+        assert(quietHere.map(\.id) == ["here-w", "studio-b"] && AgentCardSelection().row(in: quietHere)?.id == "studio-b",
+               "Return right after the shortcut shows the agent who waits, not this Mac's working one")
+        var seen: [String] = []
+        for _ in 0..<6 {
+            _ = keys.press(.down, rows: rows)
+            seen.append(keys.row(in: rows)!.id)
+        }
+        assert(seen == ["here-w", "here-idle", "annex-d", "studio-b", "studio-w", "studio-w"], "\(seen)")
+    }
+
     static func keyboard() {
         // the shortcut opens the agents card, and closes it only when that card is the one open
         assert(AgentCardSelection.shortcutOpens(cardVisible: false, sideCard: nil) && AgentCardSelection.shortcutOpens(cardVisible: false, sideCard: "agents"))

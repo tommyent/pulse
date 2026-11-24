@@ -185,7 +185,7 @@ final class AgentsMonitor: ObservableObject {
     /// A key in the card its shortcut opened: ↑ and ↓ choose a row, which VoiceOver is told; Return shows that pane
     /// exactly as a click on the row does; Escape closes the card.
     func key(_ key: AgentCardSelection.Key) {
-        let now = Date(), rows = AgentBoard(agents, dismissed: dismissed, now: now).rows
+        let now = Date(), rows = AgentBoard(agents, dismissed: dismissed, now: now).cardRows
         switch selection.press(key, rows: rows) {
         case .select:
             if let row = selection.row(in: rows) {
@@ -221,7 +221,7 @@ final class AgentsMonitor: ObservableObject {
             await Self.bringRexForward()
             guard let rex, clicks.isLatest(click) else { return }
             await Task.detached(priority: .userInitiated) {
-                RexAgents.show(agent, rex: rex, thisMac: Host.current().localizedName ?? "") { clicks.isLatest(click) }
+                RexAgents.show(agent, rex: rex, thisMac: RexAgents.thisMac) { clicks.isLatest(click) }
             }.value
         }
     }

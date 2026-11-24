@@ -163,8 +163,8 @@ struct AgentsCard: View {
                 if board.rows.isEmpty {
                     Text("No agents are open in Rex.").font(.caption).foregroundStyle(.pulseSecondary)
                 } else {
-                    let selected = selection?.row(in: board.rows)?.id
-                    let rows = AgentRows(rows: board.rows, now: context.date, contexts: contexts, selected: selected, show: show, clear: clear)
+                    let listed = board.cardRows, selected = selection?.row(in: listed)?.id
+                    let rows = AgentRows(rows: listed, now: context.date, contexts: contexts, selected: selected, show: show, clear: clear, macs: board.macs)
                     Group {
                         // more than fit a small screen: they scroll, and the keyboard's row stays in view
                         if board.rows.count > Self.most {
@@ -201,7 +201,7 @@ struct AgentsCard: View {
 }
 
 /// The card's and the alert's rows: a line between those who need you and the rest, and the idle ones under their own
-/// heading.
+/// heading. With agents on more than one Mac, each Mac's rows come under a header with its name and counts.
 struct AgentRows: View {
     let rows: [AgentBoard.Row]
     let now: Date
@@ -209,27 +209,49 @@ struct AgentRows: View {
     var selected: String? = nil   // the row the keyboard is on
     let show: (BreakAgent) -> Void
     var clear: ((BreakAgent) -> Void)? = nil   // the × on a failed row; the alert has none
+    var macs: [(host: String, board: AgentBoard)] = []   // the card's sections (`AgentBoard.macs`), whose rows `rows` lists
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(rows.enumerated()), id: \.element.id) { i, row in
-                let idleStarts = row.state == .idle && (i == 0 || rows[i - 1].state != .idle)
-                if i > 0, idleStarts || (rows[i - 1].agent.needsYou && !row.agent.needsYou) {
+                let mac = macs.first { $0.board.rows.first?.id == row.id }   // the section this row starts
+                let starts = i == 0 || rows[i - 1].agent.host != row.agent.host   // with one Mac, only the first row
+                let idleStarts = row.state == .idle && (starts || rows[i - 1].state != .idle)
+                if i > 0, mac != nil || idleStarts || (rows[i - 1].agent.needsYou && !row.agent.needsYou) {
                     Rectangle().fill(Color.white.opacity(0.12)).frame(height: 1)
                         .padding(.horizontal, 8).padding(.vertical, 1)
                         .accessibilityHidden(true)
                 }
-                if idleStarts, i > 0 {   // with nobody else in the card, its header already says how many are idle
-                    Text("Idle · \(rows.count - i)")
-                        .font(.caption.weight(.semibold)).foregroundStyle(.pulseSecondary)
-                        .padding(.horizontal, 8).padding(.top, 6).padding(.bottom, 2)
-                        .accessibilityAddTraits(.isHeader)
+                if let mac {
+                    let name = mac.host.isEmpty ? RexAgents.thisMac : mac.host
+                    // a long name gives way, its counts never do; the computer marks a Mac, so "Idle · 1" under it
+                    // doesn't read as another one
+                    HStack(spacing: 0) {
+                        Image(systemName: "desktopcomputer").padding(.trailing, 5).accessibilityHidden(true)
+                        Text(name.isEmpty ? "This Mac" : name).lineLimit(1).truncationMode(.middle)
+                        Text(" · \(mac.board.summary)").lineLimit(1).fixedSize()
+                    }
+                    .modifier(RowsHeading())
                 }
-                AgentRow(row: row, now: now, context: contexts[row.id], selected: row.id == selected, show: show, clear: clear)
+                if idleStarts, !starts {   // with nobody else in the card or the Mac, its header already says how many
+                    Text("Idle · \(rows[i...].prefix { $0.agent.host == row.agent.host }.count)").modifier(RowsHeading())
+                }
+                AgentRow(row: row, now: now, context: contexts[row.id], selected: row.id == selected, onHost: macs.isEmpty,
+                         show: show, clear: clear)
                     .id(row.id)
             }
         }
         .padding(.vertical, -5)   // the rows' own padding is their highlight's
+    }
+
+    private struct RowsHeading: ViewModifier {
+        func body(content: Content) -> some View {
+            content
+                .font(.caption.weight(.semibold)).foregroundStyle(.pulseSecondary)
+                .padding(.horizontal, 8).padding(.top, 6).padding(.bottom, 2)
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isHeader)
+        }
     }
 }
 
@@ -238,6 +260,7 @@ private struct AgentRow: View {
     let now: Date
     var context: AgentContext? = nil   // an idle agent's, where it could be read
     var selected = false               // the keyboard is on this row
+    var onHost = true                  // "on studio" after a pane on another Mac; not under that Mac's header
     let show: (BreakAgent) -> Void
     let clear: ((BreakAgent) -> Void)?
     @State private var hovering = false
@@ -250,7 +273,7 @@ private struct AgentRow: View {
                 BrandIcon(account: agent.app.account, size: 17).padding(.top, 1)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 8) {
-                        Text("\(Text(row.pane).fontWeight(.medium))\(Text(agent.host.isEmpty ? "" : " on \(agent.host)").foregroundStyle(.pulseSecondary.opacity(0.8)))")
+                        Text("\(Text(row.pane).fontWeight(.medium))\(Text(agent.host.isEmpty || !onHost ? "" : " on \(agent.host)").foregroundStyle(.pulseSecondary.opacity(0.8)))")
                             .font(.system(size: 11)).lineLimit(1)
                         Spacer(minLength: 0)
                         Text(state).font(.caption).lineLimit(1).fixedSize()
