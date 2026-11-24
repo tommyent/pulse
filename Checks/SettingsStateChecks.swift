@@ -245,7 +245,7 @@ enum SettingsStateChecks {
         guard let area = children(host).first(where: { role($0) == .scrollArea }) else { fatalError("the card's 22 rows should scroll") }
         let items = children(area).filter { role($0) == heading || role($0) == .button }
         let headings = items.filter { role($0) == heading }.map(label)
-        assert(headings.count == 2 && headings[0].hasPrefix(RexAgents.thisMac.isEmpty ? "This Mac" : RexAgents.thisMac)
+        assert(headings.count == 2 && headings[0].hasPrefix("This Mac")
                && headings[0].hasSuffix("· 20 working") && headings[1].hasPrefix("studio") && headings[1].hasSuffix("· 1 needs you · 1 working"),
                "each Mac's heading, this Mac first: \(headings)")
         let order = items.map { role($0) == heading ? "#" : String(label($0).prefix { $0 != "," && $0 != " " }) }

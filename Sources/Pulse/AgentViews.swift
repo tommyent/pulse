@@ -206,7 +206,8 @@ struct AgentsCard: View {
 }
 
 /// The card's and the alert's rows: a line between those who need you and the rest, and the idle ones under their own
-/// heading. With agents on more than one Mac, each Mac's rows come under a header with its name and counts.
+/// heading. With agents on more than one Mac, each Mac's rows come under a header with its counts: "This Mac", then each
+/// other Mac by its Rex label.
 struct AgentRows: View {
     let rows: [AgentBoard.Row]
     let now: Date
@@ -229,12 +230,11 @@ struct AgentRows: View {
                         .accessibilityHidden(true)
                 }
                 if let mac {
-                    let name = mac.host.isEmpty ? RexAgents.thisMac : mac.host
                     // a long name gives way, its counts never do; the computer marks a Mac, so "Idle · 1" under it
-                    // doesn't read as another one
+                    // doesn't read as another one. This Mac's computer name is often its owner's, so it isn't shown
                     HStack(spacing: 0) {
                         Image(systemName: "desktopcomputer").padding(.trailing, 5).accessibilityHidden(true)
-                        Text(name.isEmpty ? "This Mac" : name).lineLimit(1).truncationMode(.middle)
+                        Text(mac.host.isEmpty ? "This Mac" : mac.host).lineLimit(1).truncationMode(.middle)
                         Text(" · \(mac.board.summary)").lineLimit(1).fixedSize()
                     }
                     .modifier(RowsHeading())
